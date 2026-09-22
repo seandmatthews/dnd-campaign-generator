@@ -370,6 +370,92 @@
 
   /* ---------- boot ---------- */
 
+  async function refreshCampaigns(prefer) {
+    const select = document.getElementById('campaign-select');
+    try {
+      const data = await api('/api/campaigns');
+      const list = (data && Array.isArray(data.campaigns)) ? data.campaigns : [];
+      Studio.state.campaigns = list;
+      select.innerHTML = '';
+      if (!list.length) {
+        Studio.state.campaign = null;
+        select.appendChild(el('<option value="">No campaigns found</option>'));
+      } else {
+        let picked = null;
+        list.forEach((c) => {
+          const opt = el(
+            '<option value="' + esc(c.name) + '">' + esc(c.title || c.name) + '</option>'
+          );
+          if (prefer && c.name === prefer) { opt.selected = true; picked = c.name; }
+          select.appendChild(opt);
+        });
+        if (!picked) {
+          select.firstChild.selected = true;
+          picked = list[0].name;
+        }
+        Studio.state.campaign = picked;
+      }
+    } catch (err) {
+      select.innerHTML = '';
+      select.appendChild(el('<option value="">Unavailable</option>'));
+      Studio.state.campaign = null;
+      const section = document.querySelector('.tab-section.active');
+      if (section) {
+        section.innerHTML = '';
+        section.appendChild(errorPanel(err, 'The campaign list could not be loaded.'));
+      }
+      return false;
+    }
+    return true;
+  }
+
+  function newCampaignModal(onCreated) {
+    const root = document.getElementById('modal-root');
+    const overlay = el(
+      '<div class="modal-overlay">' +
+        '<form class="modal" role="dialog" aria-modal="true" aria-label="New campaign">' +
+          '<h3 class="modal-title">New campaign</h3>' +
+          '<p class="modal-body">A campaign is a folder of files under ' +
+            'Documents/D&amp;D/campaigns/ &mdash; portable by zip, editable by hand.</p>' +
+          '<div class="modal-fields">' +
+            '<label class="field"><span class="field-label">Name (lowercase, hyphens)</span>' +
+              '<input type="text" class="input" id="new-camp-name" ' +
+                'placeholder="e.g. ember-coast" autocomplete="off" spellcheck="false"></label>' +
+            '<label class="field"><span class="field-label">Title (optional)</span>' +
+              '<input type="text" class="input" id="new-camp-title" ' +
+                'placeholder="e.g. The Ember Coast" autocomplete="off" spellcheck="false"></label>' +
+          '</div>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn" data-act="cancel">Cancel</button>' +
+            '<button type="submit" class="btn btn-primary" data-act="create">Create</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>'
+    );
+    const done = () => overlay.remove();
+    overlay.addEventListener('click', (ev) => {
+      const act = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-act') : null;
+      if (act === 'cancel' || ev.target === overlay) done();
+    });
+    overlay.querySelector('form').addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const name = overlay.querySelector('#new-camp-name').value.trim();
+      const title = overlay.querySelector('#new-camp-title').value.trim();
+      if (!name) { toast('Give the campaign a name first.', 'info'); return; }
+      api('/api/campaigns', { method: 'POST', body: { name: name, title: title } })
+        .then((created) => {
+          done();
+          toast('Campaign created: ' + (created.title || created.name), 'ok');
+          if (onCreated) onCreated(created);
+        })
+        .catch((err) => {
+          toast((err && err.error) ? err.error : 'Campaign could not be created.', 'error');
+        });
+    });
+    root.appendChild(overlay);
+    overlay.querySelector('#new-camp-name').focus();
+  }
+
   async function init() {
     document.getElementById('tab-bar').addEventListener('click', (ev) => {
       const btn = ev.target.closest('.tab');
@@ -382,6 +468,15 @@
       closeSearch(); // results belong to the campaign that was searched
       showTab(Studio.state.activeTab); // campaign switch re-renders the active tab
     });
+
+    const newBtn = document.getElementById('new-campaign-btn');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        newCampaignModal((created) => {
+          refreshCampaigns(created.name).then(() => showTab(Studio.state.activeTab));
+        });
+      });
+    }
 
     const searchForm = document.getElementById('header-search');
     const searchInput = document.getElementById('search-input');
@@ -400,36 +495,7 @@
       if (ev.key === 'Escape') closeSearch();
     });
 
-    try {
-      const data = await api('/api/campaigns');
-      const list = (data && Array.isArray(data.campaigns)) ? data.campaigns : [];
-      Studio.state.campaigns = list;
-      select.innerHTML = '';
-      if (!list.length) {
-        Studio.state.campaign = null;
-        const opt = el('<option value="">No campaigns found</option>');
-        select.appendChild(opt);
-      } else {
-        list.forEach((c, i) => {
-          const opt = el(
-            '<option value="' + esc(c.name) + '">' + esc(c.title || c.name) + '</option>'
-          );
-          if (i === 0) opt.selected = true;
-          select.appendChild(opt);
-        });
-        Studio.state.campaign = list[0].name;
-      }
-    } catch (err) {
-      select.innerHTML = '';
-      select.appendChild(el('<option value="">Unavailable</option>'));
-      Studio.state.campaign = null;
-      const section = document.querySelector('.tab-section.active');
-      if (section) {
-        section.innerHTML = '';
-        section.appendChild(errorPanel(err, 'The campaign list could not be loaded.'));
-      }
-      return;
-    }
+    await refreshCampaigns(null);
     showTab(Studio.state.activeTab);
   }
 

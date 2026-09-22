@@ -65,6 +65,12 @@ shapes in this document true.
 
 ### Campaigns (B, M0)
 - `GET /api/campaigns` → `{"campaigns":[{"name","title","created","has":{"world","lore","simulation","maps"}}]}`
+- `POST /api/campaigns` `{"name": str, "title"?: str}` → 201 with the summary of a
+  brand-new EMPTY campaign (directory, campaign.yaml, section dirs; title
+  defaults to the name). The name must be a lowercase slug (a-z/0-9/hyphens,
+  1-40 chars, no leading/trailing/double hyphens) — it becomes the directory
+  and URL segment; 422 otherwise, 409 if the campaign exists. This is the one
+  writer that starts from nothing: the world itself arrives via `POST .../world`.
 - `GET /api/campaign/{name}` → summary:
   `{"name","title","world":{"nations":n,"burgs":[{"name","nation","population","x","y","port"}]},
   "lore":{"timeline_entries":n,"entities":n,"style_files":[str]},
@@ -150,7 +156,9 @@ shapes in this document true.
 ### Simulation (B reads/week → G, M3)
 - `GET /api/campaign/{name}/simulation` → `{"clock":{"week","season"},
   "premise":str,"factions":[full dicts],"events":[…],"rumors":[…],
-  "chronicles":[{"week","title","file"}],"views_available":[ids]}`
+  "chronicles":[{"week","title","file"}],"views_available":[ids]}`.
+  **404 is a normal state for a fresh campaign** (no state.yaml yet — no
+  factions exist); the UI renders it as an empty state, not an error.
 - `GET /api/campaign/{name}/simulation/views/{faction_id}` → the fog-of-war
   `faction_view` dict as JSON. Engine: `python -X utf8 src/views.py <faction_id>`
   (cwd=agentic-simulator; E adds this CLI, printing YAML).

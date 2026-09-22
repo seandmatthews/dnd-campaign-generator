@@ -11,6 +11,8 @@ via campaigns_root(), never at import time.
 """
 
 import re
+import datetime
+import re
 import threading
 from pathlib import Path
 
@@ -21,6 +23,10 @@ CAMPAIGNS_ROOT = STUDIO_DIR.parent / "campaigns"
 
 # URL path segments must be plain names — no separators, no leading dots.
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# New campaigns get a stricter bar: the name IS the directory name and the
+# URL segment, and it should stay a lowercase slug like its siblings —
+# no leading/trailing hyphens, no doubles, 1-40 chars.
+_NEW_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
 # lore/style files are constrained the same way (API.md, PUT style/{file})
 _STYLE_RE = _NAME_RE
 _CHRONICLE_RE = re.compile(r"^(\d{4})-(.+)\.md$")
@@ -33,6 +39,10 @@ class CampaignError(Exception):
 
 class CampaignNotFound(CampaignError):
     """Unknown campaign name — the server maps this to 404."""
+
+
+class CampaignExists(CampaignError):
+    """Campaign directory already exists — the server maps this to 409."""
 
 
 # ------------------------------------------------------- per-campaign locks
@@ -90,6 +100,48 @@ def require_campaign(name: str) -> Path:
     if not (d / "campaign.yaml").is_file():
         raise CampaignNotFound(f"unknown campaign: {name}")
     return d
+
+
+# ----------------------------------------------------------------- creation
+
+_CREATE_ENGINE_POINTERS = {
+    "mapping": "../dnd-mapping",
+    "simulator": "../agentic-simulator",
+    "verification": "../verification",
+}
+
+
+def create_campaign(name: str, title: str = "") -> dict:
+    """A brand-new empty campaign: directory, campaign.yaml, section dirs.
+
+    The name becomes the directory name and URL segment, so it is stricter
+    than existing-campaign lookup: a lowercase slug, 1-40 chars. This is the
+    one spine writer that starts from nothing — everything else fills in
+    sections of an existing campaign, and the first feed is POST /world's
+    seed (generation is fed or refused; there is nothing to refuse yet)."""
+    if not _NEW_NAME_RE.match(name or ""):
+        raise CampaignError(
+            "campaign name must be a lowercase slug — a-z, 0-9, hyphens, "
+            "1-40 chars, starting with a letter or digit (e.g. ember-coast)")
+    d = campaigns_root() / name
+    if d.exists():
+        raise CampaignExists(f"campaign already exists: {name}")
+    title = (title or "").strip() or name
+    (d / "world").mkdir(parents=True)
+    (d / "lore" / "style").mkdir(parents=True)
+    (d / "simulation" / "chronicle").mkdir(parents=True)
+    (d / "maps" / "cities").mkdir(parents=True)
+    (d / "maps" / "sites").mkdir(parents=True)
+    meta = {
+        "name": name,
+        "title": title,
+        "created": datetime.date.today().isoformat(),
+        "engines": dict(_CREATE_ENGINE_POINTERS),
+    }
+    with open(d / "campaign.yaml", "w", encoding="utf-8") as f:
+        yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
+    return {"name": name, "title": title, "created": meta["created"],
+            "has": _has_sections(d)}
 
 
 # ---------------------------------------------------------------- discovery

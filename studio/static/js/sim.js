@@ -202,6 +202,20 @@
       sim = await S.api(S.campUrl('/simulation'));
     } catch (err) {
       root.innerHTML = '';
+      if (err && err.status === 404) {
+        // A campaign without simulation/state.yaml is normal (a fresh world
+        // has no factions yet) — this is an empty state, not an error.
+        root.appendChild(S.el(
+          '<section class="panel"><h3 class="panel-title">No simulation in this campaign yet</h3>' +
+            '<p class="muted">The faction sandbox needs <code>simulation/state.yaml</code> — ' +
+            'a premise and the factions that want things from each other — before weeks can run. ' +
+            'Maps and World Building above work without it. ' +
+            'To bootstrap one, see <code>agentic-simulator/AGENTS.md</code>; ' +
+            'a create-a-sandbox flow for fresh campaigns is a planned feature.</p>' +
+          '</section>'
+        ));
+        return;
+      }
       root.appendChild(S.errorPanel(err, 'The simulation state could not be loaded.'));
       return;
     }

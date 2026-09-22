@@ -1098,6 +1098,12 @@ textarea.input {
 
 .modal-body { margin: 0 0 16px; color: var(--ink-soft); }
 
+.modal-fields { display: grid; gap: 10px; margin: 0 0 16px; }
+.modal-fields .field-label { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-soft); }
+.modal-fields .input { width: 100%; }
+
+.btn-new-campaign { white-space: nowrap; }
+
 .modal-actions {
   display: flex;
   justify-content: flex-end;
