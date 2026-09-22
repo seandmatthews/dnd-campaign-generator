@@ -1,0 +1,369 @@
+"""Hardening wave: per-campaign mutation locks (409 on busy), the
+interrupted-week flag + restore-on-boot, git-backed canon snapshots, the
+Host allowlist middleware, and the rotating studio log.
+
+Everything runs against temp dirs / temp git repos — no real engine, and
+the real Documents/D&D repo is never committed to (canon skips campaigns
+that live outside the repo root)."""
+
+import json
+import logging
+import subprocess
+import threading
+import time
+from logging.handlers import RotatingFileHandler
+
+import canon
+import engines
+import jobs
+import pytest
+import server
+import spine
+from conftest import wait_for_job
+from routers.simulation import (clear_week_flag, restore_interrupted_week,
+                                write_week_flag)
+
+BUSY = {"error": "another job is already modifying this campaign"}
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_campaign_locks():
+    """Locks are process-global: a test that leaves one held would deadlock
+    the next test's blocking acquire. threading.Lock has no owner thread,
+    so release() clears it from here even when the test thread held it."""
+    yield
+    for lock in list(spine._CAMPAIGN_LOCKS.values()):
+        try:
+            lock.release()
+        except RuntimeError:
+            pass  # was not held
+
+
+def fake_tick_ok(engine_root, script, *args, timeout=600, on_line=None, **kw):
+    """The smallest engine that advances the clock to week 4."""
+    world = engine_root / "world"
+    world.mkdir(parents=True, exist_ok=True)
+    world.joinpath("state.yaml").write_text(
+        "meta:\n  clock:\n    week: 4\n", encoding="utf-8")
+    chron = engine_root / "chronicle"
+    chron.mkdir(exist_ok=True)
+    (chron / "0004-the-gate.md").write_text("# Week 4 — The Gate\n",
+                                            encoding="utf-8")
+    return 0, ["wardens HOLDS (quiet week)", "week 4 written"]
+
+
+# ------------------------------------------------------- per-campaign locks
+
+
+def test_week_409_while_campaign_lock_held(client, tmp_spine_root, monkeypatch):
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "run_py", fake_tick_ok)
+    lock = spine.campaign_lock("testvale")
+    assert lock.acquire(blocking=False)
+    try:
+        r = client.post("/api/campaign/testvale/simulation/week",
+                        json={"confirm": True})
+        assert r.status_code == 409
+        assert r.json() == BUSY  # nothing queued while a mutation is in flight
+    finally:
+        lock.release()
+
+    # once free, the submit goes through and the job releases the lock
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert spine.campaign_lock("testvale").acquire(blocking=False)
+
+
+def test_world_gen_409_while_campaign_lock_held(client, tmp_spine_root):
+    lock = spine.campaign_lock("testvale")
+    lock.acquire()
+    try:
+        # force:true so the only 409 left is the busy one
+        r = client.post("/api/campaign/testvale/world",
+                        json={"seed": "42", "force": True})
+        assert r.status_code == 409
+        assert r.json() == BUSY
+    finally:
+        lock.release()
+    assert spine.campaign_lock("testvale").acquire(blocking=False)
+
+
+def test_approve_waits_for_running_job_lock(client, tmp_spine_root):
+    pending = tmp_spine_root / "testvale" / "simulation" / "pending-week-7.yaml"
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    pending.write_text(json.dumps({"entries": [
+        {"id": "pw7-1", "when": "week 7", "title": "T", "text": "x",
+         "source": "sim:week-7"}], "created": "2026-09-22T00:00:00+00:00",
+        "week": 7}), encoding="utf-8")
+
+    lock = spine.campaign_lock("testvale")
+    lock.acquire()
+    threading.Timer(0.2, lock.release).start()  # "the job finishes"
+
+    started = time.monotonic()
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "simulation/pending-week-7.yaml",
+                          "all": True})
+    assert r.status_code == 200 and r.json() == {"approved": 1}
+    assert time.monotonic() - started >= 0.15  # it genuinely waited
+
+
+def test_lock_registry_returns_one_lock_per_campaign():
+    assert spine.campaign_lock("a") is spine.campaign_lock("a")
+    assert spine.campaign_lock("a") is not spine.campaign_lock("b")
+
+
+# ------------------------------------------------- host allowlist middleware
+
+
+def test_host_allowlist_accepts_loopback_and_testclient(client):
+    assert client.get("/api/health").status_code == 200  # TestClient default
+    for host in ("127.0.0.1:8765", "localhost:8765", "[::1]:8765",
+                 "127.0.0.1", "localhost", "[::1]", "127.0.0.1:8765"):
+        r = client.get("/api/health", headers={"host": host})
+        assert r.status_code == 200, host
+
+
+def test_host_allowlist_rejects_rebind_and_wrong_port(client):
+    for host in ("evil.example", "evil.example:8765", "127.0.0.1.evil:8765",
+                 "localhost:9999", ""):
+        r = client.get("/api/health", headers={"host": host})
+        assert r.status_code == 403, host
+        assert r.json() == {"error": "unknown host header"}
+
+
+def test_host_allowlist_port_follows_bound_port():
+    assert server._host_allowed("127.0.0.1:8791", port=8791)
+    assert server._host_allowed("localhost:8791", port=8791)
+    assert server._host_allowed("[::1]:8791", port=8791)
+    assert not server._host_allowed("127.0.0.1:8765", port=8791)
+    assert not server._host_allowed("evil.example", port=8791)
+
+
+def test_host_allowlist_studio_extra_hosts_env(client, monkeypatch):
+    monkeypatch.setenv("STUDIO_EXTRA_HOSTS", "dm.example, partner.local")
+    assert client.get("/api/health",
+                      headers={"host": "dm.example"}).status_code == 200
+    assert client.get("/api/health",
+                      headers={"host": "partner.local"}).status_code == 200
+    assert client.get("/api/health",
+                      headers={"host": "still-evil.example"}).status_code == 403
+
+
+# -------------------------------------------- interrupted-week flag/restore
+
+
+def _fake_engine_home(tmp_path):
+    home = tmp_path / "engine-home"
+    world = home / "world"
+    world.mkdir(parents=True, exist_ok=True)
+    return home, world
+
+
+def test_week_job_writes_flag_and_clears_it_in_finally(client, tmp_spine_root,
+                                                       monkeypatch):
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+    seen = {}
+
+    def fake_tick(engine_root, script, *args, timeout=600, on_line=None, **kw):
+        flag = engines.week_flag_path()
+        seen["during"] = flag.is_file()
+        if seen["during"]:
+            seen["doc"] = json.loads(flag.read_text(encoding="utf-8"))
+        return fake_tick_ok(engine_root, script, *args, timeout=timeout,
+                            on_line=on_line)
+
+    monkeypatch.setattr(engines, "run_py", fake_tick)
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert seen["during"] is True
+    assert seen["doc"]["campaign"] == "testvale"
+    assert seen["doc"]["started"]
+    assert not engines.week_flag_path().exists()  # cleared after copy-out
+
+
+def test_week_job_failure_clears_flag(client, tmp_spine_root, monkeypatch):
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+
+    def failing_tick(*args, **kw):
+        return 1, ["boom"]
+
+    monkeypatch.setattr(engines, "run_py", failing_tick)
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "error"
+    assert not engines.week_flag_path().exists()  # finally ran anyway
+
+
+def test_restore_restores_engine_state_from_bak(tmp_path, monkeypatch):
+    home, world = _fake_engine_home(tmp_path)
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    (world / "state.yaml").write_text("half a tick", encoding="utf-8")
+    (world / "state.yaml.bak").write_text("pre-week engine state",
+                                          encoding="utf-8")
+    write_week_flag("testvale")
+    doc = json.loads(engines.week_flag_path().read_text(encoding="utf-8"))
+    assert doc["campaign"] == "testvale" and doc["started"]
+
+    info = restore_interrupted_week()
+    assert info == {"campaign": "testvale", "restored": True}
+    assert (world / "state.yaml").read_text(encoding="utf-8") == \
+        "pre-week engine state"
+    assert not engines.week_flag_path().exists()
+
+
+def test_restore_without_bak_still_clears_flag(tmp_path, monkeypatch):
+    home, world = _fake_engine_home(tmp_path)
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    (world / "state.yaml").write_text("half a tick", encoding="utf-8")
+    write_week_flag("othervale")
+
+    info = restore_interrupted_week()
+    assert info == {"campaign": "othervale", "restored": False}
+    assert not engines.week_flag_path().exists()
+    # nothing destroyed when there is no backup to restore from
+    assert (world / "state.yaml").read_text(encoding="utf-8") == "half a tick"
+
+
+def test_restore_noop_without_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        _fake_engine_home(tmp_path)[0])
+    assert restore_interrupted_week() is None
+
+
+def test_boot_lifespan_restores_and_reports_health(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    home, world = _fake_engine_home(tmp_path)
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    (world / "state.yaml").write_text("mid-tick garbage", encoding="utf-8")
+    (world / "state.yaml.bak").write_text("last good engine state",
+                                          encoding="utf-8")
+    write_week_flag("testvale")
+
+    with TestClient(server.app) as c:  # entering the client runs the lifespan
+        r = c.get("/api/health")
+        assert r.status_code == 200
+        assert r.json()["week_run_in_progress"] is False  # restored + cleared
+    assert (world / "state.yaml").read_text(encoding="utf-8") == \
+        "last good engine state"
+
+
+def test_health_reflects_flag_outside_boot(client, tmp_spine_root, monkeypatch):
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+    write_week_flag("testvale")
+    try:
+        assert client.get("/api/health").json()["week_run_in_progress"] is True
+    finally:
+        clear_week_flag()
+    assert client.get("/api/health").json()["week_run_in_progress"] is False
+
+
+# --------------------------------------------------- canon git snapshots
+
+
+def _git(repo, *args):
+    proc = subprocess.run(["git", "-C", str(repo), *args],
+                          capture_output=True, timeout=60)
+    return proc.returncode, proc.stdout.decode("utf-8", "replace"), \
+        proc.stderr.decode("utf-8", "replace")
+
+
+def _temp_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "campaigns" / "testvale" / "lore").mkdir(parents=True)
+    assert _git(repo, "init")[0] == 0
+    _git(repo, "config", "user.name", "studio-test")
+    _git(repo, "config", "user.email", "studio@test.invalid")
+    (repo / "campaigns" / "testvale" / "lore" / "timeline.yaml").write_text(
+        "entries: []\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert _git(repo, "commit", "-m", "seed")[0] == 0
+    return repo
+
+
+def test_canon_snapshot_commits_campaign_in_temp_repo(tmp_path, monkeypatch):
+    repo = _temp_repo(tmp_path)
+    monkeypatch.setattr(canon, "REPO_ROOT", repo)
+    monkeypatch.setattr(canon, "AVAILABLE", True)
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", repo / "campaigns")
+
+    timeline = repo / "campaigns" / "testvale" / "lore" / "timeline.yaml"
+    timeline.write_text("entries:\n  - id: t0001\n", encoding="utf-8")
+    sha = canon.snapshot("testvale", "campaign/testvale: approve 1 pending entries")
+    assert sha
+    rc, out, _ = _git(repo, "log", "-1", "--format=%s")
+    assert out.strip() == "campaign/testvale: approve 1 pending entries"
+    rc, out, _ = _git(repo, "log", "-1", "--format=%h")
+    assert out.strip() == sha
+
+    # only the campaign path is committed: a stray sibling change is not swept in
+    (repo / "stray.txt").write_text("not canon", encoding="utf-8")
+    timeline.write_text("entries:\n  - id: t0002\n", encoding="utf-8")
+    canon.snapshot("testvale", "campaign/testvale: week 7 — the gate")
+    rc, out, _ = _git(repo, "status", "--porcelain")
+    assert "?? stray.txt" in out  # still untracked -> was never committed
+
+    # nothing to commit: a logged no-op, never an error
+    assert canon.snapshot("testvale", "campaign/testvale: no-op") is None
+
+
+def test_canon_message_truncated_to_72(tmp_path, monkeypatch):
+    repo = _temp_repo(tmp_path)
+    monkeypatch.setattr(canon, "REPO_ROOT", repo)
+    monkeypatch.setattr(canon, "AVAILABLE", True)
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", repo / "campaigns")
+    (repo / "campaigns" / "testvale" / "lore" / "timeline.yaml").write_text(
+        "entries:\n  - id: t0009\n", encoding="utf-8")
+    canon.snapshot("testvale", "campaign/testvale: " + "x" * 200)
+    rc, out, _ = _git(repo, "log", "-1", "--format=%s")
+    assert len(out.strip()) <= 72
+
+
+def test_canon_noop_when_git_unavailable(monkeypatch):
+    monkeypatch.setattr(canon, "AVAILABLE", False)
+    assert canon.snapshot("testvale", "campaign/testvale: whatever") is None
+
+
+def test_canon_skips_campaign_outside_the_repo(tmp_spine_root, monkeypatch):
+    """A relocated campaigns root (tests, portable set-ups) must never
+    commit to the real Documents/D&D repo."""
+    monkeypatch.setattr(canon, "AVAILABLE", True)
+    assert canon.snapshot("testvale", "campaign/testvale: should not happen") \
+        is None
+
+
+# --------------------------------------------------------- rotating log
+
+
+def test_log_file_created_with_rotating_handler():
+    log_path = server.STUDIO_DIR / "logs" / "studio.log"
+    assert log_path.is_file()  # importing server (conftest) creates it
+    handlers = [h for h in logging.getLogger("studio").handlers
+                if isinstance(h, RotatingFileHandler)]
+    assert handlers, "the studio logger must carry the rotating file handler"
+    assert handlers[0].maxBytes == 1_000_000
+    assert handlers[0].backupCount == 5
+
+
+def test_job_log_lines_mirror_into_the_file(client):
+    log_path = server.STUDIO_DIR / "logs" / "studio.log"
+    marker = f"hardening-mirror-{time.monotonic_ns()}"
+
+    def announce(log):
+        log(f"mirror check {marker}")
+
+    job_id = jobs.submit("fake", announce)
+    assert wait_for_job(client, job_id)["status"] == "done"
+    assert marker in log_path.read_text(encoding="utf-8")

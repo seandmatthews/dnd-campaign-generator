@@ -15,14 +15,16 @@ provisional ids get the next free t-number), the pending file is rewritten
 without them and deleted when empty. Nothing lands unreviewed (guardrail 3):
 these two routes are the ONLY writers from pending into the spine.
 
-All mutations run under a per-campaign lock — approvals mutate shared YAML.
+All mutations run under the SHARED per-campaign lock (spine.campaign_lock,
+blocking — an in-flight week/generation job finishes first), and each
+success commits a canon snapshot ("campaign/<name>: approve/delete N
+pending entries").
 """
 
 import json
 import re
 import shutil
 import tempfile
-import threading
 import time
 from pathlib import Path, PurePosixPath
 
@@ -30,7 +32,9 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+import canon
 import engines
+import spine
 from routers.common import require_campaign
 
 router = APIRouter()
@@ -43,14 +47,6 @@ _ENTRY_START_RE = re.compile(r"^- id:\s*(\S+)")
 
 CHECK_TIMEOUT_S = 60     # per check.py run
 FINDINGS_BUDGET_S = 1.5  # soft budget for all check.py runs in one GET
-
-_LOCKS: dict = {}
-_LOCKS_GUARD = threading.Lock()
-
-
-def _campaign_lock(name: str) -> threading.Lock:
-    with _LOCKS_GUARD:
-        return _LOCKS.setdefault(name, threading.Lock())
 
 
 class ReviewBody(BaseModel):
@@ -357,7 +353,7 @@ def _rewrite_pending(path: Path, doc: dict, keep: list) -> None:
 @router.post("/api/campaign/{name}/review/approve")
 def post_approve(name: str, body: ReviewBody):
     d = require_campaign(name)
-    with _campaign_lock(name):
+    with spine.campaign_lock(name):  # blocking: an in-flight job finishes first
         path, inside = _pending_file(d, body.file)
         doc = _load_pending(path, inside)
         chosen_idx = _select(doc, body)
@@ -365,16 +361,20 @@ def post_approve(name: str, body: ReviewBody):
         _append_approved(d, chosen)
         keep = [e for k, e in enumerate(doc["entries"]) if k not in set(chosen_idx)]
         _rewrite_pending(path, doc, keep)
+        canon.snapshot(name,
+                       f"campaign/{name}: approve {len(chosen)} pending entries")
         return {"approved": len(chosen)}
 
 
 @router.post("/api/campaign/{name}/review/delete")
 def post_delete(name: str, body: ReviewBody):
     d = require_campaign(name)
-    with _campaign_lock(name):
+    with spine.campaign_lock(name):
         path, inside = _pending_file(d, body.file)
         doc = _load_pending(path, inside)
         chosen_idx = _select(doc, body)
         keep = [e for k, e in enumerate(doc["entries"]) if k not in set(chosen_idx)]
         _rewrite_pending(path, doc, keep)
+        canon.snapshot(name,
+                       f"campaign/{name}: delete {len(chosen_idx)} pending entries")
         return {"deleted": len(chosen_idx)}

@@ -6,7 +6,8 @@ from conftest import wait_for_job
 def test_health_ok(client):
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "version": "0.1.0"}
+    assert r.json() == {"ok": True, "version": "0.1.0",
+                        "week_run_in_progress": False}
 
 
 def test_doctor_endpoint_wired(client, monkeypatch):

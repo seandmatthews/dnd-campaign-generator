@@ -13,6 +13,11 @@ read-only without a key — generation does not).
 
 CLI:  python studio/doctor.py           human-readable
       python studio/doctor.py --json    the API shape
+      python studio/doctor.py --fix     PERFORM the safe repairs (relink
+                                        broken pnpm tool trees, run the pip
+                                        line); everything else stays advice —
+                                        assemble.py is never auto-run (it
+                                        writes canon)
 Importable: doctor.report() — wired to GET /api/doctor (routers/system.py).
 """
 
@@ -35,6 +40,17 @@ API_URL = "https://api.z.ai/api/coding/paas/v4/chat/completions"
 PROBE_MODEL = "glm-5.3-flash"
 PROBE_TIMEOUT_S = 15
 ENGINE_PROBE_TIMEOUT_S = 30
+
+# the pnpm-linked tool trees with a documented repair (D7): present but
+# with their critical module un-loadable means a broken junction.
+DND_MAPPING_TOOLS = PARENT / "dnd-mapping" / "tools"
+SETTLEMAKER_DIR = DND_MAPPING_TOOLS / "settlemaker"
+FMG_DIR = DND_MAPPING_TOOLS / "Fantasy-Map-Generator"
+PNPM_INSTALL_CMD = ["pnpm", "install", "--offline"]
+
+# a live/interrupted week leaves this flag in the engine home (the engine
+# home is scratch; the campaign is canon — copy-back only happens on success)
+WEEK_RUN_FLAG = PARENT / "agentic-simulator" / "world" / ".week-run-flag"
 
 _CONFIG = Path.home() / ".zcode" / "v2" / "provider_config.json"
 
@@ -160,6 +176,24 @@ def check_engines():
     return out
 
 
+def check_week_run(path=None):
+    """NEW: is a week run in progress (or left over from a crash)?
+
+    Reports whether agentic-simulator/world/.week-run-flag exists. Absence
+    is fine. Presence is informational (required=False): the engine home is
+    scratch and is re-copied from the campaign on the next week/boot — a
+    crashed run never corrupts a campaign, because copy-back only happens
+    on success."""
+    flag = path or WEEK_RUN_FLAG
+    if flag.exists():
+        return _mk("week run", False, f"in progress or interrupted ({flag})",
+                  fix="let it finish if it is still running; otherwise just "
+                      "boot — the engine home is restored from the campaign "
+                      "(copy-back only happens on a successful week)",
+                  required=False)
+    return _mk("week run", True, "no week run in progress", required=False)
+
+
 def check_vale():
     where = shutil.which("vale")
     if where:
@@ -281,6 +315,7 @@ def check_llm(probe=None):
 def run_all_checks(probe=None, modules=None):
     checks = [check_python(), check_imports(modules), check_node(), check_pnpm()]
     checks.extend(check_engines())
+    checks.append(check_week_run())
     checks.append(check_vale())
     checks.append(check_campaigns())
     checks.append(check_llm(probe))
@@ -291,6 +326,168 @@ def report(probe=None, modules=None):
     checks = run_all_checks(probe=probe, modules=modules)
     overall = all(c["ok"] for c in checks if c["required"])
     return {"ok": overall, "checks": checks}
+
+
+# --------------------------------------------------------------------- --fix
+
+
+def _node_import_ok(entry: Path, timeout: int = ENGINE_PROBE_TIMEOUT_S):
+    """(loads, why) — can node import this module at all? A broken pnpm
+    junction shows up as a resolution error here. Dynamic import works for
+    ESM and CJS alike. List-form args (the parent path contains `&`)."""
+    probe = ("import(require('url').pathToFileURL(process.argv[1]).href)"
+             ".then(function () {}, function (e) {"
+             "console.error(String(e)); process.exit(3); })")
+    cmd = ["node", "-e", probe, str(entry)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=timeout)
+    except FileNotFoundError:
+        return True, "node not on PATH — cannot probe (skipped)"
+    except subprocess.TimeoutExpired:
+        return True, "import did not return in time (assumed loadable)"
+    if proc.returncode == 0:
+        return True, f"{entry.name} loads"
+    lines = [ln for ln in (proc.stderr or "").strip().splitlines() if ln]
+    why = lines[-1] if lines else f"exit {proc.returncode}"
+    return False, f"{entry.name} will not load: {why[:120]}"
+
+
+def settlemaker_ok(root=None):
+    """Probe (a): the tree exists but dist/index.js won't import → the
+    documented pnpm relink applies. A missing tree is NOT a junction
+    problem (the engine check already reports that)."""
+    root = root or SETTLEMAKER_DIR
+    if not root.is_dir():
+        return True, "not installed"
+    entry = root / "dist" / "index.js"
+    if not entry.is_file():
+        return False, "dist/index.js missing — the tool tree is incomplete"
+    return _node_import_ok(entry)
+
+
+def fmg_ok(root=None):
+    """Probe (b): the tree exists but node_modules/vitest/vitest.mjs is
+    missing → the headless FMG pipeline cannot run → relink."""
+    root = root or FMG_DIR
+    if not root.is_dir():
+        return True, "not installed"
+    if not (root / "node_modules" / "vitest" / "vitest.mjs").is_file():
+        return False, "node_modules/vitest/vitest.mjs missing — junction broken"
+    return True, "node_modules/vitest/vitest.mjs present"
+
+
+def _pnpm_cmd(args):
+    """[pnpm, *args] — or through its .cmd/.bat shim, which CreateProcess
+    cannot exec directly (same story as _version_of above). None when pnpm
+    is not on PATH at all."""
+    where = shutil.which("pnpm")
+    if not where:
+        return None
+    if where.lower().endswith((".cmd", ".bat")):
+        return ["cmd", "/c", where, *args]
+    return ["pnpm", *args]
+
+
+MISSING_PNPM_ADVICE = (
+    "install pnpm first (corepack enable or https://pnpm.io/installation), "
+    "then re-run python studio/doctor.py --fix")
+
+
+def plan_fixes(rep=None):
+    """What --fix would do: a list of plans
+    {name, why, cmd, cwd, env, do, advice} — do=True plans are safe to run
+    (pnpm relink, the pip line); do=False plans are advice only, because
+    they write canon (assemble.py) or need something the doctor cannot
+    install (a missing python/node itself, an LLM key)."""
+    rep = rep or report()
+    plans = []
+    by_name = {c["name"]: c for c in rep["checks"]}
+
+    imports = by_name.get("imports")
+    if imports and not imports["ok"]:
+        plans.append({
+            "name": "python packages",
+            "why": imports["detail"],
+            "cmd": [sys.executable, "-m", "pip", "install", "-r",
+                    str(STUDIO_DIR / "requirements.txt")],
+            "cwd": None, "env": None, "do": True, "advice": None,
+        })
+
+    for label, root, probe in (("settlemaker", SETTLEMAKER_DIR, settlemaker_ok),
+                               ("Fantasy-Map-Generator", FMG_DIR, fmg_ok)):
+        ok, why = probe(root)
+        if not ok:
+            cmd = _pnpm_cmd(PNPM_INSTALL_CMD[1:])
+            plans.append({
+                "name": f"pnpm relink: {label}",
+                "why": why,
+                "cmd": cmd,
+                "cwd": root,
+                "env": {"CI": "true"},
+                "do": cmd is not None,
+                "advice": None if cmd is not None else MISSING_PNPM_ADVICE,
+            })
+
+    campaigns = by_name.get("campaigns")
+    if campaigns and not campaigns["ok"]:
+        plans.append({
+            "name": "campaigns",
+            "why": campaigns["detail"],
+            "cmd": None, "cwd": None, "env": None, "do": False,
+            "advice": "run  python studio/assemble.py  to build "
+                      "campaigns/ruravaqan from the engine artifacts "
+                      "(the doctor never auto-runs it — it writes canon)",
+        })
+    return plans
+
+
+def _quote(cmd):
+    return " ".join(f'"{c}"' if (" " in c or "&" in c) else c for c in cmd)
+
+
+def apply_fixes(plans, dry=False, out=print):
+    """Run the do=True plans (or narrate them when dry); print the
+    advice-only ones. Returns the number of repair commands attempted."""
+    ran = 0
+    for p in plans:
+        if not p.get("do"):
+            out(f"  [advice] {p['name']}: {p['why']}")
+            out(f"           {p.get('advice') or p.get('fix') or ''}")
+            continue
+        if dry:
+            out(f"  [would run] {p['name']}: {_quote(p['cmd'])}"
+                + (f"  (cwd={p['cwd']})" if p.get("cwd") else ""))
+            continue
+        out(f"  [fixing] {p['name']}: {p['why']}")
+        out(f"           running: {_quote(p['cmd'])}"
+            + (f"  (cwd={p['cwd']})" if p.get("cwd") else ""))
+        ran += 1
+        try:
+            proc = _run_repair(p["cmd"], cwd=p.get("cwd"), env=p.get("env"))
+        except Exception as e:  # noqa: BLE001 — a failed repair is a finding
+            out(f"           FAILED: {e}")
+            continue
+        tail = (proc.stdout or "").strip().splitlines()[-5:]
+        for line in tail:
+            out(f"           | {line[:110]}")
+        if proc.returncode == 0:
+            out("           done (exit 0)")
+        else:
+            out(f"           FAILED (exit {proc.returncode}) — see the "
+                "output above; the fix lines in the report still apply")
+    return ran
+
+
+def _run_repair(cmd, cwd=None, env=None, timeout=600):
+    """List-form subprocess for repairs — never shell=True (the parent path
+    contains `&`)."""
+    if env:
+        env = {**os.environ, **{k: str(v) for k, v in env.items()}}
+    return subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env,
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout)
 
 
 def _print_report(rep):
@@ -323,12 +520,29 @@ def main(argv=None):
                     "precisely which one is missing.")
     ap.add_argument("--json", action="store_true",
                     help="print the API shape instead of the human report")
+    ap.add_argument("--fix", action="store_true",
+                    help="perform the safe repairs (relink broken pnpm tool "
+                         "trees, pip install -r studio/requirements.txt); "
+                         "everything else is printed as advice — assemble.py "
+                         "is never auto-run")
     args = ap.parse_args(argv)
     rep = report()
     if args.json:
         print(json.dumps(rep, indent=2))
     else:
         _print_report(rep)
+    if args.fix:
+        plans = plan_fixes(rep)
+        if not plans:
+            print("Nothing to fix automatically — nothing above has a "
+                  "doctor-safe repair.")
+        else:
+            print(f"{len(plans)} repair(s) found:")
+            apply_fixes(plans)
+            print()
+            print("Re-checking…")
+            rep = report()
+            _print_report(rep)
     return 0 if rep["ok"] else 1
 
 

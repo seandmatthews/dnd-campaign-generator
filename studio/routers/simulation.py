@@ -1,6 +1,10 @@
 """Simulation tab API: reads off the spine, the live week, views, why.
 
 The live week (D4 copy-in/copy-out, D5 confirm):
+  0. a `.week-run-flag` (campaign + timestamp) is written into the engine
+     home BEFORE copy-in and removed after copy-out/copy-back; on boot the
+     server restores world/state.yaml from state.yaml.bak when the flag is
+     left behind (restore_interrupted_week, called from server.py's lifespan)
   1. campaign simulation/state.yaml -> agentic-simulator/world/state.yaml
      (the engine's previous state is kept as state.yaml.bak first; the
      engine home is scratch, the campaign is canon)
@@ -11,24 +15,29 @@ The live week (D4 copy-in/copy-out, D5 confirm):
   4. result {week, chronicle:{week,title,file}, held:[faction ids]} — held
      parsed from the tick log's `HOLDS (` lines and the chronicle's
      `Held (scheduler): a, b` line
+  5. a successful week commits a canon snapshot ("campaign/<name>: week N —
+     title") and takes the per-campaign mutation lock for its whole run
+     (submit_campaign_job: 409 while another mutating job is in flight)
 """
 
 import datetime
 import json
+import logging
 import re
 from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, StrictBool, field_validator
 
+import canon
 import engines
-import jobs
 import spine
-from routers.common import require_campaign
+from routers.common import require_campaign, submit_campaign_job
 
 router = APIRouter()
+
+_log = logging.getLogger("studio.simulation")
 
 _STATE_BACKUP = "state.yaml.bak"
 _HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
@@ -113,60 +122,129 @@ def post_week(name: str, body: WeekBody):
 
     def job(log):
         sim_dir = d / "simulation"
-        _copy_state_in(name)
-        log("state copied into engine home (previous engine state kept as "
-            "state.yaml.bak)")
-        chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
-        before = {p.name for p in chronicle_dir.glob("*.md")} \
-            if chronicle_dir.is_dir() else set()
+        # interrupted-run detection: flagged before copy-in, cleared only
+        # when copy-out/copy-back has finished (or failed and rolled back)
+        write_week_flag(name)
+        log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
+            "crash restores the engine home from its backup")
+        try:
+            _copy_state_in(name)
+            log("state copied into engine home (previous engine state kept as "
+                "state.yaml.bak)")
+            chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
+            before = {p.name for p in chronicle_dir.glob("*.md")} \
+                if chronicle_dir.is_dir() else set()
 
-        log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
-        rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/tick.py",
-                                   "--live", timeout=_WEEK_TIMEOUT, on_line=log)
-        if rc != 0:
-            for ln in lines[-10:]:  # make sure the tail shows the failure
-                log(ln)
-            raise RuntimeError("tick --live failed rc=%s: %s"
-                               % (rc, " | ".join(lines[-10:])))
+            log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
+            rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/tick.py",
+                                       "--live", timeout=_WEEK_TIMEOUT, on_line=log)
+            if rc != 0:
+                for ln in lines[-10:]:  # make sure the tail shows the failure
+                    log(ln)
+                raise RuntimeError("tick --live failed rc=%s: %s"
+                                   % (rc, " | ".join(lines[-10:])))
 
-        new_state_file = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
-        engines.copy_file(new_state_file, sim_dir / "state.yaml")
-        after = {p.name for p in chronicle_dir.glob("*.md")}
-        new_files = sorted(after - before)
-        for fn in new_files:
-            engines.copy_file(chronicle_dir / fn, sim_dir / "chronicle" / fn)
-            log(f"copied back chronicle/{fn}")
+            new_state_file = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
+            engines.copy_file(new_state_file, sim_dir / "state.yaml")
+            after = {p.name for p in chronicle_dir.glob("*.md")}
+            new_files = sorted(after - before)
+            for fn in new_files:
+                engines.copy_file(chronicle_dir / fn, sim_dir / "chronicle" / fn)
+                log(f"copied back chronicle/{fn}")
 
-        new_state = spine.load_state(name)
-        week = (new_state.get("meta") or {}).get("clock", {}).get("week")
-        chronicle = None
-        held = {m.group(1) for ln in lines
-                if (m := _HOLDS_RE.match(ln))}
-        if new_files:
-            fn = new_files[-1]
-            chronicle = _chronicle_result(name, fn)
-            held |= _held_from_chronicle(sim_dir / "chronicle" / fn)
+            new_state = spine.load_state(name)
+            week = (new_state.get("meta") or {}).get("clock", {}).get("week")
+            chronicle = None
+            held = {m.group(1) for ln in lines
+                    if (m := _HOLDS_RE.match(ln))}
+            if new_files:
+                fn = new_files[-1]
+                chronicle = _chronicle_result(name, fn)
+                held |= _held_from_chronicle(sim_dir / "chronicle" / fn)
 
-        result = {"week": week, "chronicle": chronicle, "held": sorted(held)}
-        # M3 approval queue: stage the pending-week skeleton for the week
-        # just run (mechanical extraction; no LLM — the chronicle is already
-        # written, the timeline only needs its skeleton)
-        staged = None
-        if week is not None:
-            staged = stage_pending_week(name, week,
-                                        new_state.get("events") or [])
-            result["pending"] = f"simulation/pending-week-{week}.yaml"
-            result["pending_entries"] = len(staged["entries"])
-            if staged["entries"]:
-                log(f"staged {len(staged['entries'])} proposed timeline "
-                    f"entries -> simulation/pending-week-{week}.yaml "
-                    "(review them in the Review tab)")
-            else:
-                log(f"no non-world events in week {week} — staged an empty "
-                    f"pending-week-{week}.yaml")
-        return result
+            result = {"week": week, "chronicle": chronicle, "held": sorted(held)}
+            # M3 approval queue: stage the pending-week skeleton for the week
+            # just run (mechanical extraction; no LLM — the chronicle is already
+            # written, the timeline only needs its skeleton)
+            if week is not None:
+                staged = stage_pending_week(name, week,
+                                            new_state.get("events") or [])
+                result["pending"] = f"simulation/pending-week-{week}.yaml"
+                result["pending_entries"] = len(staged["entries"])
+                if staged["entries"]:
+                    log(f"staged {len(staged['entries'])} proposed timeline "
+                        f"entries -> simulation/pending-week-{week}.yaml "
+                        "(review them in the Review tab)")
+                else:
+                    log(f"no non-world events in week {week} — staged an empty "
+                        f"pending-week-{week}.yaml")
 
-    return JSONResponse({"job_id": jobs.submit("sim-week", job)}, status_code=202)
+            # canon snapshot: the clock advanced, the chronicle exists
+            canon.snapshot(name, _week_message(name, week, chronicle))
+            return result
+        finally:
+            clear_week_flag()
+
+    return submit_campaign_job("sim-week", name, job)
+
+
+def _week_message(name: str, week, chronicle) -> str:
+    msg = f"campaign/{name}: week {week}" if week is not None \
+        else f"campaign/{name}: simulation tick"
+    title = str((chronicle or {}).get("title") or "").strip()
+    if title:
+        msg += f" — {title}"
+    return msg
+
+
+# ------------------------------------------------- interrupted-week flag
+
+
+def write_week_flag(name: str) -> None:
+    """Mark a week run in flight (content: campaign name + ISO timestamp)."""
+    flag = engines.week_flag_path()
+    flag.parent.mkdir(parents=True, exist_ok=True)
+    flag.write_text(json.dumps({
+        "campaign": name,
+        "started": datetime.datetime.now(
+            datetime.timezone.utc).isoformat(timespec="seconds"),
+    }, indent=2), encoding="utf-8")
+
+
+def clear_week_flag() -> None:
+    try:
+        engines.week_flag_path().unlink()
+    except FileNotFoundError:
+        pass
+
+
+def restore_interrupted_week():
+    """Boot-time repair (server.py lifespan): a left-behind week flag means
+    the server died mid-week. Restore the engine home's state.yaml from its
+    .bak (when one exists), delete the flag, and warn loudly. Returns
+    {"campaign","restored"} or None when no flag was left."""
+    flag = engines.week_flag_path()
+    if not flag.is_file():
+        return None
+    doc = {}
+    try:
+        loaded = json.loads(flag.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            doc = loaded
+    except (OSError, ValueError):
+        pass  # unreadable flag: still restore, still clear
+    name = str(doc.get("campaign") or "unknown")
+    state = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
+    bak = state.parent / _STATE_BACKUP
+    if bak.is_file():
+        engines.copy_file(bak, state)
+        _log.warning("interrupted week run for campaign %s — engine home "
+                     "restored", name)
+    else:
+        _log.warning("interrupted week run for campaign %s — no %s in the "
+                     "engine home, leaving it as it stands", name, _STATE_BACKUP)
+    clear_week_flag()
+    return {"campaign": name, "restored": bak.is_file()}
 
 
 def _chronicle_result(name: str, filename: str) -> dict:

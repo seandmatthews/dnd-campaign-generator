@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import canon
 import jobs
 import loregen
 import spine
@@ -57,6 +58,7 @@ def put_entities(name: str, body: TextBody):
         raise HTTPException(status_code=422,
                             detail="entities.yaml must be a YAML mapping")
     spine.write_entities(name, body.text)
+    canon.snapshot(name, f"campaign/{name}: update lore entities")
     return {"ok": True}
 
 
@@ -69,6 +71,7 @@ def put_style(name: str, file: str, body: TextBody):
         raise HTTPException(status_code=404, detail=str(e))
     except CampaignError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    canon.snapshot(name, f"campaign/{name}: update style/{file}")
     return {"ok": True}
 
 
@@ -85,7 +88,13 @@ def post_entries(name: str, body: dict | None = None):
                    "refused (guardrail 4); import a world first")
 
     def job(log):
-        return loregen.generate_entries(d, focus, log=log)
+        result = loregen.generate_entries(d, focus, log=log)
+        # the pending file is staged canon (derived, but reviewable work
+        # worth a snapshot point); timeline.yaml only changes on approval
+        canon.snapshot(name,
+                       f"campaign/{name}: stage {result['entries']} pending "
+                       "lore entries")
+        return result
 
     return JSONResponse({"job_id": jobs.submit("lore-entries", job)},
                         status_code=202)

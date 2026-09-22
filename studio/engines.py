@@ -45,6 +45,17 @@ def fmg_dir() -> Path:
     return DND_MAPPING / "tools" / "Fantasy-Map-Generator"
 
 
+WEEK_FLAG_NAME = ".week-run-flag"
+
+
+def week_flag_path() -> Path:
+    """Marker for a week run in flight (routers/simulation.py writes it
+    before copy-in and removes it after copy-out; server.py restores the
+    engine home on boot when it is left behind). Read at call time so tests
+    can relocate engines.AGENTIC_SIMULATOR."""
+    return AGENTIC_SIMULATOR / "world" / WEEK_FLAG_NAME
+
+
 def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple:
     if env:
         # merge over the parent env (PATH etc. must survive); never mutate it

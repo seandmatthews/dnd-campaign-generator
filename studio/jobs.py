@@ -8,12 +8,17 @@ canon lives on disk only (guardrail 2).
 """
 
 import datetime
+import logging
 import threading
 import uuid
 
 _LOCK = threading.Lock()
 _JOBS: dict = {}
 LOG_CAP = 40  # log_tail keeps roughly the last 40 lines
+
+# job progress lines are mirrored to the studio log (server.py attaches the
+# rotating file handler); uvicorn's access log stays console-only
+_log = logging.getLogger("studio.jobs")
 
 
 def _now() -> str:
@@ -56,6 +61,7 @@ def submit(kind: str, fn) -> str:
         with _LOCK:
             job["_log_all"].append(line)
             job["log_tail"] = job["_log_all"][-LOG_CAP:]
+        _log.info("[job %s] %s", job_id, line)
 
     def run():
         with _LOCK:
@@ -65,10 +71,12 @@ def submit(kind: str, fn) -> str:
             with _LOCK:
                 job["result"] = result
                 job["status"] = "done"
+            _log.info("job %s (%s) done", job_id, job["kind"])
         except Exception as e:  # noqa: BLE001 — any failure is a job error
             with _LOCK:
                 job["error"] = f"{type(e).__name__}: {e}"
                 job["status"] = "error"
+            _log.error("job %s (%s) failed: %s", job_id, job["kind"], e)
 
     threading.Thread(target=run, name=f"job-{job_id}", daemon=True).start()
     return job_id

@@ -11,6 +11,7 @@ via campaigns_root(), never at import time.
 """
 
 import re
+import threading
 from pathlib import Path
 
 import yaml
@@ -32,6 +33,30 @@ class CampaignError(Exception):
 
 class CampaignNotFound(CampaignError):
     """Unknown campaign name — the server maps this to 404."""
+
+
+# ------------------------------------------------------- per-campaign locks
+
+# One mutation at a time per campaign: long jobs (week, world/city/site
+# generation) hold the lock for their whole run, review approve/delete take
+# it blocking for the length of their file rewrite. The registry is
+# in-process (the server is the only writer; canon lives on disk, D5).
+_CAMPAIGN_LOCKS: dict = {}
+_CAMPAIGN_LOCKS_GUARD = threading.Lock()
+
+
+def campaign_lock(name: str) -> threading.Lock:
+    """The mutation lock for one campaign (created on first use).
+
+    A threading.Lock IS a context manager, so `with spine.campaign_lock(n):`
+    is the blocking form — used by review approve/delete (short file
+    rewrites; they wait for a running job to finish). Long jobs acquire at
+    submit time with `acquire(blocking=False)` and release in the job's
+    finally (routers/common.submit_campaign_job), answering 409 while held.
+    NEVER nest acquisitions of the same campaign's lock — a Lock is not
+    reentrant, and a blocking re-acquire deadlocks."""
+    with _CAMPAIGN_LOCKS_GUARD:
+        return _CAMPAIGN_LOCKS.setdefault(name, threading.Lock())
 
 
 def campaigns_root() -> Path:

@@ -104,8 +104,17 @@
     return 'hearsay'; // conservative default: never overstate reliability
   }
 
+  /* the ledger suffix: week actions are recorded as
+     "<action> — succeeded (contested vs mint), margin +0" — the outcome is
+     bookkeeping about the week, not part of the rumor people repeat. Strip
+     it for DISPLAY only; the raw state keeps the full text. */
+  function displayClaim(text) {
+    return String(text == null ? '' : text).replace(/ — (succeeded|failed)\b.*$/, '');
+  }
+
   function rumorItem(r) {
-    const claim = r.claim || r.text || r.rumor || '(no claim)';
+    const rawClaim = r.claim || r.text || r.rumor || '(no claim)';
+    const claim = displayClaim(rawClaim) || String(rawClaim);
     const rawFid = r.fidelity || r.grade || r.state || '';
     const grade = fidelityGrade(rawFid);
     const born = (r.born_week != null) ? r.born_week
@@ -137,11 +146,14 @@
       ? '<div class="rumor-chain">' + S.esc(chain.join(' · ')) + '</div>' : '';
 
     const badgeText = String(rawFid || grade);
+    const stripped = claim !== String(rawClaim);
     return S.el(
       '<li class="rumor-entry">' +
         '<span class="pill fidelity fidelity-' + grade + '" title="grade: ' + grade + '">' +
           S.esc(badgeText) + '</span>' +
-        '<span class="rumor-claim">' + S.esc(claim) + '</span>' +
+        '<span class="rumor-claim"' +
+          (stripped ? ' title="as recorded: ' + S.esc(rawClaim) + '"' : '') + '>' +
+          S.esc(claim) + '</span>' +
         metaHtml +
         chainHtml +
       '</li>'

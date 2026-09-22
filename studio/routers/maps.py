@@ -20,6 +20,11 @@ Site generation: the full documented battlemap chain — gen-<kind> → render
 → render-scene-png.mjs (sharp) → wrap — run in the engine home
 (worlds/sites/<name> is battlemap.py's documented output location), then
 the artifact set is copied into maps/sites/<slug>/ (D4).
+
+Generation jobs are campaign MUTATIONS: each takes the per-campaign lock at
+submit time (routers/common.submit_campaign_job — 409 while another
+mutating job runs) and commits a canon snapshot on success
+("campaign/<name>: generate world / map city / map site ...").
 """
 
 import re
@@ -34,11 +39,12 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+import canon
 import engines
 import jobs
 import spine
 import worldmap
-from routers.common import require_campaign
+from routers.common import require_campaign, submit_campaign_job
 
 router = APIRouter()
 
@@ -140,12 +146,13 @@ def post_city(name: str, body: CityBody):
             svg = next((p for p in outputs if p.suffix == ".svg"), None)
             if svg is None:
                 raise RuntimeError("no .svg in gen-city output")
+            canon.snapshot(name, f"campaign/{name}: map city {slug}")
             return {"slug": slug,
                     "svg": f"/campaign-file/{name}/maps/cities/{slug}/{svg.name}"}
         finally:
             shutil.rmtree(out, ignore_errors=True)
 
-    return JSONResponse({"job_id": jobs.submit("map-city", job)}, status_code=202)
+    return submit_campaign_job("map-city", name, job)
 
 
 # --------------------------------------------------------------- world gen
@@ -234,13 +241,14 @@ def post_world(name: str, body: WorldBody):
             except Exception as e:  # best effort — the world exists regardless
                 log(f"world/map.svg skipped: {e}")
 
+            canon.snapshot(name, f"campaign/{name}: generate world (seed {seed})")
             return {"nations": int(summary.get("nations") or 0),
                     "settlements": int(summary.get("settlements") or 0),
                     "map": map_url}
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
-    return JSONResponse({"job_id": jobs.submit("world-gen", job)}, status_code=202)
+    return submit_campaign_job("world-gen", name, job)
 
 
 @router.post("/api/campaign/{name}/maps/world-map", status_code=202)
@@ -355,8 +363,9 @@ def post_site(name: str, body: SiteBody):
             sort_keys=False, allow_unicode=True), encoding="utf-8")
 
         base = f"/campaign-file/{name}/maps/sites/{slug}/"
+        canon.snapshot(name, f"campaign/{name}: map site {slug}")
         return {"slug": slug, "label": site_name,
                 "svg": base + svg.name, "png": base + png.name,
                 "uvtt": base + uvtt.name, "scene": base + "scene.json"}
 
-    return JSONResponse({"job_id": jobs.submit("map-site", job)}, status_code=202)
+    return submit_campaign_job("map-site", name, job)

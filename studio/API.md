@@ -25,12 +25,28 @@ change — never let them drift.
 - Copy-in/copy-out (D4): the studio never refactors an engine's fixed paths.
   It copies campaign artifacts into the engine's home, invokes, copies results
   back into the campaign.
+- Host allowlist (hardening): every route answers
+  `403 {"error": "unknown host header"}` unless the request's Host is
+  `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` — port = the
+  bound port; the bare no-port forms are accepted too (DNS-rebinding
+  protection). `STUDIO_EXTRA_HOSTS` (comma-separated) extends the list.
+- Per-campaign mutation lock (hardening): one mutating job at a time per
+  campaign. The long jobs — `POST .../simulation/week`, `POST .../world`,
+  `POST .../maps/cities`, `POST .../maps/sites` — take the lock at submit
+  time and answer `409 {"error": "another job is already modifying this
+  campaign"}` while it is held. Review approve/delete take the same lock
+  blocking: they wait for an in-flight job instead of failing.
+- Canon snapshots (hardening): after every successful canon mutation the
+  studio commits `campaigns/<name>` to the enclosing git repo (`git add -A`
+  + `git commit --only` the campaign path, list-form args) with a
+  `campaign/<name>: ...` message, ≤72 chars. Outside a git repo, or on any
+  VCS failure, it is a logged no-op — the DM is never blocked on snapshots.
 
 ## Server layout and file ownership
 
 | file | owner | notes |
 |---|---|---|
-| `server.py`, `spine.py`, `jobs.py`, `engines.py`, `llm_client.py` | B (wave 1) | app, spine IO, job runner, subprocess wrappers, LLM client |
+| `server.py`, `spine.py`, `jobs.py`, `engines.py`, `canon.py`, `llm_client.py` | B (wave 1) | app, spine IO, job runner, subprocess wrappers, git snapshots, LLM client |
 | `routers/campaigns.py`, `routers/system.py`, `routers/maps.py`, `routers/simulation.py` | B | wave-2 agents may extend, not restructure |
 | `routers/lore.py` | F (wave 2) | B ships reads + 501 generation |
 | `routers/review.py` | H (wave 3) | B ships 501 stub |
@@ -61,6 +77,8 @@ shapes in this document true.
 - `GET /api/campaign/{name}/maps` → `{"cities":[{"slug","label","svg","params","geojson"}],"sites":[…]}`;
   file URLs are `/campaign-file/<name>/maps/...`.
 - `POST /api/campaign/{name}/maps/cities` `{"burg": str}` → job.
+  Takes the campaign lock (**409 busy**, see hardening above); on success
+  commits snapshot `campaign/<name>: map city <slug>`.
   Engine: `node scripts/gen-city.mjs --world <path inside campaign world/> --burg "<name>" --out <tmp>`
   with `cwd=dnd-mapping`; copy outputs → `maps/cities/<slug>/`.
   Result `{"slug","svg":url}`. `--world` accepts anything import_fmg.py
@@ -74,6 +92,8 @@ shapes in this document true.
   `... wrap --dir worlds/sites/<name>`; artifact set
   {scene.json, scene.svg, scene.png, <slug>.uvtt} copied →
   `maps/sites/<slug>/` (+ a provenance `params.yaml` with name/kind/seed).
+  Takes the campaign lock (**409 busy**); on success commits snapshot
+  `campaign/<name>: map site <slug>`.
   `seed` defaults to crc32(slug) % 10^7 (recorded in params.yaml — every
   scene stays a derived artifact). Result
   `{"slug","label","svg":url,"png":url,"uvtt":url,"scene":url}`.
@@ -86,6 +106,8 @@ shapes in this document true.
 ### World generation (G, M1)
 - `POST /api/campaign/{name}/world` `{"seed": str, "force"?: bool}` → job.
   **409 if `world/geography.yaml` already exists and `force` is not true.**
+  Takes the campaign lock (**409 busy**, distinct from the force gate).
+  On success commits snapshot `campaign/<name>: generate world (seed <seed>)`.
   422 unless seed matches `[A-Za-z0-9_-]{1,64}` (it becomes `FMG_SEED` and a
   filename). Job: headless FMG — `node node_modules/vitest/vitest.mjs run
   src/generators/headless-export.test.ts` with `FMG_SEED=<seed>`/`FMG_OUT=<tmp>`,
@@ -108,15 +130,19 @@ shapes in this document true.
 - `GET /api/campaign/{name}/lore` → `{"timeline":[entries],"entities":{...},
   "style":{"names-shadian.txt":str,"voice.md":str}}`
 - `PUT /api/campaign/{name}/lore/entities` `{"text": "<yaml>"}` → validate
-  `yaml.safe_load`, write file, `{"ok":true}`.
+  `yaml.safe_load`, write file, `{"ok":true}`; commits snapshot
+  `campaign/<name>: update lore entities`.
 - `PUT /api/campaign/{name}/lore/style/{file}` `{"text":str}` → write (filename
-  constrained to `[A-Za-z0-9._-]`, must exist already).
+  constrained to `[A-Za-z0-9._-]`, must exist already); commits snapshot
+  `campaign/<name>: update style/<file>`.
 - `POST /api/campaign/{name}/lore/entries` `{"focus"?:str}` → job.
   **Refuses 422 if `world/geography.yaml` is missing** (fed-or-refused,
   guardrail 4). LLM prompt constrained to geography + timeline + entities
   (whole-file loads, no retrieval); output staged to
   `lore/pending-entries-N.yaml`; structural findings from
-  `verification/check.py` attached. Result `{"pending":str,"entries":n,"findings":[…]}`.
+  `verification/check.py` attached; after staging, commits snapshot
+  `campaign/<name>: stage N pending lore entries`.
+  Result `{"pending":str,"entries":n,"findings":[…]}`.
 - `POST /api/campaign/{name}/lore/name` `{"culture":str,"count":int,"hint"?:str}`
   → sync `{"names":[str]}` (name list + voice.md in prompt; soft guarantee —
   the UI says "in-voice, not guaranteed").
@@ -130,7 +156,15 @@ shapes in this document true.
   (cwd=agentic-simulator; E adds this CLI, printing YAML).
 - `POST /api/campaign/{name}/simulation/week` `{"confirm":true}` → job.
   **422 unless `confirm` is exactly true** (D5: the expensive button).
-  Copy-in: campaign `simulation/state.yaml` → `agentic-simulator/world/state.yaml`.
+  Takes the campaign lock (**409 busy** while another mutating job runs).
+  Interrupted-run detection: the job writes
+  `agentic-simulator/world/.week-run-flag` (JSON: campaign + ISO timestamp)
+  before copy-in and removes it in a `finally` after copy-out; if the
+  server died mid-week, the next boot restores the engine home's
+  `world/state.yaml` from `state.yaml.bak` (when present), deletes the
+  flag, and logs "interrupted week run for campaign X — engine home
+  restored" (`GET /api/health` reports `week_run_in_progress: true` until
+  then). Copy-in: campaign `simulation/state.yaml` → `agentic-simulator/world/state.yaml`.
   Run: `python -X utf8 src/tick.py <live-mode argv>` — read tick.py's docstring
   for the exact incantation; report it. Copy-out: new `state.yaml` + any new
   `chronicle/000N-*.md` → campaign `simulation/`. Result
@@ -138,7 +172,8 @@ shapes in this document true.
   "pending_entries":n}` — after a SUCCESSFUL week the server also stages
   `simulation/pending-week-N.yaml` (N = the week just run; see Shared file
   shapes): one proposed timeline entry per NON-WORLD event, purely
-  mechanical extraction, no LLM call.
+  mechanical extraction, no LLM call — and commits snapshot
+  `campaign/<name>: week N — <chronicle title>`.
 - `GET /api/campaign/{name}/simulation/chronicle/{week}` → `{"week","title","markdown"}`.
 - `POST /api/campaign/{name}/simulation/why` `{"week":int,"faction":str}` → sync.
   Engine: `python -X utf8 src/why.py <week> <faction> --json` (E adds the flag).
@@ -153,11 +188,37 @@ shapes in this document true.
 - `POST /api/campaign/{name}/review/approve` `{"file":str,"ids":[str]}` or
   `{"file":str,"all":true}` → append approved entries into `lore/timeline.yaml`
   (entries keep their `source`), remove from pending → `{"approved":n}`.
-- `POST /api/campaign/{name}/review/delete` same body → `{"deleted":n}`.
+  Takes the shared campaign lock **blocking** (waits for an in-flight
+  week/generation job), then commits snapshot
+  `campaign/<name>: approve N pending entries`.
+- `POST /api/campaign/{name}/review/delete` same body → `{"deleted":n}`;
+  same lock, snapshot `campaign/<name>: delete N pending entries`.
+
+### Search (H)
+- `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive
+  substring grep over the campaign's text files: `lore/*.yaml`,
+  `lore/style/*`, `simulation/chronicle/*.md`, `simulation/pending-*.yaml`,
+  `world/geography.yaml`, `campaign.yaml`. →
+  `{"q": str, "results": [{"file": campaign-relative posix path,
+  "kind": "chronicle|timeline|entities|style|geography|pending|campaign",
+  "line": n, "text": str (trimmed to ~200 chars), "context": str}]}`
+  — `context` is the previous non-empty line when it looks like a
+  title/heading (markdown `#` heading, a YAML key ending in `:`, or a
+  `- id:` line), else `""`. Capped at 50 results; `q` missing, empty, or
+  whitespace-only → 422; unknown campaign → 404. Lives in
+  `routers/system.py`.
 
 ### System (B)
-- `GET /api/health` → `{"ok":true,"version":"0.1.0"}`
+- `GET /api/health` → `{"ok":true,"version":"0.1.0",
+  "week_run_in_progress":bool}` — the flag is true while
+  `agentic-simulator/world/.week-run-flag` exists (a week job is running,
+  or a crashed one has not been restored by the boot hook yet).
 - `GET /api/doctor` → H wires to `doctor.py` JSON; B returns 501 until then.
+  The `week run` check reports an in-progress/interrupted week
+  (`agentic-simulator/world/.week-run-flag`); it is informational, not
+  required. `doctor.py --fix` (CLI only, not an API) performs the safe
+  repairs: `CI=true pnpm install --offline` in a broken tool tree, and
+  `pip install -r studio/requirements.txt`.
 
 ### Shared file shapes
 Timeline entry: `{"id","when","title","text","source"}` with
@@ -200,13 +261,22 @@ hit a 501 until wave 2 — render the error inline, never console-only):
   "Name helper" (culture + count) → list.
 - **Agent Simulation**: clock + premise; faction cards (resource chips,
   disposition, secret behind `<details>`); rumor board (claim, fidelity badge
-  fresh/reliable/hearsay/dead, born week, heard-by count); events list;
+  fresh/reliable/hearsay/dead, born week, heard-by count; a trailing
+  ` — succeeded|failed…` ledger suffix is stripped from the claim for
+  DISPLAY only — hover the claim to see the full recorded text, and the
+  raw state keeps it); events list;
   chronicle reader (week picker → `Studio.md`); views inspector (faction
   picker → YAML `<pre>`); why inspector (week + faction → indented lines);
   "Run week N" behind `Studio.confirmRun("This runs a real week — it spends
   API credits and advances the canon clock.")` with live log tail.
 - **Review**: items with kind badge, provenance, findings inline,
   approve/delete buttons.
+
+Header (all tabs): a search box. Enter fires
+`GET /api/campaign/{name}/search?q=…` for the selected campaign and
+renders the hits in a dismissible panel (kind badge, file:line, the
+matched line with the match highlighted, optional heading context); Esc,
+the X button, or a campaign switch closes it.
 
 Style: one consistent tabletop look (parchment-and-ink or tasteful dark —
 pick one), system font stack, **no external network resources** (no CDN

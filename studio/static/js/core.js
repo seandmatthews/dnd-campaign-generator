@@ -238,6 +238,82 @@
       String(rel || '').replace(/^\/+/, '');
   }
 
+  /* ---------- campaign search (header) ---------- */
+
+  let searchPanel = null;
+
+  function closeSearch() {
+    if (searchPanel) { searchPanel.remove(); searchPanel = null; }
+  }
+
+  function highlightMatch(text, q) {
+    // escape FIRST, then wrap the first case-insensitive hit in <mark>
+    const escaped = esc(text);
+    const needle = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!needle) return escaped;
+    return escaped.replace(new RegExp(needle, 'i'), '<mark>$&</mark>');
+  }
+
+  function renderSearchResults(body, q, data) {
+    const results = (data && Array.isArray(data.results)) ? data.results : [];
+    body.innerHTML = '';
+    if (!results.length) {
+      body.appendChild(emptyState('Nothing matches "' + q + '".'));
+      return;
+    }
+    body.appendChild(el(
+      '<p class="search-count">' + results.length + ' hit' +
+      (results.length === 1 ? '' : 's') + '</p>'));
+    const list = el('<ul class="search-results"></ul>');
+    results.forEach((r) => {
+      list.appendChild(el(
+        '<li class="search-hit">' +
+          '<div class="search-hit-head">' +
+            '<span class="pill search-kind search-kind-' + esc(r.kind) + '">' +
+              esc(r.kind) + '</span>' +
+            '<span class="review-file">' + esc(r.file) + ':' +
+              esc(String(r.line)) + '</span>' +
+          '</div>' +
+          (r.context ? '<div class="search-context">' + esc(r.context) + '</div>' : '') +
+          '<div class="search-text">' + highlightMatch(r.text || '', q) + '</div>' +
+        '</li>'
+      ));
+    });
+    body.appendChild(list);
+  }
+
+  function runSearch(q) {
+    if (!Studio.state.campaign) {
+      toast('No campaign selected — nothing to search.', 'error');
+      return;
+    }
+    closeSearch();
+    const panel = el(
+      '<section class="search-panel" role="region" aria-label="Search results">' +
+        '<header class="search-head">' +
+          '<span class="search-title">Search</span>' +
+          '<strong class="search-q"></strong>' +
+          '<button type="button" class="btn search-close" aria-label="Close search">&times;</button>' +
+        '</header>' +
+        '<div class="search-body"><p class="loading">Searching…</p></div>' +
+      '</section>'
+    );
+    panel.querySelector('.search-q').textContent = q;
+    panel.querySelector('.search-close').addEventListener('click', closeSearch);
+    document.body.appendChild(panel);
+    searchPanel = panel;
+    const body = panel.querySelector('.search-body');
+    api(campUrl('/search?q=' + encodeURIComponent(q)))
+      .then((data) => {
+        if (searchPanel === panel) renderSearchResults(body, q, data);
+      })
+      .catch((err) => {
+        if (searchPanel !== panel) return;
+        body.innerHTML = '';
+        body.appendChild(errorPanel(err));
+      });
+  }
+
   /* ---------- shared UI fragments ---------- */
 
   function errorPanel(err, hint) {
@@ -303,7 +379,25 @@
     const select = document.getElementById('campaign-select');
     select.addEventListener('change', () => {
       Studio.state.campaign = select.value || null;
+      closeSearch(); // results belong to the campaign that was searched
       showTab(Studio.state.activeTab); // campaign switch re-renders the active tab
+    });
+
+    const searchForm = document.getElementById('header-search');
+    const searchInput = document.getElementById('search-input');
+    if (searchForm && searchInput) {
+      searchForm.addEventListener('submit', (ev) => {
+        ev.preventDefault();
+        const q = searchInput.value.trim();
+        if (!q) {
+          toast('Type something to search for first.', 'info');
+          return;
+        }
+        runSearch(q);
+      });
+    }
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') closeSearch();
     });
 
     try {
