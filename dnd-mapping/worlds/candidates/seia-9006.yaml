@@ -1,0 +1,450 @@
+meta:
+  source: Azgaar Fantasy Map Generator
+  map_name: Seia
+  seed: '145719006'
+  fmg_version: 1.153.0
+  imported_at: '2026-09-21'
+summary:
+  nations: 21
+  provinces: 432
+  settlements: 1680
+  cultures: 16
+  religions: 26
+  major_landmasses: 7
+nations:
+- id: shatharb-4
+  name: Shatharb
+  kind: Nomadic
+  capital: Kizad
+  form_of_government: See
+  burgs: 252
+  provinces: 59
+  urban_population_thousands: 1472.9
+  neighbors:
+  - Anaqua
+  - Tumunz
+  - Scorcrosia
+  color: '#e78ac3'
+- id: scorcrosia-8
+  name: Scorcrosia
+  kind: Generic
+  capital: Scorcros
+  form_of_government: Empire
+  burgs: 136
+  provinces: 37
+  urban_population_thousands: 863.3
+  neighbors:
+  - Shatharb
+  - Umelule
+  - Hethlindra
+  - Galtsenmu
+  - Aymar
+  color: '#f7b46c'
+- id: srurd-17
+  name: Srurd
+  kind: Nomadic
+  capital: Cielb
+  form_of_government: Empire
+  burgs: 87
+  provinces: 21
+  urban_population_thousands: 561.6
+  neighbors:
+  - Umelule
+  - Hethlindra
+  - Ir-Ug
+  color: '#f8d557'
+- id: aymar-19
+  name: Aymar
+  kind: Generic
+  capital: Obethlumye
+  form_of_government: Republic
+  burgs: 133
+  provinces: 33
+  urban_population_thousands: 942.1
+  neighbors:
+  - Scorcrosia
+  - Unerilelha
+  - Raunyueg
+  color: '#a5c4c8'
+- id: hethlindra-5
+  name: Hethlindra
+  kind: Nomadic
+  capital: Raule
+  form_of_government: Kingdom
+  burgs: 67
+  provinces: 18
+  urban_population_thousands: 389.9
+  neighbors:
+  - Umelule
+  - Srurd
+  - Scorcrosia
+  - Grataph
+  - Mosefia
+  color: '#a6d854'
+- id: khiz-16
+  name: Khiz
+  kind: Generic
+  capital: Shathiz
+  form_of_government: Kingdom
+  burgs: 153
+  provinces: 38
+  urban_population_thousands: 1077.4
+  neighbors:
+  - Galg
+  - Umelule
+  color: '#a5d97c'
+- id: tumunz-18
+  name: Tumunz
+  kind: Nomadic
+  capital: Shizdus
+  form_of_government: Kingdom
+  burgs: 65
+  provinces: 17
+  urban_population_thousands: 417.3
+  neighbors:
+  - Anaqua
+  - Shatharb
+  color: '#faf83e'
+- id: umelule-9
+  name: Umelule
+  kind: Nomadic
+  capital: Ghron
+  form_of_government: Kingdom
+  burgs: 71
+  provinces: 20
+  urban_population_thousands: 425.5
+  neighbors:
+  - Galg
+  - Khiz
+  - Scorcrosia
+  - Srurd
+  - Hethlindra
+  color: '#88b0e6'
+- id: mosefia-13
+  name: Mosefia
+  kind: Generic
+  capital: Faypostle
+  form_of_government: Kingdom
+  burgs: 115
+  provinces: 32
+  urban_population_thousands: 730.9
+  neighbors:
+  - Hethlindra
+  - Smotia
+  color: '#61ddb9'
+- id: raunyueg-12
+  name: Raunyueg
+  kind: Generic
+  capital: Raunyueg
+  form_of_government: Kingdom
+  burgs: 130
+  provinces: 32
+  urban_population_thousands: 983.7
+  neighbors:
+  - Galtsenmu
+  - Mythsarant
+  - Asete
+  - Aymar
+  color: '#fdcf50'
+- id: ir-ug-20
+  name: Ir-Ug
+  kind: Nomadic
+  capital: Kaz
+  form_of_government: Kingdom
+  burgs: 48
+  provinces: 12
+  urban_population_thousands: 316.3
+  neighbors:
+  - Srurd
+  - Brur
+  color: '#e7b079'
+- id: galg-15
+  name: Galg
+  kind: Generic
+  capital: Galg
+  form_of_government: Republic
+  burgs: 87
+  provinces: 23
+  urban_population_thousands: 717.1
+  neighbors:
+  - Khiz
+  - Umelule
+  color: '#faa9ba'
+- id: galtsenmu-3
+  name: Galtsenmu
+  kind: Nomadic
+  capital: Gogodlon
+  form_of_government: Ulus
+  burgs: 50
+  provinces: 12
+  urban_population_thousands: 381.9
+  neighbors:
+  - Scorcrosia
+  - Raunyueg
+  color: '#8da0cb'
+- id: asete-11
+  name: Asete
+  kind: Generic
+  capital: Malian
+  form_of_government: Theocracy
+  burgs: 55
+  provinces: 16
+  urban_population_thousands: 361.7
+  neighbors:
+  - Hlurthin
+  - Mythsarant
+  - Raunyueg
+  color: '#b2f75f'
+- id: anaqua-10
+  name: Anaqua
+  kind: Generic
+  capital: Liriatheas
+  form_of_government: Grand Duchy
+  burgs: 59
+  provinces: 16
+  urban_population_thousands: 397.6
+  neighbors:
+  - Shatharb
+  - Tumunz
+  - Hlurthin
+  color: '#c1ef58'
+- id: brur-21
+  name: Brur
+  kind: Nomadic
+  capital: Brur
+  form_of_government: Grand Duchy
+  burgs: 36
+  provinces: 8
+  urban_population_thousands: 228.5
+  neighbors:
+  - Ir-Ug
+  color: '#88b0e6'
+- id: mythsarant-2
+  name: Mythsarant
+  kind: Generic
+  capital: Mithtaset
+  form_of_government: Duchy
+  burgs: 44
+  provinces: 11
+  urban_population_thousands: 285.0
+  neighbors:
+  - Hlurthin
+  - Raunyueg
+  - Asete
+  color: '#fc8d62'
+- id: smotia-14
+  name: Smotia
+  kind: Generic
+  capital: Bearguard
+  form_of_government: Theocracy
+  burgs: 33
+  provinces: 10
+  urban_population_thousands: 249.0
+  neighbors:
+  - Mosefia
+  color: '#f78e81'
+- id: unerilelha-7
+  name: Unerilelha
+  kind: Generic
+  capital: Vinlurth
+  form_of_government: Theocracy
+  burgs: 26
+  provinces: 7
+  urban_population_thousands: 224.7
+  neighbors:
+  - Aymar
+  color: '#8bbbb8'
+- id: grataph-1
+  name: Grataph
+  kind: River
+  capital: Makese
+  form_of_government: Duchy
+  burgs: 15
+  provinces: 5
+  urban_population_thousands: 153.9
+  neighbors:
+  - Hethlindra
+  color: '#66c2a5'
+- id: hlurthin-6
+  name: Hlurthin
+  kind: Generic
+  capital: Tlind
+  form_of_government: Duchy
+  burgs: 18
+  provinces: 5
+  urban_population_thousands: 133.2
+  neighbors:
+  - Anaqua
+  - Mythsarant
+  - Asete
+  color: '#ffd92f'
+cultures:
+- name: Anor (Human)
+  kind: Generic
+  expansionism: 1.3
+- name: Khazadur (Dwarven)
+  kind: Nomadic
+  expansionism: 2.7
+- name: Trow (Dark Elfish)
+  kind: River
+  expansionism: 1.6
+- name: Dail (Human)
+  kind: Generic
+  expansionism: 2
+- name: Dunirr (Dwarven)
+  kind: Highland
+  expansionism: 1.3
+- name: Kobold (Goblin)
+  kind: Nomadic
+  expansionism: 2.8
+- name: Dulandir (Human)
+  kind: Nomadic
+  expansionism: 3
+- name: Rohand (Human)
+  kind: Generic
+  expansionism: 1.8
+- name: Quenian (Elfish)
+  kind: Generic
+  expansionism: 1.9
+- name: Rake (Drakonic)
+  kind: Nomadic
+  expansionism: 2.9
+- name: Yotunn (Giants)
+  kind: Generic
+  expansionism: 2.1
+- name: Uruk (Orkish)
+  kind: Nomadic
+  expansionism: 3
+- name: Aj'Snaga (Serpents)
+  kind: River
+  expansionism: 1.4
+- name: Ugluk (Orkish)
+  kind: Nomadic
+  expansionism: 2.2
+- name: Arago (Arachnid)
+  kind: Hunting
+  expansionism: 1.1
+- name: Lothian (Dark Elfish)
+  kind: Nomadic
+  expansionism: 2.4
+major_settlements:
+- name: Makese
+  nation: Grataph
+  population_thousands: 63.6
+  capital: true
+  port: true
+  kind: Naval
+  x: 814.5
+  y: 457.5
+- name: Mithtaset
+  nation: Mythsarant
+  population_thousands: 56.1
+  capital: true
+  port: false
+  kind: Lake
+  x: 86.7
+  y: 443.8
+- name: Tlind
+  nation: Hlurthin
+  population_thousands: 47.7
+  capital: true
+  port: true
+  kind: Naval
+  x: 33.0
+  y: 473.0
+- name: Rashigtokh
+  nation: Galtsenmu
+  population_thousands: 42.3
+  capital: false
+  port: false
+  kind: Lake
+  x: 252.8
+  y: 485.4
+- name: Kurt
+  nation: Shatharb
+  population_thousands: 39.5
+  capital: false
+  port: true
+  kind: Naval
+  x: 152.9
+  y: 85.7
+- name: Bayanlaiger
+  nation: Raunyueg
+  population_thousands: 38.0
+  capital: false
+  port: true
+  kind: Naval
+  x: 256.9
+  y: 553.6
+- name: Vinlurth
+  nation: Unerilelha
+  population_thousands: 37.1
+  capital: true
+  port: true
+  kind: Naval
+  x: 385.7
+  y: 564.8
+- name: Banatal
+  nation: Khiz
+  population_thousands: 35.5
+  capital: false
+  port: true
+  kind: Naval
+  x: 1044.0
+  y: 86.9
+- name: Liriatheas
+  nation: Anaqua
+  population_thousands: 35.5
+  capital: true
+  port: true
+  kind: Naval
+  x: 22.0
+  y: 405.5
+- name: Malian
+  nation: Asete
+  population_thousands: 35.2
+  capital: true
+  port: true
+  kind: Naval
+  x: 35.8
+  y: 569.9
+- name: Kizad
+  nation: Shatharb
+  population_thousands: 33.4
+  capital: true
+  port: false
+  kind: Lake
+  x: 415.4
+  y: 203.1
+- name: Hildlaug
+  nation: Galg
+  population_thousands: 31.3
+  capital: false
+  port: true
+  kind: Naval
+  x: 915.4
+  y: 136.6
+- name: Wlamel
+  nation: Aymar
+  population_thousands: 30.7
+  capital: false
+  port: false
+  kind: Generic
+  x: 410.6
+  y: 588.8
+- name: Naghelkyndor
+  nation: Umelule
+  population_thousands: 30.4
+  capital: false
+  port: true
+  kind: Naval
+  x: 857.4
+  y: 164.3
+- name: Brur
+  nation: Brur
+  population_thousands: 28.9
+  capital: true
+  port: true
+  kind: Naval
+  x: 1090.0
+  y: 653.4

@@ -1,0 +1,493 @@
+/* Campaign Studio — maps.js
+   Maps tab: world map hero, cities grid, "map a burg", battlemap scenes. */
+(function () {
+  'use strict';
+  const S = window.Studio;
+
+  /* ----- url helpers ----- */
+
+  function citySvgUrl(city) {
+    if (typeof city.svg === 'string' && city.svg &&
+        (city.svg.indexOf('/') === 0 || city.svg.indexOf('data:') === 0)) {
+      return city.svg;
+    }
+    const slug = city.slug || '';
+    return S.fileUrl('maps/cities/' + encodeURIComponent(slug) + '/' + encodeURIComponent(slug) + '.svg');
+  }
+
+  function siteImgUrl(site) {
+    if (typeof site.svg === 'string' && site.svg && site.svg.indexOf('/') === 0) return site.svg;
+    if (typeof site.png === 'string' && site.png && site.png.indexOf('/') === 0) return site.png;
+    const slug = site.slug || '';
+    return S.fileUrl('maps/sites/' + encodeURIComponent(slug) + '/' + encodeURIComponent(slug) + '.png');
+  }
+
+  /* ----- cards ----- */
+
+  function artifactCard(label, url) {
+    const card = S.el(
+      '<figure class="card artifact-card">' +
+        '<div class="card-media"></div>' +
+        '<figcaption class="card-title">' + S.esc(label) + '</figcaption>' +
+      '</figure>'
+    );
+    const media = card.querySelector('.card-media');
+    const img = new Image();
+    img.alt = label;
+    // NOTE: no loading='lazy' — a detached lazy image never intersects the
+    // viewport, so it never loads, so it is never appended. Eager or nothing.
+    img.onload = () => {
+      media.innerHTML = '';
+      media.appendChild(img);
+    };
+    img.onerror = () => {
+      media.innerHTML = '';
+      media.appendChild(S.emptyState('Map file missing'));
+    };
+    img.src = url;
+    return card;
+  }
+
+  /* ----- log tail for forms ----- */
+
+  function makeLogBox(wrap) {
+    const logBox = wrap.querySelector('.log-tail');
+    return {
+      open() {
+        logBox.classList.remove('hidden');
+        logBox.textContent = '';
+      },
+      push(line) {
+        logBox.textContent += String(line == null ? '' : line) + '\n';
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+    };
+  }
+
+  /* ----- burg form ----- */
+
+  function burgForm(burgs) {
+    const wrap = S.el(
+      '<div class="form-block">' +
+        '<form class="inline-form">' +
+          '<label class="field"><span class="field-label">Burg</span>' +
+            '<select class="input burg-select"></select></label>' +
+          '<button type="submit" class="btn btn-primary">Map it</button>' +
+        '</form>' +
+        '<pre class="log-tail hidden"></pre>' +
+        '<div class="form-error"></div>' +
+      '</div>'
+    );
+    const select = wrap.querySelector('.burg-select');
+    const sorted = burgs.slice().sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || '')));
+    sorted.forEach((b) => {
+      const bnation = b.nation || b.country || 'unknown';
+      const bp = (b.population != null && b.population !== '') ? b.population
+        : (b.population_thousands != null ? b.population_thousands * 1000 : null);
+      const bpop = (bp != null && bp !== '') ? S.fmtInt(bp) : '?';
+      const bport = b.port ? ' [port]' : '';
+      const opt = S.el(
+        '<option value="' + S.esc(b.name || '') + '">' +
+          S.esc(b.name || '(unnamed)') + ' — ' + S.esc(bnation) +
+          ', pop ' + S.esc(bpop) + S.esc(bport) +
+        '</option>'
+      );
+      select.appendChild(opt);
+    });
+
+    const form = wrap.querySelector('form');
+    const btn = form.querySelector('button[type="submit"]');
+    const errBox = wrap.querySelector('.form-error');
+    const log = makeLogBox(wrap);
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const burg = select.value;
+      if (!burg || btn.disabled) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      log.open();
+      (async () => {
+        const resp = await S.api(S.campUrl('/maps/cities'), { method: 'POST', body: { burg: burg } });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
+        S.toast('City map ready: ' + ((result && result.slug) ? result.slug : burg), 'ok');
+        return result;
+      })().then(() => refreshCities()).catch((err) => {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        S.toast('City mapping failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+      }).finally(() => { btn.disabled = false; });
+    });
+    return wrap;
+  }
+
+  /* ----- sites form ----- */
+
+  function siteForm() {
+    const wrap = S.el(
+      '<div class="form-block">' +
+        '<form class="inline-form">' +
+          '<label class="field"><span class="field-label">Kind</span>' +
+            '<select class="input site-kind">' +
+              '<option value="dungeon">dungeon</option>' +
+              '<option value="cave">cave</option>' +
+              '<option value="camp">camp</option>' +
+            '</select></label>' +
+          '<label class="field"><span class="field-label">Name</span>' +
+            '<input type="text" class="input site-name" placeholder="e.g. The Drowned Crypt"></label>' +
+          '<button type="submit" class="btn btn-primary">Generate scene</button>' +
+        '</form>' +
+        '<p class="muted form-note">battlemap gen &rarr; render &rarr; PNG (sharp) &rarr; UVTT wrap. The .uvtt drops straight into Foundry (walls, doors and lights live).</p>' +
+        '<div class="site-result"></div>' +
+        '<pre class="log-tail hidden"></pre>' +
+        '<div class="form-error"></div>' +
+      '</div>'
+    );
+    const form = wrap.querySelector('form');
+    const kindSel = wrap.querySelector('.site-kind');
+    const nameIn = wrap.querySelector('.site-name');
+    const btn = form.querySelector('button[type="submit"]');
+    const errBox = wrap.querySelector('.form-error');
+    const resultBox = wrap.querySelector('.site-result');
+    const log = makeLogBox(wrap);
+
+    // the fresh scene: preview + downloads for the artifact set
+    function showSiteResult(result) {
+      resultBox.innerHTML = '';
+      if (!result || !result.svg) return;
+      const label = result.label || result.slug || 'scene';
+      const fig = S.el(
+        '<figure class="card artifact-card site-result-card">' +
+          '<div class="card-media"></div>' +
+          '<figcaption class="card-title">' + S.esc(label) + '</figcaption>' +
+          '<div class="site-result-links"></div>' +
+        '</figure>'
+      );
+      const media = fig.querySelector('.card-media');
+      const img = new Image();
+      img.alt = label + ' scene';
+      img.onload = () => { media.innerHTML = ''; media.appendChild(img); };
+      img.onerror = () => { media.innerHTML = ''; media.appendChild(S.emptyState('scene.svg missing')); };
+      img.src = result.svg;
+      const links = fig.querySelector('.site-result-links');
+      [['uvtt', ' (Foundry UVTT)'], ['png', ' (battlemap image)'], ['scene', ' (scene.json)']]
+        .forEach(([key, suffix]) => {
+          const url = result[key];
+          if (!url) return;
+          const fname = String(url).split('/').pop();
+          links.appendChild(S.el(
+            '<a class="result-link" href="' + S.esc(url) + '" download="' + S.esc(fname) + '">' +
+              S.esc(fname) + S.esc(suffix) + '</a> '
+          ));
+        });
+      resultBox.appendChild(fig);
+    }
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const kind = kindSel.value;
+      const nm = nameIn.value.trim();
+      if (!nm || btn.disabled) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      log.open();
+      (async () => {
+        const resp = await S.api(S.campUrl('/maps/sites'), {
+          method: 'POST',
+          body: { kind: kind, name: nm }
+        });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
+        S.toast('Scene ready: ' + ((result && result.slug) ? result.slug : nm), 'ok');
+        return result;
+      })().then((result) => {
+        showSiteResult(result);
+        return refreshCities();
+      }).catch((err) => {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        S.toast('Scene generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+      }).finally(() => { btn.disabled = false; });
+    });
+    return wrap;
+  }
+
+  /* ----- cities + sites grid ----- */
+
+  let grid = null;
+  let sitesGrid = null;
+
+  function renderSites(data) {
+    if (!sitesGrid) return;
+    sitesGrid.innerHTML = '';
+    const sites = (data && Array.isArray(data.sites)) ? data.sites : [];
+    if (!sites.length) {
+      sitesGrid.appendChild(S.emptyState('No battlemap scenes yet — generate one above.'));
+      return;
+    }
+    sites.forEach((s) => {
+      const label = s.label || s.name || s.slug || '(scene)';
+      sitesGrid.appendChild(artifactCard(label, siteImgUrl(s)));
+    });
+  }
+
+  async function refreshCities() {
+    if (!grid) return;
+    grid.innerHTML = '';
+    grid.appendChild(S.loading('Loading city maps…'));
+    let data;
+    try {
+      data = await S.api(S.campUrl('/maps'));
+    } catch (err) {
+      grid.innerHTML = '';
+      grid.appendChild(S.errorPanel(err, 'The maps listing could not be loaded.'));
+      if (sitesGrid) {
+        sitesGrid.innerHTML = '';
+        sitesGrid.appendChild(S.emptyState('Sites unavailable — the maps listing failed.'));
+      }
+      return;
+    }
+    grid.innerHTML = '';
+    const cities = (data && Array.isArray(data.cities)) ? data.cities : [];
+    if (!cities.length) {
+      grid.appendChild(S.emptyState('No city maps yet — map a burg below and it will appear here.'));
+    }
+    cities.forEach((c) => {
+      const label = c.label || c.slug || '(city)';
+      grid.appendChild(artifactCard(label, citySvgUrl(c)));
+    });
+    renderSites(data);
+  }
+
+  /* ----- generate a world (seed -> headless FMG -> import -> workspace) ----- */
+
+  function worldGenForm(hasGeography) {
+    const wrap = S.el(
+      '<div class="form-block">' +
+        '<form class="inline-form">' +
+          '<label class="field"><span class="field-label">Seed</span>' +
+            '<input type="text" class="input world-seed" placeholder="e.g. 12345"></label>' +
+          '<button type="submit" class="btn btn-primary world-gen-btn"' +
+            (hasGeography ? ' disabled' : '') + '>Generate world</button>' +
+          (hasGeography
+            ? '<label class="field field-narrow force-field">' +
+              '<input type="checkbox" class="force-toggle"> ' +
+              '<span class="field-label">force (replace the world)</span></label>'
+            : '') +
+        '</form>' +
+        (hasGeography
+          ? '<p class="muted form-note">This campaign already has a generated world. Regenerating ' +
+            'replaces <code>world/source.*</code> and <code>world/geography.yaml</code> &mdash; existing ' +
+            'city maps and lore keep naming the old world. Without force, the server refuses (409).</p>'
+          : '<p class="muted form-note">Type a seed, get a world: headless FMG runs the genesis pipeline, ' +
+            'import_fmg distills nations and settlements, and the world map renders from the dump.</p>') +
+        '<pre class="log-tail hidden"></pre>' +
+        '<div class="form-error"></div>' +
+      '</div>'
+    );
+    const form = wrap.querySelector('form');
+    const seedIn = wrap.querySelector('.world-seed');
+    const btn = wrap.querySelector('.world-gen-btn');
+    const errBox = wrap.querySelector('.form-error');
+    const log = makeLogBox(wrap);
+    const forceTgl = wrap.querySelector('.force-toggle');
+    if (forceTgl) {
+      forceTgl.addEventListener('change', () => {
+        btn.disabled = !forceTgl.checked; // the replace-the-world escape hatch
+      });
+    }
+
+    form.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const seed = seedIn.value.trim();
+      if (!seed || btn.disabled) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      log.open();
+      (async () => {
+        const resp = await S.api(S.campUrl('/world'), {
+          method: 'POST',
+          body: { seed: seed, force: forceTgl ? !!forceTgl.checked : false }
+        });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
+        const r = result || {};
+        S.toast('World generated: ' + (r.nations != null ? r.nations + ' nations, ' : '') +
+          (r.settlements != null ? r.settlements + ' settlements' : 'done'), 'ok');
+        return result;
+      })().then(() => {
+        S.showTab('maps'); // full re-render: hero, burg list, geography
+      }).catch((err) => {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        S.toast('World generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+        btn.disabled = forceTgl ? !forceTgl.checked : false;
+      });
+    });
+    return wrap;
+  }
+
+  /* ----- render world map (only when map.svg is missing) ----- */
+
+  function renderMapPanel() {
+    const wrap = S.el(
+      '<div class="form-block">' +
+        '<div class="inline-form">' +
+          '<button type="button" class="btn render-map-btn">Render world map</button>' +
+          '<span class="muted form-note">Renders world/map.svg from the existing world dump ' +
+          '(read-only &mdash; geography is never regenerated).</span>' +
+        '</div>' +
+        '<pre class="log-tail hidden"></pre>' +
+        '<div class="form-error"></div>' +
+      '</div>'
+    );
+    const btn = wrap.querySelector('.render-map-btn');
+    const errBox = wrap.querySelector('.form-error');
+    const log = makeLogBox(wrap);
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      log.open();
+      try {
+        const resp = await S.api(S.campUrl('/maps/world-map'), { method: 'POST', body: {} });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        await S.pollJob(resp.job_id, (line) => log.push(line));
+        S.toast('World map rendered', 'ok');
+        S.showTab('maps'); // hero re-checks world/map.svg on render
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        btn.disabled = false;
+      }
+    });
+    return wrap;
+  }
+
+  /* ----- tab renderer ----- */
+
+  S.tabs.maps = async function (container) {
+    container.innerHTML = '';
+    if (!S.state.campaign) {
+      container.appendChild(S.noCampaign());
+      return;
+    }
+
+    const root = S.el('<div class="tab-root"></div>');
+    container.appendChild(root);
+
+    // Geography drives three things: the world card's state, the render
+    // panel's visibility, and the burg picker. 404 = no geography yet.
+    // Declared up front: the hero's onerror can fire during the awaits below.
+    let geoData = null;
+
+    // Hero world map — hidden gracefully if world/map.svg is missing (404);
+    // a missing map + existing geography reveals the "Render world map" panel.
+    let heroFailed = false;
+    const hero = S.el(
+      '<section class="panel panel-hero hidden">' +
+        '<h3 class="panel-title">World map</h3>' +
+        '<div class="worldmap-holder"></div>' +
+      '</section>'
+    );
+    const holder = hero.querySelector('.worldmap-holder');
+    const heroImg = new Image();
+    heroImg.alt = 'World map';
+    heroImg.className = 'worldmap-img';
+    heroImg.onload = () => { hero.classList.remove('hidden'); };
+    heroImg.onerror = () => {
+      heroFailed = true;
+      hero.classList.add('hidden');
+      maybeShowRenderPanel();
+    };
+    heroImg.src = S.fileUrl('world/map.svg');
+    holder.appendChild(heroImg);
+    root.appendChild(hero);
+
+    // "Render world map" — inserted between hero and cities only when the
+    // hero image failed AND geography exists (no world -> nothing to render).
+    let renderPanelInserted = false;
+    function maybeShowRenderPanel() {
+      if (renderPanelInserted || !heroFailed || !geoData) return;
+      const panel = S.el(
+        '<section class="panel"><h3 class="panel-title">Render world map</h3>' +
+          '<div class="form-slot"></div></section>'
+      );
+      panel.querySelector('.form-slot').appendChild(renderMapPanel());
+      root.insertBefore(panel, citiesPanel);
+      renderPanelInserted = true;
+    }
+
+    // Generate a world card (adapts once geography presence is known).
+    const worldPanel = S.el(
+      '<section class="panel"><h3 class="panel-title">Generate a world</h3>' +
+        '<div class="form-slot"><div class="loading">Checking the world&hellip;</div></div>' +
+      '</section>'
+    );
+    const worldSlot = worldPanel.querySelector('.form-slot');
+    root.appendChild(worldPanel);
+
+    // Cities grid.
+    const citiesPanel = S.el(
+      '<section class="panel">' +
+        '<h3 class="panel-title">Cities</h3>' +
+        '<div class="artifact-grid cities-grid"></div>' +
+      '</section>'
+    );
+    grid = citiesPanel.querySelector('.cities-grid');
+    root.appendChild(citiesPanel);
+
+    // Battlemap scenes: grid + form (the route may 501 until a later wave).
+    const sitesPanel = S.el(
+      '<section class="panel">' +
+        '<h3 class="panel-title">Battlemap scenes</h3>' +
+        '<div class="form-slot"></div>' +
+        '<div class="artifact-grid sites-grid"></div>' +
+      '</section>'
+    );
+    sitesGrid = sitesPanel.querySelector('.sites-grid');
+    sitesPanel.querySelector('.form-slot').appendChild(siteForm());
+    root.appendChild(sitesPanel);
+
+    // Map a burg form (burgs come from geography).
+    const burgPanel = S.el(
+      '<section class="panel">' +
+        '<h3 class="panel-title">Map a burg</h3>' +
+        '<div class="form-slot"><div class="loading">Loading burgs&hellip;</div></div>' +
+      '</section>'
+    );
+    const burgSlot = burgPanel.querySelector('.form-slot');
+    root.appendChild(burgPanel);
+
+    await refreshCities();
+
+    try {
+      geoData = await S.api(S.campUrl('/geography'));
+    } catch (err) {
+      if (!err || err.status !== 404) {
+        burgSlot.innerHTML = '';
+        burgSlot.appendChild(S.errorPanel(err, "Burgs come from geography; it could not be loaded."));
+      }
+    }
+
+    worldSlot.innerHTML = '';
+    worldSlot.appendChild(worldGenForm(!!geoData));
+
+    burgSlot.innerHTML = '';
+    const burgs = geoData
+      ? (((Array.isArray(geoData.burgs)) ? geoData.burgs
+          : (Array.isArray(geoData.major_settlements)) ? geoData.major_settlements : []))
+      : [];
+    if (!burgs.length) {
+      burgSlot.appendChild(S.emptyState(geoData
+        ? "No burgs found in this campaign's geography."
+        : 'No geography yet — generate a world above and burgs appear here.'));
+    } else {
+      burgSlot.appendChild(burgForm(burgs));
+    }
+
+    maybeShowRenderPanel();
+  };
+}());

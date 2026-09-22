@@ -1,0 +1,33 @@
+meta:
+  source: Azgaar Fantasy Map Generator
+  map_name: Testvale
+  seed: "12345"
+summary:
+  nations: 1
+  settlements: 2
+nations:
+  - id: shadia-1
+    name: Shadia
+    kind: Free City
+    capital: Provis
+    burgs: 2
+cultures:
+  - name: Shadian
+    kind: Heartland
+major_settlements:
+  - name: Provis
+    nation: Shadia
+    population_thousands: 12.3
+    capital: true
+    port: true
+    kind: City
+    x: 120.5
+    y: 80.2
+  - name: Dunmore
+    nation: Shadia
+    population_thousands: 4.1
+    capital: false
+    port: false
+    kind: Town
+    x: 200.0
+    y: 150.7

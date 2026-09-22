@@ -1,0 +1,8 @@
+extends: occurrence
+message: "Semicolon overuse — the cap is two per paragraph."
+scope: paragraph
+ignorecase: false
+token: ';'
+count: max
+max: 2
+level: suggestion

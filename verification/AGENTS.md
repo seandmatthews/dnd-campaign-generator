@@ -1,0 +1,20 @@
+# AGENTS.md — start here
+
+A standalone prose-verification kit for D&D generated content. No game
+state, no world data — it checks text against rules and attackers. Point it
+at a file or directory and read the queue it leaves behind.
+
+Quickstart, ground rules, and the layer model: [`README.md`](README.md).
+Run `python tests/test_check.py` before and after changing anything in
+`check.py` (zero-dependency, direct-run).
+
+Non-negotiables:
+
+1. Findings, not judgments. Every layer emits `{file, line, rule, level,
+   quote, note}` and quotes exact text. A reviewer that returns prose
+   praise is broken by design.
+2. Cheapest layer first. Structural checks before Vale; Vale before LLM
+   passes; `--llm` is opt-in because it spends money.
+3. Never auto-reject. The kit produces a review queue; the human decides.
+4. The lexicon ratchets: every slop instance caught by hand becomes one
+   line in `styles/Tabletop/Regression.yml`.

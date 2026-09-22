@@ -1,0 +1,40 @@
+meta:
+  premise: The toll bridge burned the night the wardens raised the toll.
+  clock:
+    week: 3
+    season: early spring
+city:
+  name: Provis
+  population: 12300
+factions:
+  - id: wardens
+    name: The Bridge Wardens
+    kind: toll Brotherhood
+    goal: rebuild the bridge and the toll with it
+    resources:
+      coin: medium
+      muscle: low
+      legitimacy: high
+    disposition:
+      ferrymen: hostile
+  - id: ferrymen
+    name: The Ferrymen
+    kind: boatmen guild
+    goal: keep the crossing broken, own the river traffic
+    resources:
+      coin: low
+      muscle: medium
+      legitimacy: low
+    disposition:
+      wardens: hostile
+events:
+  - week: 1
+    actor: wardens
+    text: raised the toll on the Vane crossing — succeeded, margin +3
+  - week: 2
+    actor: ferrymen
+    text: burned the toll bridge (contested vs wardens) — succeeded, margin +6
+rumors:
+  - claim: the bridge was insured twice over
+    fidelity: hearsay
+    born_week: 2

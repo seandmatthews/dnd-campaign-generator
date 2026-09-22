@@ -1,0 +1,7 @@
+extends: existence
+message: "The 'not just X but Y' construction — let the second thing stand on its own."
+scope: sentence
+ignorecase: true
+level: warning
+tokens:
+  - 'not (?:just|merely|only)\b[^.]{0,60}?\bbut\b'

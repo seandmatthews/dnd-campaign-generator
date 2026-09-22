@@ -1,0 +1,12 @@
+# Canon terms for this campaign — one term per line, exact spelling.
+# check.py flags any near-variant (one edit away, e.g. "Ruravaquan") as a
+# continuity finding. Lines starting with # are comments.
+Ruravaqan
+Bonia
+Shadia
+House Ferrand
+the Reliquary
+the Mint
+the Tanneries
+the Docks
+Sera

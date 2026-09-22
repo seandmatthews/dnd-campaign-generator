@@ -1,0 +1,459 @@
+{
+ "name": "Harbour Quay",
+ "provenance": {
+  "anchored_to": "world\\atlas\\ruravaqan\\ruravaqan.geojson",
+  "note": "building footprints are real GeoJSON geometry; the pier and crates/bollards are dressing; scene is cropped to the quay strip",
+  "meters_per_unit": 10.759197265865302
+ },
+ "grids": {
+  "x": 46,
+  "y": 30
+ },
+ "pixels_per_grid": 70,
+ "meters_per_grid": 1.524,
+ "features": [
+  {
+   "kind": "water",
+   "polygon": [
+    [
+     0,
+     24.0
+    ],
+    [
+     70.1,
+     24.0
+    ],
+    [
+     70.1,
+     45.72
+    ],
+    [
+     0,
+     45.72
+    ]
+   ],
+   "label": "The Sea"
+  },
+  {
+   "kind": "ground",
+   "polygon": [
+    [
+     0,
+     0
+    ],
+    [
+     70.1,
+     0
+    ],
+    [
+     70.1,
+     24.0
+    ],
+    [
+     0,
+     24.0
+    ]
+   ],
+   "label": "cobble quay"
+  },
+  {
+   "kind": "building",
+   "id": "b2472",
+   "polygon": [
+    [
+     26.27,
+     -44.14
+    ],
+    [
+     -1.24,
+     10.0
+    ],
+    [
+     -31.31,
+     -5.28
+    ],
+    [
+     -3.81,
+     -59.42
+    ],
+    [
+     26.27,
+     -44.14
+    ]
+   ],
+   "label": "Warehouse 1",
+   "walls": true
+  },
+  {
+   "kind": "building",
+   "id": "b2474",
+   "polygon": [
+    [
+     94.81,
+     -56.79
+    ],
+    [
+     63.84,
+     -5.56
+    ],
+    [
+     24.97,
+     -29.05
+    ],
+    [
+     55.93,
+     -80.29
+    ],
+    [
+     94.81,
+     -56.79
+    ]
+   ],
+   "label": "Warehouse 2",
+   "walls": true
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    2.51,
+    13.32
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    18.71,
+    19.03
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    -12.4,
+    18.28
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    -2.67,
+    20.73
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    15.22,
+    18.54
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    -3.91,
+    20.32
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    68.73,
+    20.62
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    82.17,
+    13.6
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    51.86,
+    15.6
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    57.91,
+    19.9
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    60.79,
+    15.68
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    62.24,
+    18.96
+   ],
+   "w": 1.2,
+   "h": 1.2,
+   "color": "#7a5c3a",
+   "label": "crates",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    4.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    10.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    16.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    22.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    28.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    34.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    40.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    46.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    52.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    58.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "circle",
+   "at": [
+    64.0,
+    23.2
+   ],
+   "r": 0.25,
+   "color": "#3d3a35",
+   "label": "bollard",
+   "blocks": false
+  },
+  {
+   "kind": "prop",
+   "shape": "rect",
+   "at": [
+    12.0,
+    32.0
+   ],
+   "w": 5.0,
+   "h": 18.0,
+   "color": "#8a7a5e",
+   "label": "pier",
+   "blocks": false
+  }
+ ],
+ "doors": [
+  {
+   "at": [
+    -16.27,
+    2.36
+   ],
+   "width_m": 2.0,
+   "angle": -153.1,
+   "closed": true,
+   "kind": "door",
+   "label": "b2472 door"
+  },
+  {
+   "at": [
+    44.41,
+    -17.3
+   ],
+   "width_m": 2.0,
+   "angle": -148.9,
+   "closed": true,
+   "kind": "door",
+   "label": "b2474 door"
+  }
+ ],
+ "labels": [
+  {
+   "text": "HARBOUR QUAY",
+   "at": [
+    35.05,
+    4.0
+   ],
+   "size": 30
+  },
+  {
+   "text": "the sea",
+   "at": [
+    35.05,
+    38.0
+   ],
+   "size": 22
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+# Provenance record — regenerate with scripts/gen-ruravaqan.mjs, never hand-edit outputs.
+source_map: worlds/raw/candidate-03.map
+source_seed: '878636343'
+settlemaker_version: 3.0.1
+seed: 636343
+burg_input:
+  name: "Ruravaqan"
+  population: 29562
+  biome: "coastal"
+  port: true
+  citadel: false
+  walls: true
+  plaza: true
+  temple: true
+  shanty: false
+  capital: false
+  engine: "city"
+  roadBearings: [{"bearing_deg":263,"kind":"main","route_id":"mish-road"},{"bearing_deg":83,"kind":"main","route_id":"natabashe-road"},{"bearing_deg":50,"kind":"town","route_id":"mabashad-road"},{"bearing_deg":28,"kind":"local","route_id":"chogzi-road"}]
+  oceanBearing: 180
+  harbourSize: "large"
+
+kind: settlement
+degraded_flags: []

@@ -1,0 +1,360 @@
+/* Campaign Studio — core.js
+   Defines window.Studio: the API helper, job polling, safe markdown,
+   the confirm modal, toasts, and the tab system.
+   Loaded first; every tab file only touches window.Studio. */
+(function () {
+  'use strict';
+
+  const Studio = {
+    state: { campaigns: [], campaign: null, activeTab: 'maps' },
+    tabs: {}
+  };
+  window.Studio = Studio;
+
+  /* ---------- text + DOM helpers ---------- */
+
+  function esc(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function el(html) {
+    const tpl = document.createElement('template');
+    tpl.innerHTML = String(html).trim();
+    const node = tpl.content.firstElementChild;
+    if (!node) throw new Error('el(): template produced no element');
+    return node;
+  }
+
+  function fmtInt(value) {
+    const n = Number(value);
+    if (value === '' || value == null || Number.isNaN(n)) return String(value == null ? '' : value);
+    return n.toLocaleString();
+  }
+
+  /* ---------- API ---------- */
+
+  async function api(path, opts) {
+    opts = opts || {};
+    const init = { method: opts.method || 'GET', headers: {} };
+    if (opts.body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(opts.body);
+    }
+    let res;
+    try {
+      res = await fetch(path, init);
+    } catch (e) {
+      throw {
+        status: 0,
+        error: 'Cannot reach the studio server (' + (e && e.message ? e.message : 'network error') + ')'
+      };
+    }
+    const text = await res.text();
+    let data = null;
+    if (text) {
+      try { data = JSON.parse(text); } catch (_) { data = null; }
+    }
+    if (!res.ok) {
+      const msg = (data && data.error) ? data.error : (text || ('HTTP ' + res.status));
+      throw { status: res.status, error: msg };
+    }
+    return data;
+  }
+
+  function pollJob(id, onLog) {
+    return new Promise((resolve, reject) => {
+      let seen = 0;
+      const tick = async () => {
+        let job;
+        try {
+          job = await api('/api/jobs/' + encodeURIComponent(id));
+        } catch (err) {
+          clearInterval(timer);
+          reject(err);
+          return;
+        }
+        const tail = Array.isArray(job.log_tail) ? job.log_tail : [];
+        if (tail.length < seen) seen = tail.length; // tail rotated: skip old lines
+        if (typeof onLog === 'function') {
+          while (seen < tail.length) { onLog(tail[seen]); seen += 1; }
+        } else {
+          seen = tail.length;
+        }
+        if (job.status === 'done') {
+          clearInterval(timer);
+          resolve(job.result);
+        } else if (job.status === 'error') {
+          clearInterval(timer);
+          reject({ status: 500, error: job.error || 'Job failed' });
+        }
+      };
+      const timer = setInterval(tick, 1000);
+      tick();
+    });
+  }
+
+  /* ---------- markdown (escape FIRST, then a minimal subset) ---------- */
+
+  function mdInline(s) {
+    // s is already HTML-escaped by md()
+    return s
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  }
+
+  function mdRowCells(line) {
+    return line.trim().replace(/^\|/, '').replace(/\|$/, '')
+      .split('|').map((c) => c.trim());
+  }
+  const mdIsTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
+  const mdIsSepRow = (cells) =>
+    cells.length > 0 && cells.every((c) => c === '' || /^:?-{2,}:?$/.test(c));
+
+  function md(text) {
+    const lines = esc(text).replace(/\r\n/g, '\n').split('\n');
+    const out = [];
+    let para = [];
+
+    const flushPara = () => {
+      if (para.length) {
+        out.push('<p>' + para.map(mdInline).join('<br>') + '</p>');
+        para = [];
+      }
+    };
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const t = line.trim();
+
+      // pipe table: a pipe row followed by another pipe row (chronicle roll tables)
+      if (mdIsTableRow(line) && i + 1 < lines.length && mdIsTableRow(lines[i + 1])) {
+        flushPara();
+        const head = mdRowCells(line);
+        const second = mdRowCells(lines[i + 1]);
+        let j = i + 1;
+        if (mdIsSepRow(second)) j = i + 2;
+        const rows = [];
+        while (j < lines.length && mdIsTableRow(lines[j])) {
+          rows.push(mdRowCells(lines[j]));
+          j += 1;
+        }
+        let html = '<table class="md-table"><thead><tr>' +
+          head.map((c) => '<th>' + mdInline(c) + '</th>').join('') +
+          '</tr></thead><tbody>';
+        rows.forEach((r) => {
+          html += '<tr>';
+          for (let k = 0; k < head.length; k++) html += '<td>' + mdInline(r[k] || '') + '</td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        out.push(html);
+        i = j;
+        continue;
+      }
+
+      let m;
+      if ((m = t.match(/^(#{1,3})\s+(.+)$/))) {
+        flushPara();
+        const lvl = m[1].length;
+        out.push('<h' + lvl + '>' + mdInline(m[2]) + '</h' + lvl + '>');
+        i += 1;
+        continue;
+      }
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) {
+        flushPara();
+        out.push('<hr>');
+        i += 1;
+        continue;
+      }
+      if (t === '') { flushPara(); i += 1; continue; }
+      para.push(line);
+      i += 1;
+    }
+    flushPara();
+    return out.join('\n');
+  }
+
+  /* ---------- modal + toasts ---------- */
+
+  function confirmRun(message) {
+    return new Promise((resolve) => {
+      const root = document.getElementById('modal-root');
+      const overlay = el(
+        '<div class="modal-overlay">' +
+          '<div class="modal" role="dialog" aria-modal="true" aria-label="Confirm">' +
+            '<h3 class="modal-title">This costs real credits</h3>' +
+            '<p class="modal-body">' + esc(message) + '</p>' +
+            '<div class="modal-actions">' +
+              '<button type="button" class="btn" data-act="cancel">Cancel</button>' +
+              '<button type="button" class="btn btn-primary" data-act="confirm">Confirm</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>'
+      );
+      const done = (answer) => { overlay.remove(); resolve(answer); };
+      overlay.addEventListener('click', (ev) => {
+        const act = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-act') : null;
+        if (act === 'confirm') done(true);
+        else if (act === 'cancel') done(false);
+        else if (ev.target === overlay) done(false);
+      });
+      overlay.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape') done(false);
+      });
+      root.appendChild(overlay);
+      const btn = overlay.querySelector('[data-act="confirm"]');
+      if (btn) btn.focus();
+    });
+  }
+
+  function toast(msg, kind) {
+    const host = document.getElementById('toasts');
+    if (!host) return;
+    const cls = kind === 'error' ? 'toast-error' : (kind === 'info' ? 'toast-info' : 'toast-ok');
+    const t = el('<div class="toast ' + cls + '"></div>');
+    t.textContent = String(msg == null ? '' : msg);
+    host.appendChild(t);
+    setTimeout(() => {
+      t.classList.add('toast-gone');
+      setTimeout(() => t.remove(), 350);
+    }, 4200);
+  }
+
+  /* ---------- URL helpers ---------- */
+
+  function campUrl(suffix) {
+    return '/api/campaign/' + encodeURIComponent(Studio.state.campaign || '') + (suffix || '');
+  }
+
+  function fileUrl(rel) {
+    return '/campaign-file/' + encodeURIComponent(Studio.state.campaign || '') + '/' +
+      String(rel || '').replace(/^\/+/, '');
+  }
+
+  /* ---------- shared UI fragments ---------- */
+
+  function errorPanel(err, hint) {
+    const status = err && err.status;
+    const msg = err && err.error ? err.error : String(err);
+    let hintHtml = '';
+    if (hint) hintHtml = '<p class="error-hint">' + esc(hint) + '</p>';
+    else if (status === 501) hintHtml = '<p class="error-hint">Not implemented yet &mdash; this arrives in a later wave.</p>';
+    else if (status === 0) hintHtml = '<p class="error-hint">Is the studio server running?</p>';
+    else if (status === 422) hintHtml = '<p class="error-hint">Generation is fed or refused &mdash; the ground data it needs is missing.</p>';
+    return el(
+      '<div class="error-panel" role="alert"><strong>Error' +
+      (status ? ' ' + esc(status) : '') + '</strong> ' + esc(msg) + hintHtml + '</div>'
+    );
+  }
+
+  function emptyState(msg) {
+    return el('<div class="empty-state">' + esc(msg) + '</div>');
+  }
+
+  function noCampaign() {
+    return emptyState(
+      'No campaign selected. Create one under Documents/D&D/campaigns/ (or run assemble.py), then refresh this page.'
+    );
+  }
+
+  function loading(msg) {
+    return el('<div class="loading">' + esc(msg || 'Loading…') + '</div>');
+  }
+
+  /* ---------- tab system ---------- */
+
+  function showTab(name) {
+    Studio.state.activeTab = name;
+    document.querySelectorAll('.tab').forEach((btn) => {
+      btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
+    });
+    document.querySelectorAll('.tab-section').forEach((sec) => {
+      sec.classList.toggle('active', sec.getAttribute('data-tab') === name);
+    });
+    const section = document.querySelector('.tab-section[data-tab="' + name + '"]');
+    if (!section) return;
+    section.innerHTML = '';
+    const render = Studio.tabs[name];
+    if (typeof render !== 'function') {
+      section.appendChild(emptyState('This tab has no renderer registered.'));
+      return;
+    }
+    Promise.resolve(render(section)).catch((err) => {
+      section.innerHTML = '';
+      section.appendChild(errorPanel(err));
+    });
+  }
+
+  /* ---------- boot ---------- */
+
+  async function init() {
+    document.getElementById('tab-bar').addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.tab');
+      if (btn) showTab(btn.getAttribute('data-tab'));
+    });
+
+    const select = document.getElementById('campaign-select');
+    select.addEventListener('change', () => {
+      Studio.state.campaign = select.value || null;
+      showTab(Studio.state.activeTab); // campaign switch re-renders the active tab
+    });
+
+    try {
+      const data = await api('/api/campaigns');
+      const list = (data && Array.isArray(data.campaigns)) ? data.campaigns : [];
+      Studio.state.campaigns = list;
+      select.innerHTML = '';
+      if (!list.length) {
+        Studio.state.campaign = null;
+        const opt = el('<option value="">No campaigns found</option>');
+        select.appendChild(opt);
+      } else {
+        list.forEach((c, i) => {
+          const opt = el(
+            '<option value="' + esc(c.name) + '">' + esc(c.title || c.name) + '</option>'
+          );
+          if (i === 0) opt.selected = true;
+          select.appendChild(opt);
+        });
+        Studio.state.campaign = list[0].name;
+      }
+    } catch (err) {
+      select.innerHTML = '';
+      select.appendChild(el('<option value="">Unavailable</option>'));
+      Studio.state.campaign = null;
+      const section = document.querySelector('.tab-section.active');
+      if (section) {
+        section.innerHTML = '';
+        section.appendChild(errorPanel(err, 'The campaign list could not be loaded.'));
+      }
+      return;
+    }
+    showTab(Studio.state.activeTab);
+  }
+
+  /* ---------- exports ---------- */
+  Studio.esc = esc;
+  Studio.el = el;
+  Studio.fmtInt = fmtInt;
+  Studio.api = api;
+  Studio.pollJob = pollJob;
+  Studio.md = md;
+  Studio.confirmRun = confirmRun;
+  Studio.toast = toast;
+  Studio.campUrl = campUrl;
+  Studio.fileUrl = fileUrl;
+  Studio.errorPanel = errorPanel;
+  Studio.emptyState = emptyState;
+  Studio.noCampaign = noCampaign;
+  Studio.loading = loading;
+  Studio.showTab = showTab;
+
+  document.addEventListener('DOMContentLoaded', init);
+}());

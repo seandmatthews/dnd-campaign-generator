@@ -1,0 +1,187 @@
+"""Session-notes ingestion.
+
+Session notes become pending events; only what the DM leaves in the file
+becomes canon.
+
+Two modes:
+  python src/ingest.py notes.md             # bullets -> world/pending-week-N.yml
+  python src/ingest.py --apply world/pending-week-N.yml
+                                            # surviving lines -> state.yaml
+Either mode takes --state PATH to read/apply against that state file
+instead of the default world/state.yaml.
+
+Proposals are dated the clock's current week + 1 — the next week to be
+simulated. apply() appends events and touches nothing else: the clock is
+advanced by tick.py --live or the DM, never here.
+"""
+
+import pathlib
+import re
+import sys
+
+import yaml
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+STATE_FILE = ROOT / "world" / "state.yaml"
+
+PENDING_COMMENT = "# edit freely: delete or fix lines, then: python src/ingest.py --apply <this file>"
+
+# Words too generic to point at a faction: articles and name decorations.
+_STOPWORDS = {"the", "a", "an", "of", "and", "s", "house", "claim"}
+
+# Extra match words where a faction's id and its name diverge.
+_ALIASES = {"mint": ["ferrand"], "bastard": ["sera"]}
+
+_BULLET = re.compile(r"^(?:[-*]|\d+[.)])\s+(.+)$")
+
+
+def _words(text):
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def faction_tokens(state):
+    """Distinctive match words per faction id, in state order. A word that
+    names two factions names neither; city-name words name no one."""
+    city = _words(state.get("city", {}).get("name", ""))
+    table = {}
+    for f in state["factions"]:
+        words = _words(f["id"]) | _words(f["name"]) | _words(" ".join(_ALIASES.get(f["id"], [])))
+        table[f["id"]] = words - _STOPWORDS - city
+    owners = {}
+    for fid, toks in table.items():
+        for t in toks:
+            owners.setdefault(t, set()).add(fid)
+    shared = {t for t, seen in owners.items() if len(seen) > 1}
+    return {fid: toks - shared for fid, toks in table.items()}
+
+
+def resolve_actor(text, tokens):
+    """First faction (state order) whose words appear in the line, else "world"."""
+    words = _words(text)
+    for fid, toks in tokens.items():
+        if toks & words:
+            return fid
+    return "world"
+
+
+def extract(notes_text, state):
+    """Non-empty bullet lines (-, *, 1.) become proposals dated the clock's
+    week + 1 (the next week to be simulated); every other line is ignored.
+    Actor: first faction whose distinctive words appear, else "world"."""
+    week = state["meta"]["clock"]["week"] + 1
+    tokens = faction_tokens(state)
+    out = []
+    for line in notes_text.splitlines():
+        m = _BULLET.match(line.strip())
+        if not m:
+            continue
+        text = m.group(1).strip()
+        out.append({"actor": resolve_actor(text, tokens), "text": text, "week": week})
+    return out
+
+
+def write_pending(proposals, path):
+    """Write the DM-editable queue: {week, proposals} with the edit-me comment on top."""
+    week = proposals[0]["week"] if proposals else None
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(PENDING_COMMENT + "\n")
+        yaml.safe_dump(
+            {"week": week, "proposals": [{"actor": p["actor"], "text": p["text"]} for p in proposals]},
+            f, sort_keys=False, allow_unicode=True, width=100,
+        )
+    return path
+
+
+def read_pending(path):
+    """Parse a pending file back; the leading comment is just a YAML comment."""
+    with open(path, encoding="utf-8") as f:
+        doc = yaml.safe_load(f)
+    if not doc:
+        doc = {}
+    doc.setdefault("week", None)
+    doc.setdefault("proposals", [])
+    return doc
+
+
+def apply(pending, state_path):
+    """Append each surviving proposal to state.yaml's events as {week, actor,
+    text}; returns the count merged, or -1 (nothing written) if any actor is
+    unknown. Bumps nothing else — the clock belongs to tick.py / the DM."""
+    state = load_state(state_path)
+    known = {f["id"] for f in state["factions"]} | {"world"}
+    week = pending["week"]
+    surviving = pending["proposals"]
+    for p in surviving:
+        if p["actor"] not in known:
+            print(f"refusing: unknown actor {p['actor']!r} — not a faction id or 'world'")
+            return -1
+    for p in surviving:
+        state["events"].append({"week": week, "actor": p["actor"], "text": p["text"]})
+    if surviving:
+        save_state(state, state_path)
+    return len(surviving)
+
+
+def load_state(path):
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def save_state(state, path):
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True, width=100)
+
+
+def main(argv):
+    state_path = STATE_FILE
+    rest = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--state" and i + 1 < len(argv):
+            state_path = argv[i + 1]
+            i += 2
+            continue
+        if argv[i].startswith("--state="):
+            state_path = argv[i].split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(argv[i])
+        i += 1
+    if "--apply" in rest:
+        i = rest.index("--apply")
+        paths = rest[:i] + rest[i + 1:]
+        if len(paths) != 1:
+            print("usage: python src/ingest.py --apply <pending.yml> [--state <state.yaml>]", file=sys.stderr)
+            return 2
+        try:
+            pending = read_pending(paths[0])
+            n = apply(pending, state_path)
+        except OSError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if n < 0:
+            return 1
+        print(f"merged {n} events")
+        return 0
+    if len(rest) != 1:
+        print("usage: python src/ingest.py <notes.md>  |  python src/ingest.py --apply <pending.yml>  [--state <state.yaml>]", file=sys.stderr)
+        return 2
+    try:
+        notes_text = pathlib.Path(rest[0]).read_text(encoding="utf-8")
+        state = load_state(state_path)
+    except OSError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    proposals = extract(notes_text, state)
+    if not proposals:
+        print(f"no bullet lines found in {argv[0]}", file=sys.stderr)
+        return 1
+    week = proposals[0]["week"]
+    out = ROOT / "world" / f"pending-week-{week}.yml"
+    write_pending(proposals, out)
+    print(f"{out} ({len(proposals)} proposals)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

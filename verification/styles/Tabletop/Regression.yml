@@ -1,0 +1,26 @@
+extends: existence
+message: "Regression to the fantasy mean: '%s'. Say what THIS world's version is instead."
+scope: sentence
+ignorecase: true
+level: error
+words:
+  - ancient evil
+  - it is said that
+  - little did they know
+  - the thread of fate
+  - a hush fell over
+  - from time immemorial
+  - in the annals of
+  - unbeknownst to
+  - dark forces
+  - the fate of the world
+  - the chosen one
+  - as the prophecy foretold
+  - tightened its grip
+  - shrouded in mystery
+  - lurking in the shadows
+  - a testament to
+  - a tapestry of
+  - the very fabric of
+  - legends speak of
+  - none alive remember

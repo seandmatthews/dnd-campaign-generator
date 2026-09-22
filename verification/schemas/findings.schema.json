@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "verification findings",
+  "description": "One entry per issue, from any layer of the ladder (Vale, structural, or an LLM pass). The driver validates every finding against this shape before it enters the queue.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["file", "line", "rule", "level", "quote"],
+    "properties": {
+      "file":   {"type": "string", "description": "path of the checked file"},
+      "line":   {"type": "integer", "minimum": 1, "description": "1-based line of the offending text"},
+      "rule":   {"type": "string", "description": "layer/rule id, e.g. vale/Tabletop/Regression, structural/epigram, prompts/canon-audit"},
+      "level":  {"type": "string", "enum": ["error", "warning", "suggestion"]},
+      "quote":  {"type": "string", "description": "exact text flagged; reviewers must quote, never paraphrase"},
+      "note":   {"type": "string", "description": "why it is flagged, one sentence"}
+    },
+    "additionalProperties": false
+  }
+}

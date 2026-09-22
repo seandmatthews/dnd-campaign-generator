@@ -1,0 +1,4 @@
+# Provenance record — regenerate with scripts/gen-city.mjs, never hand-edit outputs.
+name: Provis
+seed: 63123
+kind: city

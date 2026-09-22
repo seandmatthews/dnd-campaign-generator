@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Campaign Studio</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <div class="app-brand">
+        <h1 class="app-title">Campaign Studio</h1>
+        <p class="app-subtitle">worlds, maps &amp; weekly history</p>
+      </div>
+      <label class="campaign-picker">
+        <span class="campaign-picker-label">Campaign</span>
+        <select id="campaign-select" class="input">
+          <option value="">Loading&hellip;</option>
+        </select>
+      </label>
+    </div>
+    <nav class="tabs" id="tab-bar" aria-label="Studio sections">
+      <button type="button" class="tab active" data-tab="maps">Maps</button>
+      <button type="button" class="tab" data-tab="world">World Building</button>
+      <button type="button" class="tab" data-tab="sim">Agent Simulation</button>
+      <button type="button" class="tab" data-tab="review">Review</button>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <section class="tab-section active" data-tab="maps" id="section-maps" aria-label="Maps"></section>
+    <section class="tab-section" data-tab="world" id="section-world" aria-label="World Building"></section>
+    <section class="tab-section" data-tab="sim" id="section-sim" aria-label="Agent Simulation"></section>
+    <section class="tab-section" data-tab="review" id="section-review" aria-label="Review"></section>
+  </main>
+
+  <noscript><div class="noscript-note">Campaign Studio needs JavaScript enabled.</div></noscript>
+
+  <div id="toasts" aria-live="polite"></div>
+  <div id="modal-root"></div>
+
+  <!-- Load order is part of the frontend contract: core first, then tabs. -->
+  <script src="js/core.js"></script>
+  <script src="js/maps.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/review.js"></script>
+</body>
+</html>

@@ -1,0 +1,362 @@
+"""Maps tab API: reads, city generation, world generation, world-map
+rendering, battlemap site generation.
+
+World generation (M1): POST /world wraps the documented headless-FMG
+incantation exactly (docs/map-pipeline.md Tier 1) — a vitest run from the
+FMG repo root with FMG_SEED/FMG_OUT env — then copies the raw dump into
+the campaign (D4) and runs `src/import_fmg.py` per its real CLI
+(cwd=dnd-mapping; it writes worlds/candidates — its documented behavior),
+copying the produced candidate yaml in as world/geography.yaml. FMG
+headless exports no SVG, so the hero is rendered from the dump itself by
+studio/worldmap.py (read-only; see that module for why regenerating is not
+an option).
+
+City generation: `node scripts/gen-city.mjs --world <campaign
+world/source.*> --burg "<name>" --out <tmp>` with cwd=dnd-mapping (D3:
+list-form args — the parent path contains `&`), then copy outputs into the
+campaign's maps/cities/<slug>/.
+
+Site generation: the full documented battlemap chain — gen-<kind> → render
+→ render-scene-png.mjs (sharp) → wrap — run in the engine home
+(worlds/sites/<name> is battlemap.py's documented output location), then
+the artifact set is copied into maps/sites/<slug>/ (D4).
+"""
+
+import re
+import shutil
+import tempfile
+import zlib
+from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+import engines
+import jobs
+import spine
+import worldmap
+from routers.common import require_campaign
+
+router = APIRouter()
+
+_SEED_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SITE_KINDS = ("dungeon", "cave", "camp")
+# characters a scene directory (engine home, Windows) cannot carry
+_BAD_SITE_NAME = re.compile(r'[<>:"/\\|?*]')
+
+
+class CityBody(BaseModel):
+    burg: str
+
+
+class SiteBody(BaseModel):
+    kind: str
+    name: str
+    seed: str | None = None
+
+
+class WorldBody(BaseModel):
+    seed: str
+    force: bool = False
+
+
+@router.get("/api/campaign/{name}/maps")
+def get_maps(name: str):
+    d = require_campaign(name)
+    return {
+        "cities": [_entry(d, "cities", slug) for slug in spine.map_slugs(name, "cities")],
+        "sites": [_entry(d, "sites", slug) for slug in spine.map_slugs(name, "sites")],
+    }
+
+
+def _entry(d: Path, kind: str, slug: str) -> dict:
+    base = d / "maps" / kind / slug
+    svg = _first(base, "*.svg")
+    geojson = _first(base, "*.geojson")
+    params = _first(base, "params.yaml")
+    label = slug
+    if params is not None:
+        doc = yaml.safe_load(params.read_text(encoding="utf-8")) or {}
+        if isinstance(doc, dict):
+            label = doc.get("name") or doc.get("label") or slug
+    return {
+        "slug": slug,
+        "label": label,
+        "svg": _file_url(svg),
+        "params": _file_url(params),
+        "geojson": _file_url(geojson),
+    }
+
+
+def _first(base: Path, pattern: str):
+    if not base.is_dir():
+        return None
+    for p in sorted(base.glob(pattern)):
+        return p
+    return None
+
+
+def _file_url(path):
+    if path is None:
+        return None
+    return f"/campaign-file/{path.relative_to(spine.campaigns_root()).as_posix()}"
+
+
+@router.post("/api/campaign/{name}/maps/cities", status_code=202)
+def post_city(name: str, body: CityBody):
+    d = require_campaign(name)
+    burg = (body.burg or "").strip()
+    if not burg:
+        raise HTTPException(status_code=422, detail="burg must be a non-empty name")
+    source = spine.world_source(name)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail="campaign has no world/source.* — a city map is generated "
+                   "from the world dump or not at all (fed-or-refused)")
+
+    def job(log):
+        out = Path(tempfile.mkdtemp(prefix="studio-city-"))
+        try:
+            log(f"generating {burg} from {source.name} via gen-city.mjs")
+            rc, lines = engines.run_node(
+                engines.DND_MAPPING, "scripts/gen-city.mjs",
+                "--world", str(source), "--burg", burg, "--out", str(out),
+                on_line=log, timeout=600)
+            if rc != 0:
+                raise RuntimeError("gen-city.mjs failed (rc=%s): %s"
+                                   % (rc, " | ".join(lines[-8:])))
+            outputs = [p for p in sorted(out.iterdir()) if p.is_file()]
+            if not outputs:
+                raise RuntimeError("gen-city.mjs produced no output files")
+            slug = spine.slugify(burg)
+            dest = d / "maps" / "cities" / slug
+            for p in outputs:
+                engines.copy_file(p, dest / p.name)
+                log(f"copied {p.name} -> maps/cities/{slug}/")
+            svg = next((p for p in outputs if p.suffix == ".svg"), None)
+            if svg is None:
+                raise RuntimeError("no .svg in gen-city output")
+            return {"slug": slug,
+                    "svg": f"/campaign-file/{name}/maps/cities/{slug}/{svg.name}"}
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
+
+    return JSONResponse({"job_id": jobs.submit("map-city", job)}, status_code=202)
+
+
+# --------------------------------------------------------------- world gen
+
+
+@router.post("/api/campaign/{name}/world", status_code=202)
+def post_world(name: str, body: WorldBody):
+    """seed → headless FMG → import → copy into the workspace (M1)."""
+    d = require_campaign(name)
+    seed = (body.seed or "").strip()
+    if not _SEED_RE.match(seed):
+        raise HTTPException(
+            status_code=422,
+            detail="seed must be 1-64 characters of [A-Za-z0-9_-] "
+                   "(it becomes FMG_SEED and a filename)")
+    if (d / "world" / "geography.yaml").is_file() and not body.force:
+        raise HTTPException(
+            status_code=409,
+            detail="world/geography.yaml already exists — pass force:true to "
+                   "regenerate (this replaces world/source.* and "
+                   "world/geography.yaml)")
+
+    def job(log):
+        tmp = Path(tempfile.mkdtemp(prefix="studio-world-"))
+        try:
+            fmg = engines.fmg_dir()
+            log(f"headless FMG seed {seed} (FMG_SEED={seed} vitest run)")
+            rc, lines = engines.run_node(
+                fmg, "node_modules/vitest/vitest.mjs", "run",
+                "src/generators/headless-export.test.ts",
+                timeout=900, on_line=log,
+                env={"FMG_SEED": seed, "FMG_OUT": str(tmp)})
+            if rc != 0:
+                raise RuntimeError("headless FMG failed (rc=%s): %s"
+                                   % (rc, " | ".join(lines[-8:])))
+            dump = tmp / f"headless-{seed}.json"
+            if not dump.is_file():
+                raise RuntimeError(
+                    f"FMG ran but wrote no {dump.name} — check FMG_OUT handling")
+
+            world = d / "world"
+            world.mkdir(parents=True, exist_ok=True)
+            source = world / "source.json"
+            engines.copy_file(dump, source)
+            log("genesis record copied -> world/source.json")
+
+            candidates = engines.DND_MAPPING / "worlds" / "candidates"
+            before = ({p.name for p in candidates.glob("*.yaml")}
+                      if candidates.is_dir() else set())
+            log("importing geography via src/import_fmg.py")
+            rc, lines = engines.run_py(
+                engines.DND_MAPPING, "src/import_fmg.py", str(dump),
+                timeout=300, on_line=log)
+            if rc != 0:
+                raise RuntimeError("import_fmg.py failed (rc=%s): %s"
+                                   % (rc, " | ".join(lines[-8:])))
+            produced = None
+            for ln in lines:  # the summary line: "<dump> -> <out>.yaml: ..."
+                m = re.search(r"-> (\S+\.yaml):", ln)
+                if m:
+                    produced = m.group(1)
+                    break
+            if produced is None:  # fall back to a candidates-dir diff
+                new = ({p.name for p in candidates.glob("*.yaml")} - before) \
+                    if candidates.is_dir() else set()
+                produced = sorted(new)[0] if new else None
+            cand = candidates / produced if produced else None
+            if not cand or not cand.is_file():
+                raise RuntimeError(
+                    "import_fmg.py wrote no candidate yaml — cannot stage "
+                    "world/geography.yaml")
+            engines.copy_file(cand, world / "geography.yaml")
+            log(f"candidate {cand.name} copied -> world/geography.yaml")
+
+            geo = yaml.safe_load(
+                (world / "geography.yaml").read_text(encoding="utf-8")) or {}
+            summary = geo.get("summary") or {}
+
+            # hero: FMG headless exports no svg; render from the dump
+            # (studio/worldmap.py — pure read, no regeneration)
+            map_url = None
+            try:
+                info = worldmap.render_world_map(source, world / "map.svg")
+                map_url = f"/campaign-file/{name}/world/map.svg"
+                log(f"rendered world/map.svg ({info.get('mode')})")
+            except Exception as e:  # best effort — the world exists regardless
+                log(f"world/map.svg skipped: {e}")
+
+            return {"nations": int(summary.get("nations") or 0),
+                    "settlements": int(summary.get("settlements") or 0),
+                    "map": map_url}
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    return JSONResponse({"job_id": jobs.submit("world-gen", job)}, status_code=202)
+
+
+@router.post("/api/campaign/{name}/maps/world-map", status_code=202)
+def post_world_map(name: str):
+    """Render world/map.svg from the EXISTING world/source.* — read-only;
+    geography is never regenerated (studio/worldmap.py docstring explains
+    why re-running the generator is not an option)."""
+    d = require_campaign(name)
+    source = spine.world_source(name)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail="campaign has no world/source.* — the world map renders "
+                   "from the genesis record or not at all (fed-or-refused)")
+
+    def job(log):
+        out = d / "world" / "map.svg"
+        log(f"rendering world/map.svg from {source.name} "
+            "(read-only: geography is not regenerated)")
+        info = worldmap.render_world_map(source, out)
+        log(f"mode: {info['mode']}")
+        return {"svg": f"/campaign-file/{name}/world/map.svg",
+                "mode": info["mode"]}
+
+    return JSONResponse({"job_id": jobs.submit("world-map", job)}, status_code=202)
+
+
+# ---------------------------------------------------------- battlemap sites
+
+
+@router.post("/api/campaign/{name}/maps/sites", status_code=202)
+def post_site(name: str, body: SiteBody):
+    """battlemap.py gen-<kind> → render → rasterize (sharp) → wrap UVTT."""
+    d = require_campaign(name)
+    kind = (body.kind or "").strip().lower()
+    if kind not in _SITE_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail="kind must be one of dungeon|cave|camp")
+    site_name = (body.name or "").strip()
+    if not site_name:
+        raise HTTPException(status_code=422,
+                            detail="name must be a non-empty site name")
+    if _BAD_SITE_NAME.search(site_name):
+        raise HTTPException(
+            status_code=422,
+            detail='name must not contain any of <>:"/\\|?*')
+    seed = (body.seed or "").strip() or str(
+        zlib.crc32(spine.slugify(site_name).encode("utf-8")) % 10_000_000)
+    slug = spine.slugify(site_name)
+
+    def job(log):
+        rel = f"worlds/sites/{site_name}"
+        root = engines.DND_MAPPING
+
+        def stage(label, call, what):
+            log(label)
+            rc, lines = call()
+            if rc != 0:
+                raise RuntimeError(f"{what} failed (rc={rc}): "
+                                   + " | ".join(lines[-8:]))
+            return lines
+
+        stage(f"battlemap.py gen-{kind} --seed {seed} --name \"{site_name}\"",
+              lambda: engines.run_py(root, "src/battlemap.py", f"gen-{kind}",
+                                     "--seed", seed, "--name", site_name,
+                                     timeout=300, on_line=log),
+              f"battlemap.py gen-{kind}")
+        stage(f"battlemap.py render --dir {rel}",
+              lambda: engines.run_py(root, "src/battlemap.py", "render",
+                                     "--dir", rel, timeout=300, on_line=log),
+              "battlemap.py render")
+        log(f"render-scene-png.mjs {rel} (sharp)")
+        rc, png_lines = engines.run_node(
+            root, "scripts/render-scene-png.mjs", rel, timeout=300, on_line=log)
+        if rc != 0:
+            joined_png = " ".join(png_lines)
+            if "sharp" in joined_png or "Cannot find module" in joined_png:
+                raise RuntimeError(
+                    "scene rasterization failed — sharp is unavailable (a "
+                    "moved project breaks pnpm's absolute junctions). "
+                    "Documented repair: run `CI=true pnpm install --offline` "
+                    "in dnd-mapping/tools/settlemaker, then try again")
+            raise RuntimeError(f"render-scene-png.mjs failed (rc={rc}): "
+                               + " | ".join(png_lines[-8:]))
+        stage(f"battlemap.py wrap --dir {rel}",
+              lambda: engines.run_py(root, "src/battlemap.py", "wrap",
+                                     "--dir", rel, timeout=300, on_line=log),
+              "battlemap.py wrap")
+
+        engine_dir = root / "worlds" / "sites" / site_name
+        scene = engine_dir / "scene.json"
+        svg = engine_dir / "scene.svg"
+        png = engine_dir / "scene.png"
+        uvtt = next(iter(sorted(engine_dir.glob("*.uvtt"))), None)
+        missing = [p.name for p in (scene, svg, png) if not p.is_file()]
+        if uvtt is None or not uvtt.is_file():
+            missing.append("<slug>.uvtt")
+        if missing:
+            raise RuntimeError(
+                "scene pipeline did not produce: " + ", ".join(missing))
+
+        dest = d / "maps" / "sites" / slug
+        for p in (scene, svg, png, uvtt):
+            engines.copy_file(p, dest / p.name)
+            log(f"copied {p.name} -> maps/sites/{slug}/")
+        # provenance beside the artifact set, as cities do
+        (dest / "params.yaml").write_text(yaml.safe_dump(
+            {"name": site_name, "kind": kind, "seed": seed,
+             "generator": f"battlemap.py gen-{kind} + render + rasterize + wrap",
+             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
+            sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+        base = f"/campaign-file/{name}/maps/sites/{slug}/"
+        return {"slug": slug, "label": site_name,
+                "svg": base + svg.name, "png": base + png.name,
+                "uvtt": base + uvtt.name, "scene": base + "scene.json"}
+
+    return JSONResponse({"job_id": jobs.submit("map-site", job)}, status_code=202)

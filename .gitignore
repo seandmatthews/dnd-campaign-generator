@@ -1,0 +1,10 @@
+# third-party tool trees — re-obtainable per dnd-mapping/docs/map-pipeline.md
+tools/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+# studio runtime artifacts
+studio/logs/
+# scratch
+dnd-mapping/out-gen-city-smoke/

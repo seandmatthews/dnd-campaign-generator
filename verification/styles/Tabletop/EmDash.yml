@@ -1,0 +1,8 @@
+extends: occurrence
+message: "Em dash overuse — the cap is one per paragraph."
+scope: paragraph
+ignorecase: false
+token: '—'
+count: max
+max: 1
+level: warning

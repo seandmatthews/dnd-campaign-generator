@@ -1,0 +1,12 @@
+people:
+  - name: Alweric Tealeaf
+    note: toll-keeper of the Vane bridge; remembers every unpaid cart
+  - name: Besiana Crow
+    note: harbormaster of Provis, keeps the ledgers dry
+factions:
+  - name: The Bridge Wardens
+    alias: wardens
+    note: collect the toll, spend it on the road
+places:
+  - name: The Vane
+    note: the river that makes the vale worth having
