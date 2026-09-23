@@ -134,6 +134,23 @@ def test_founding_week_activates_everyone():
     print("  founding week: everyone acts  OK")
 
 
+def test_week_zero_studio_sandbox_activates_everyone():
+    """clock week 0 is what studio's create-simulation writes — the first
+    paid week must not be a guaranteed hold-hold (found week 2026-09-23:
+    "A Week Without Resolutions")."""
+    guild = faction("guild", "The Guild",
+                    resources={"coin": "low", "muscle": "low", "legitimacy": "low"})
+    crew = faction("crew", "The Crew",
+                   resources={"coin": "low", "muscle": "low", "legitimacy": "low"})
+    st = state(0, [guild, crew], [])
+    a = activation(st)
+    assert a["guild"]["act"] is True and a["crew"]["act"] is True, a
+    assert a["guild"]["reasons"] == ["founding week"], a["guild"]
+    assert a["guild"]["score"] == 2
+    assert holds(st, a) == []
+    print("  week 0 (fresh studio sandbox): founding week fires, everyone acts  OK")
+
+
 def test_act_boundary_is_exactly_two():
     bank = faction("bank", "The Bank")
     poor = faction("crew", "The Crew", resources={"coin": "none", "muscle": "low", "legitimacy": "low"})
@@ -263,6 +280,7 @@ if __name__ == "__main__":
         test_quiet_faction_holds_and_decays,
         test_idle_counter_needs_full_absence,
         test_founding_week_activates_everyone,
+        test_week_zero_studio_sandbox_activates_everyone,
         test_act_boundary_is_exactly_two,
         test_holds_returns_exactly_the_holders,
         test_real_world_fixture,

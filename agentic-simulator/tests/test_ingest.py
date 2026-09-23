@@ -1,7 +1,11 @@
 """Smoke tests for session-notes ingestion.
 
 Zero dependencies — run directly:  python tests/test_ingest.py
-Reads world/state.yaml read-only; apply() runs against temp copies only.
+Reads tests/fixtures/ruravaqan-state.yaml (a frozen copy of the Ruravaqan
+world the expectations were written against); apply() runs against temp
+copies only. Never world/state.yaml — that is live scratch the studio
+overwrites on every week run, and reading it made this suite red whenever
+the engine home held a different campaign (found 2026-09-23).
 """
 
 import contextlib
@@ -17,7 +21,8 @@ import ingest
 from ingest import apply, extract, main, read_pending, write_pending
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE = yaml.safe_load((ROOT / "world" / "state.yaml").read_text(encoding="utf-8"))
+STATE = yaml.safe_load(
+    (ROOT / "tests" / "fixtures" / "ruravaqan-state.yaml").read_text(encoding="utf-8"))
 
 
 def notes(*lines):

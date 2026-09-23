@@ -20,12 +20,23 @@ Mechanical consequence rules (one sentence each, applied by code):
     resource steps down one grade (high->medium->low->none)
   - win with margin >= +5: the strongest committed resource steps up one
     grade (capped at high)
+  - commit nothing, nothing steps — standing you did not stake is not won
+    or lost
   - anything else: no resource change.
+One proposal, one consequence: a faction caught in several contests gets a
+single event and at most one resource step, judged by its worst margin. Every
+outcome still reaches the chronicle table.
 Semantic consequences (knowledge gained, dispositions shifted) are NOT
 applied by code — they land in the chronicle for human review (M4's loop).
+
+Robustness: a faction whose LLM proposal fails holds instead of aborting the
+week; a narrator failure leaves the ledger as the record. Dice roll from a
+per-week seeded RNG recorded in meta.rng_seeds — a week is replayable by
+seeding resolve with that number.
 """
 
 import pathlib
+import random
 import re
 import sys
 
@@ -36,53 +47,84 @@ import llm
 import rumors
 import scheduler
 import consistency
+import resolve
+from store import STATE_FILE, load_state, save_state
 from why import why_cli
 from views import faction_view
 from resolve import resolve_tick
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "world" / "state.yaml"
 TEMPLATE_FILE = ROOT / "agents" / "faction.md"
 CHRONICLE_DIR = ROOT / "chronicle"
 
 _LEVELS = ("none", "low", "medium", "high")
 
 
-def load_state():
-    with open(STATE_FILE, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def save_state(state):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True, width=100)
-
-
-def step_resource(resources, direction):
-    """Shift a faction's strongest committed resource one grade. `committed`
-    is the proposal's resources_committed dict; direction is +1 / -1."""
-    if not resources:
+def step_resource(resources, committed, direction):
+    """Shift the strongest resource the proposal COMMITTED one grade;
+    direction is +1 / -1. Commit nothing, nothing steps."""
+    staked = [
+        k for k, v in (committed or {}).items()
+        if k in resources and v in _LEVELS and v != "none"
+    ]
+    if not staked:
         return
-    strongest = max(resources, key=lambda k: _LEVELS.index(resources[k]))
+    strongest = max(staked, key=lambda k: _LEVELS.index(committed[k]))
     i = _LEVELS.index(resources[strongest])
     resources[strongest] = _LEVELS[max(0, min(len(_LEVELS) - 1, i + direction))]
 
 
+def event_record(state, faction_id, outcome):
+    """The canonical event for one resolved proposal: a human-readable `text`
+    line plus the structured fields (`action`, `outcome`, `vs`, `contested`,
+    `margin`) that the scheduler, why-chain, and rumor mill read — machines
+    never re-parse the prose."""
+    succeeded = "succeeded" if outcome["success"] else "failed"
+    vs = outcome.get("vs")
+    text = (f"{outcome['action']} — {succeeded}"
+            + (f" (contested vs {vs})" if outcome.get("contested") else "")
+            + f", margin {outcome['margin']:+d}")
+    ev = {
+        "week": state["meta"]["clock"]["week"],
+        "actor": faction_id,
+        "text": text,
+        "action": outcome["action"],
+        "outcome": succeeded,
+        "contested": bool(outcome.get("contested")),
+        "margin": outcome["margin"],
+    }
+    if vs:
+        ev["vs"] = vs
+    return ev
+
+
 def apply_mechanical(state, faction_id, outcome):
+    """Consequences of ONE resolved proposal, applied once: the strongest
+    committed resource steps one grade on a decisive result (module
+    docstring), and the event lands in state["events"]."""
     faction = next(f for f in state["factions"] if f["id"] == faction_id)
     committed = outcome.get("committed", {})
     if outcome["success"] and outcome["margin"] >= 5:
-        step_resource(faction["resources"], +1)
+        step_resource(faction["resources"], committed, +1)
     elif (outcome.get("contested") and not outcome["success"]) or outcome["margin"] <= -5:
-        step_resource(faction["resources"], -1)
-    state["events"].append({
-        "week": state["meta"]["clock"]["week"],
-        "actor": faction_id,
-        "text": f"{outcome['action']} — "
-                + ("succeeded" if outcome["success"] else "failed")
-                + (f" (contested vs {outcome['vs']})" if outcome.get("contested") else "")
-                + f", margin {outcome['margin']:+d}",
-    })
+        step_resource(faction["resources"], committed, -1)
+    state["events"].append(event_record(state, faction_id, outcome))
+
+
+def apply_outcomes(state, outcomes, proposals):
+    """One proposal, one consequence: an actor caught in several contests
+    gets a single event and at most one resource step, judged by their worst
+    margin (ties: the outcome recorded first)."""
+    by_actor = {p["actor"]: p for p in proposals}
+    worst = {}
+    for o in outcomes:
+        cur = worst.get(o["actor"])
+        if cur is None or o["margin"] < cur["margin"]:
+            worst[o["actor"]] = o
+    for actor, o in worst.items():
+        o = dict(o)
+        o["committed"] = by_actor[actor].get("resources_committed", {})
+        apply_mechanical(state, actor, o)
 
 
 def run_live(state):
@@ -91,6 +133,10 @@ def run_live(state):
     week = state["meta"]["clock"]["week"] + 1
     state["meta"]["clock"]["week"] = week
     template = TEMPLATE_FILE.read_text(encoding="utf-8")
+
+    seed = random.SystemRandom().getrandbits(31)
+    resolve.set_rng(seed)
+    state.setdefault("meta", {}).setdefault("rng_seeds", {})[str(week)] = seed
 
     rumors.spread(state, state.get("rumors", []))   # rumors move before actions do
 
@@ -103,7 +149,11 @@ def run_live(state):
             continue
         view = faction_view(state, faction["id"])
         views.append(view)
-        p = llm.propose(view, template, faction["id"])
+        try:
+            p = llm.propose(view, template, faction["id"])
+        except Exception as e:  # noqa: BLE001 — one dead agent must not lose the week
+            print(f"  {faction['id']:<14} HOLDS (proposal failed: {e})")
+            continue
         for w in consistency.check(p, state, faction["id"]):
             print(f"  [consistency] {faction['id']}: {w['kind']} — {w['detail']}")
         proposals.append(p)
@@ -112,18 +162,27 @@ def run_live(state):
     print("resolution:")
     outcomes = resolve_tick(proposals)
     for o in outcomes:
-        o["committed"] = next(p for p in proposals if p["actor"] == o["actor"])["resources_committed"]
         kind = "CONTESTED WIN" if o["contested"] and o["success"] else \
                "CONTESTED LOSS" if o["contested"] else \
                "success" if o["success"] else "fail"
         print(f"  {o['actor']:<14} {kind:<14} margin {o['margin']:+d}")
-        apply_mechanical(state, o["actor"], o)
+    apply_outcomes(state, outcomes, proposals)
 
     state["rumors"] = state.get("rumors", []) + rumors.spawn_from_events(state)
 
     chronicle = write_chronicle(state, week, outcomes, held)
     save_state(state)
-    print(f"week {week} written; chronicle: {chronicle.name}")
+    print(f"week {week} written (rng seed {seed}); chronicle: {chronicle.name}")
+
+
+def _free_chronicle_path(week, slug):
+    """Same-week reruns never overwrite: the first free -N suffix wins."""
+    out = CHRONICLE_DIR / f"{week:04d}-{slug}.md"
+    n = 2
+    while out.exists():
+        out = CHRONICLE_DIR / f"{week:04d}-{slug}-{n}.md"
+        n += 1
+    return out
 
 
 def write_chronicle(state, week, outcomes, held=()):
@@ -134,13 +193,19 @@ def write_chronicle(state, week, outcomes, held=()):
          for f in state["factions"]},
         sort_keys=False, allow_unicode=True,
     )
-    prose, title = llm.narrate_week(city, week, outcomes, summary), None
+    try:
+        prose = llm.narrate_week(city, week, outcomes, summary)
+    except Exception as e:  # noqa: BLE001 — the ledger below is the record
+        print(f"[live] narration failed, chronicle carries the ledger only: {e}",
+              file=sys.stderr)
+        prose = ""
+    title = None
     match = re.search(r"^TITLE:\s*(.+)$", prose, re.MULTILINE)
     if match:
         title = match.group(1).strip()
         prose = prose[:match.start()].rstrip()
     slug = re.sub(r"[^a-z0-9]+", "-", (title or "the week").lower()).strip("-")
-    out = CHRONICLE_DIR / f"{week:04d}-{slug}.md"
+    out = _free_chronicle_path(week, slug or "untitled")
 
     table = ["", "---", "", "## Behind the screen", "",
              "| faction | action | roll+bonus | contested | margin | outcome |",
@@ -161,15 +226,18 @@ def write_chronicle(state, week, outcomes, held=()):
     return out
 
 
-def main():
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
     state = load_state()
-    if "--live" in sys.argv:
+    if "--live" in argv:
         run_live(state)
-        return
-    if "--why" in sys.argv:
-        i = sys.argv.index("--why")
-        week, actor = sys.argv[i + 1], sys.argv[i + 2]
-        sys.exit(why_cli(state, ["tick.py", week, actor]))
+        return 0
+    if "--why" in argv:
+        i = argv.index("--why")
+        if i + 2 >= len(argv):
+            print("usage: python src/tick.py --why <week> <actor>", file=sys.stderr)
+            return 2
+        sys.exit(why_cli(state, ["tick.py", argv[i + 1], argv[i + 2]]))
     clock = state["meta"]["clock"]
     city = state["city"]["name"]
     print(f"{city}, week {clock['week']} ({clock['season']})")
@@ -180,7 +248,8 @@ def main():
         print(f"--- {faction['name']} sees: ---")
         print(yaml.safe_dump(view, sort_keys=False).strip())
         print()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

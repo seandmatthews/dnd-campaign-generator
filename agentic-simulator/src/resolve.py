@@ -7,9 +7,21 @@ written to be a story never would.
 
 import random
 
+# The RNG source: the `random` module itself by default, so random.seed()
+# keeps driving it. tick sets a per-week seeded Random via set_rng() and
+# records the seed in meta.rng_seeds — a week is replayable from its seed.
+_rng = random
+
+
+def set_rng(seed):
+    """Determinism dial: pass an int seed (replay a recorded week) or a
+    random.Random instance."""
+    global _rng
+    _rng = random.Random(seed) if isinstance(seed, int) else seed
+
 
 def d(sides):
-    return random.randint(1, sides)
+    return _rng.randint(1, sides)
 
 
 def d20(advantage=None):
@@ -24,17 +36,23 @@ _RISK_DC = {"low": 10, "medium": 13, "high": 16}
 _RESOURCE_BONUS = {"none": 0, "low": 1, "medium": 2, "high": 3}
 
 
-def resolve_action(action):
-    """Resolve one proposed action. Returns an outcome record; does not
-    mutate state — the caller (tick) applies it and logs it."""
-    bonus = min(
+def _bonus(resources_committed):
+    """The committed-resource bonus, capped at +5 — shared by the contested
+    and uncontested paths."""
+    return min(
         5,
         sum(
             _RESOURCE_BONUS.get(v, 0)
-            for v in action.get("resources_committed", {}).values()
+            for v in (resources_committed or {}).values()
         ),
     )
-    dc = _RISK_DC.get(action.get("risk_acceptance", "medium"), 13)
+
+
+def resolve_action(action):
+    """Resolve one proposed action. Returns an outcome record; does not
+    mutate state — the caller (tick) applies it and logs it."""
+    bonus = _bonus(action.get("resources_committed"))
+    dc = _RISK_DC.get(action.get("risk_acceptance", "medium"), _RISK_DC["medium"])
     roll = d20()
     total = roll + bonus
     return {
@@ -88,13 +106,7 @@ def resolve_tick(proposals):
 
     def roll_for(actor):
         p = by_actor[actor]
-        bonus = min(
-            5,
-            sum(
-                _RESOURCE_BONUS.get(v, 0)
-                for v in p.get("resources_committed", {}).values()
-            ),
-        )
+        bonus = _bonus(p.get("resources_committed"))
         penalty = -2 * (contest_count.get(actor, 1) - 1)
         roll = d20()
         return {

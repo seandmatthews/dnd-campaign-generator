@@ -2,8 +2,11 @@
 
 Zero dependencies — run directly:  python tests/test_views.py
 faction_view() runs on a hand-built mini state; the CLI runs against a temp
-state file passed with --state. The default-path test reads the real
-world/state.yaml read-only, the way test_ingest.py does.
+state file passed with --state. The default-path test points store.STATE_FILE
+at a frozen fixture copy — world/state.yaml itself is live scratch the
+studio rewrites on every week run, so the suite must not depend on it
+(found 2026-09-23: the suite went red whenever the engine home held a
+different campaign than the one these expectations were written for).
 """
 
 import contextlib
@@ -15,10 +18,12 @@ import tempfile
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
+import store
 import views
 from views import faction_view, main
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+FIXTURE = ROOT / "tests" / "fixtures" / "ruravaqan-state.yaml"
 
 
 def mini_state():
@@ -87,15 +92,25 @@ def test_cli_unknown_faction_exits_2():
 
 
 def test_cli_default_path_reads_project_state():
-    out, err = io.StringIO(), io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        rc = main(["mint"])
+    """No --state routes through store's default STATE_FILE — verified by
+    pointing that default at a fixture copy, never at the live scratch."""
+    with tempfile.TemporaryDirectory() as d:
+        target = pathlib.Path(d) / "state.yaml"
+        target.write_text(FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+        original = store.STATE_FILE
+        store.STATE_FILE = target
+        try:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = main(["mint"])
+        finally:
+            store.STATE_FILE = original
     assert rc == 0, err.getvalue()
-    real = yaml.safe_load((ROOT / "world" / "state.yaml").read_text(encoding="utf-8"))
+    real = yaml.safe_load(FIXTURE.read_text(encoding="utf-8"))
     parsed = yaml.safe_load(out.getvalue())
     assert parsed == faction_view(real, "mint"), \
-        "with no --state the view comes from the project's world/state.yaml"
-    print("  default: no --state reads world/state.yaml regardless of cwd  OK")
+        "with no --state the view comes from store's default state file"
+    print("  default: no --state reads store's STATE_FILE default  OK")
 
 
 def test_cli_usage_and_missing_state_errors():

@@ -84,17 +84,20 @@ def _week_references(sentence, clock_week):
 
 # --- kind: unknown_actor -----------------------------------------------------
 
-# Generic city-book words that are never faction names.
-_GENERIC = {"council", "harbor", "manor", "doge", "estate", "watcher", "watch",
-            "city", "crowd", "priest", "strikebreaker", "week"}
+# Generic city-book words that are never faction names. Per-campaign
+# override lives in state.yaml under `generic_words: [...]`; this constant
+# is the fallback for states that predate that key.
+_DEFAULT_GENERIC = {"council", "harbor", "manor", "doge", "estate", "watcher",
+                    "watch", "city", "crowd", "priest", "strikebreaker", "week"}
 
 _JOINERS = {"of", "the", "de"}
 
 
 def _known_name_tokens(state):
     """Tokens that name something real or generic: every faction's name and
-    id, the city, its districts, and fixed landmark words."""
-    toks = set(_GENERIC)
+    id, the city, its districts, and generic city-book words (state.yaml's
+    `generic_words` or the built-in fallback)."""
+    toks = set(state.get("generic_words") or _DEFAULT_GENERIC)
     city = state.get("city", {})
     toks |= _content(city.get("name", ""))
     for d in city.get("districts", []):

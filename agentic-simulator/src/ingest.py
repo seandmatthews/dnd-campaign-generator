@@ -21,16 +21,20 @@ import sys
 
 import yaml
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "world" / "state.yaml"
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from store import ROOT, STATE_FILE
+from store import load_state as _store_load
+from store import save_state as _store_save
 
 PENDING_COMMENT = "# edit freely: delete or fix lines, then: python src/ingest.py --apply <this file>"
 
 # Words too generic to point at a faction: articles and name decorations.
 _STOPWORDS = {"the", "a", "an", "of", "and", "s", "house", "claim"}
 
-# Extra match words where a faction's id and its name diverge.
-_ALIASES = {"mint": ["ferrand"], "bastard": ["sera"]}
+# Extra match words where a faction's id and its name diverge. Per-campaign
+# override lives in state.yaml under `aliases: {faction_id: [words...]}`;
+# this constant is the fallback for states that predate that key.
+_DEFAULT_ALIASES = {"mint": ["ferrand"], "bastard": ["sera"]}
 
 _BULLET = re.compile(r"^(?:[-*]|\d+[.)])\s+(.+)$")
 
@@ -42,10 +46,11 @@ def _words(text):
 def faction_tokens(state):
     """Distinctive match words per faction id, in state order. A word that
     names two factions names neither; city-name words name no one."""
+    aliases = state.get("aliases") or _DEFAULT_ALIASES
     city = _words(state.get("city", {}).get("name", ""))
     table = {}
     for f in state["factions"]:
-        words = _words(f["id"]) | _words(f["name"]) | _words(" ".join(_ALIASES.get(f["id"], [])))
+        words = _words(f["id"]) | _words(f["name"]) | _words(" ".join(aliases.get(f["id"], [])))
         table[f["id"]] = words - _STOPWORDS - city
     owners = {}
     for fid, toks in table.items():
@@ -106,10 +111,18 @@ def read_pending(path):
 def apply(pending, state_path):
     """Append each surviving proposal to state.yaml's events as {week, actor,
     text}; returns the count merged, or -1 (nothing written) if any actor is
-    unknown. Bumps nothing else — the clock belongs to tick.py / the DM."""
+    unknown. Bumps nothing else — the clock belongs to tick.py / the DM.
+    A pending week that is not the clock's next week is applied to the week
+    it claims (the DM's file is authoritative) but warns loudly — stale
+    files land in past weeks the scheduler no longer looks at."""
     state = load_state(state_path)
     known = {f["id"] for f in state["factions"]} | {"world"}
     week = pending["week"]
+    next_week = state["meta"]["clock"]["week"] + 1
+    if week is not None and week != next_week:
+        print(f"warning: pending file is dated week {week}, but the next week "
+              f"to simulate is {next_week} — these events land in week {week}, "
+              f"which the scheduler reads only for history")
     surviving = pending["proposals"]
     for p in surviving:
         if p["actor"] not in known:
@@ -123,13 +136,13 @@ def apply(pending, state_path):
 
 
 def load_state(path):
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    """Delegates to store, resolving the module-global STATE_FILE at call
+    time so tests can point the default at a temp copy."""
+    return _store_load(path or STATE_FILE)
 
 
 def save_state(state, path):
-    with open(path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True, width=100)
+    _store_save(state, path or STATE_FILE)
 
 
 def main(argv):

@@ -1,0 +1,283 @@
+meta:
+  premise: The old Doge of Ruravaqan died owing everyone. Every faction in the city is a creditor of a
+    different kind — coin, soul, blood, or labor — and the estate is not large enough to pay them all.
+  clock:
+    week: 4
+    season: late autumn
+  atlas:
+    maps_project: ../dnd-mapping
+    world: Bonia
+    world_source: worlds/candidates/bonia-6343.yaml
+    world_seed: '878636343'
+    home_burg: Ruravaqan
+    home_nation: Shadia
+    home_coords:
+      x: 276.8
+      y: 442.9
+city:
+  name: Ruravaqan
+  population: 29600
+  government: merchant republic (Shadia)
+  districts:
+  - the Mint quarter
+  - the Reliquary
+  - the Docks
+  - the Tanneries
+factions:
+- id: mint
+  name: House Ferrand (the Mint)
+  kind: banking house
+  goal: seize the Doge's customs revenue as repayment; foreclose on the harbor if the estate defaults
+  resources:
+    coin: low
+    muscle: low
+    legitimacy: medium
+  disposition:
+    reliquary: cold
+    bastard: hostile
+    longshoremen: transactional
+    marsh_gang: unaware
+  secret: the Doge's debt instrument was backdated by a junior clerk, who is quietly blackmailing the
+    house
+  knows:
+  - the full size of the Doge's debts
+  - the Bastard claims parentage but appears to lack written proof
+  - the council has attached the Doge's customs revenue to their claim (week 2)
+  - the Bastard was caught searching the manor — she wanted papers
+  - strikebreakers from the Tanneries now load the estate's cargo
+  - the council ranks their debt senior to any inheritance claim (week 3)
+  - the Bastard went for the instrument itself — the watchers held
+  - the harbor is struck and the customs house cannot inspect (week 3)
+- id: reliquary
+  name: The Reliquary
+  kind: church of the Interred
+  goal: recover tithes in arrears; the Doge's soul is held as collateral — no funeral until paid
+  resources:
+    coin: medium
+    muscle: low
+    legitimacy: high
+  disposition:
+    mint: hostile
+    bastard: sympathetic
+    longshoremen: warm
+    marsh_gang: unaware
+  secret: the Doge was quietly buried a day after he died; the planned funeral casket is empty
+  knows:
+  - what the Doge confessed on his deathbed
+  - which families owe tithes, and how much
+  - the procession filled the coffers — but the city now expects the soul-debt settled publicly
+  - interdiction is in force; every debtor family is named from the pulpit (week 3)
+  - the Gang raided the storerooms by night and was thrown out
+- id: bastard
+  name: The Bastard's Claim (Sera of Ruravaqan)
+  kind: noble claimant
+  goal: recognition as the Doge's child and a seat on the estate's council
+  resources:
+    coin: none
+    muscle: medium
+    legitimacy: low
+  disposition:
+    mint: hostile
+    reliquary: warm
+    longshoremen: friendly
+    marsh_gang: unaware
+  secret: her mother's letters survive — the last names a different father; Sera has not read them all
+  knows:
+  - the layout of the Doge's manor
+  - the Mint's claim rests on a single instrument
+  - the Mint's watchers patrol the manor — she learned their rotation while being caught
+  - the council ranks blood below paper — her claim now trails the Mint's debt (week 3)
+  - the rotation gap was real, but the watchers were ready for her anyway
+- id: longshoremen
+  name: The Longshoremen
+  kind: guild
+  goal: back wages from the Doge's last fleet venture; strike the harbor if pressed
+  resources:
+    coin: none
+    muscle: medium
+    legitimacy: medium
+  disposition:
+    mint: hostile
+    reliquary: warm
+    bastard: sympathetic
+    marsh_gang: wary
+  secret: the fleet sank because of corner-cutting their own steward signed off on
+  knows:
+  - exactly how many ships come in each week
+  - the Mint's men have been asking after harbor revenue
+  - the council gave the customs house to the Mint; Tannery men took the estate's loading
+  - the strike holds — no loading, no customs inspections, until the council pays (week 3)
+- id: marsh_gang
+  name: The Marsh Gang
+  kind: bandits (about thirty)
+  goal: eat through winter — they are owed nothing; they collect anyway
+  resources:
+    coin: low
+    muscle: none
+    legitimacy: none
+  disposition:
+    mint: unaware
+    reliquary: hostile
+    bastard: unaware
+    longshoremen: wary
+  secret: none worth keeping
+  knows:
+  - a rumor that a rich funeral procession is planned in Ruravaqan
+  - the procession was watched — two of ours are in the Doge's cells, and the church profited by it
+  - the storerooms are guarded — the raid broke us; thirty people who cannot fight
+events:
+- week: 1
+  actor: world
+  text: The Doge of Ruravaqan dies without naming an heir. The bells ring for three days; the creditors
+    arrive on the fourth.
+- week: 2
+  actor: mint
+  text: The estate council attaches the Doge's customs revenue to the Mint's claim.
+- week: 2
+  actor: reliquary
+  text: A grand funeral procession moves through the Docks; alms flow toward the arrears.
+- week: 2
+  actor: bastard
+  text: Sera is caught inside the sealed manor by the Mint's watchers; released, but marked.
+- week: 2
+  actor: longshoremen
+  text: The harbor refusal collapses — Tannery strikebreakers take the estate's cargo.
+- week: 2
+  actor: marsh_gang
+  text: Two Marsh Gang robbers are taken during the procession; the gang blames the church.
+- week: 3
+  actor: mint
+  text: Petition the council to rank House Ferrand's debt as senior to the Bastard's inheritance claim
+    and assign the attached customs revenue to the Mint before any inheritance is settled. — succeeded
+    (contested vs bastard), margin +2
+- week: 3
+  actor: reliquary
+  text: Read the tithe ledger aloud from the pulpit, name every debtor family and the exact sum owed,
+    and declare interdiction — no rites, no consecrated burial for any debtor house until arrears are
+    paid, and the Doge's public funeral held only on the day House Ferrand settles in full. — succeeded
+    (contested vs marsh_gang), margin +5
+- week: 3
+  actor: bastard
+  text: Enter the Doge's manor during the Mint's watcher rotation gap and steal or destroy the instrument
+    House Ferrand's claim rests on. — failed (contested vs mint), margin -2
+- week: 3
+  actor: longshoremen
+  text: Strike the harbor — halt all loading, unloading, and customs inspections until the council pays
+    the fleet venture's back wages in full — succeeded, margin +1
+- week: 3
+  actor: marsh_gang
+  text: Strike the Reliquary's storerooms by night and carry off the funeral wealth the church has taken
+    in. — failed (contested vs reliquary), margin -5
+- week: 4
+  actor: longshoremen
+  text: Escalate the strike onto the customs house — picket it shut, turn the Mint's inspectors away at
+    the door, and make plain to House Ferrand that the harbor reopens the day our back wages are paid
+    — succeeded (contested vs mint), margin +0
+- week: 4
+  actor: mint
+  text: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs longshoremen), margin +0
+- week: 4
+  actor: reliquary
+  text: Enlist the Longshoremen at a hired rate to seize House Ferrand's shipments on the Docks and impound
+    them under church seal until the Mint's tithe arrears are paid in full. — succeeded (contested vs
+    mint), margin +3
+- week: 4
+  actor: mint
+  text: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs reliquary), margin -3
+- week: 4
+  actor: bastard
+  text: Petition the Reliquary to convene a formal examination of the Mint's debt instrument — its seal,
+    hand, and witnesses — before the council weighs it against my blood again. — succeeded (contested
+    vs mint), margin +12
+- week: 4
+  actor: mint
+  text: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs bastard), margin -12
+- week: 4
+  actor: marsh_gang
+  text: Scatter the thirty in twos and threes into the Tanneries — haul hides for coppers, beg work at
+    the rendering pits, pilfer only what will not be missed — and touch no procession and no storeroom
+    until spring. — succeeded, margin +8
+rumors:
+- id: rumor_0001
+  born_week: 4
+  origin: longshoremen
+  claim: Escalate the strike onto the customs house — picket it shut, turn the Mint's inspectors away
+    at the door, and make plain to House Ferrand that the harbor reopens the day our back wages are paid
+    — succeeded (contested vs mint), margin +0
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - longshoremen
+- id: rumor_0002
+  born_week: 4
+  origin: mint
+  claim: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs longshoremen), margin +0
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - mint
+- id: rumor_0003
+  born_week: 4
+  origin: reliquary
+  claim: Enlist the Longshoremen at a hired rate to seize House Ferrand's shipments on the Docks and impound
+    them under church seal until the Mint's tithe arrears are paid in full. — succeeded (contested vs
+    mint), margin +3
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - reliquary
+- id: rumor_0004
+  born_week: 4
+  origin: mint
+  claim: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs reliquary), margin -3
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - mint
+- id: rumor_0005
+  born_week: 4
+  origin: bastard
+  claim: Petition the Reliquary to convene a formal examination of the Mint's debt instrument — its seal,
+    hand, and witnesses — before the council weighs it against my blood again. — succeeded (contested
+    vs mint), margin +12
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - bastard
+- id: rumor_0006
+  born_week: 4
+  origin: mint
+  claim: Open the Mint's coffers to the Longshoremen — back pay and guaranteed wages paid through Ferrand
+    hands — in exchange for ending the strike and assigning the Doge's resumed customs collections to
+    House Ferrand until the debt is discharged. — failed (contested vs bastard), margin -12
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - mint
+- id: rumor_0007
+  born_week: 4
+  origin: marsh_gang
+  claim: Scatter the thirty in twos and threes into the Tanneries — haul hides for coppers, beg work at
+    the rendering pits, pilfer only what will not be missed — and touch no procession and no storeroom
+    until spring. — succeeded, margin +8
+  truth: true
+  fidelity: eyewitness
+  transmissions: []
+  heard_by:
+  - marsh_gang

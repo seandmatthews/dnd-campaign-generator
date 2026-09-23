@@ -70,3 +70,12 @@ src/why.py               causality inspector
 src/ingest.py            session notes -> pending events -> canon
 tests/                   zero-dep: python tests/test_<module>.py
 ```
+
+## Key-discovery contract
+
+`src/llm.py` finds the Z.ai key in this order: `$ZAI_API_KEY`, then a walk
+of `~/.zcode/v2/provider_config.json`'s `providerRules` taking the first
+non-`enc:` key, then a clear RuntimeError. The sibling copies of this
+contract (`verification/check.py`, `studio/llm_client.py`) must keep the
+same order and error — never hardcode a provider index, the rules array
+reorders.

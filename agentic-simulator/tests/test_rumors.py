@@ -162,9 +162,10 @@ def test_full_pipeline_three_weeks():
     """Hand-worked: four factions; week 1 has two events (one faction, one
     world), weeks 2 and 3 one faction event each. Expected rumors embedded
     below exactly as the rules produce them:
-      week 2: r1 told a->b (eyewitness->reliable); r2 born (b)
-      week 3: r1 told a->c (reliable->hearsay); r2 told b->a (eyewitness->reliable);
-              r3 born (c), spreads starting week 4."""
+      week 2: r1 told a->b (eyewitness->reliable); r2 born (b) from a FAILED
+              action — quiet at its origin: it does not spread
+      week 3: r1 told a->c (reliable->hearsay); r2 stamps its spread week but
+              has no willing teller; r3 born (c), spreads starting week 4."""
     state = small_state()
     run_week(state, [
         {"week": 1, "actor": "a", "text": "A raises the watch — succeeded, margin +2"},
@@ -200,12 +201,10 @@ def test_full_pipeline_three_weeks():
             "origin": "b",
             "claim": "B bribes the harbormaster — failed, margin -1",
             "truth": True,
-            "fidelity": "reliable",
-            "transmissions": [
-                {"week": 3, "from": "b", "to": "a",
-                 "fidelity_before": "eyewitness", "fidelity_after": "reliable"},
-            ],
-            "heard_by": ["b", "a"],
+            "fidelity": "eyewitness",
+            "transmissions": [],
+            "heard_by": ["b"],
+            "quiet": ["b"],
             "last_spread_week": 3,
         },
         {
@@ -224,9 +223,7 @@ def test_full_pipeline_three_weeks():
     assert heard(state, "a") == [
         {"claim": "A raises the watch — succeeded, margin +2", "fidelity": "eyewitness",
          "heard_week": 1, "source_hint": "the street"},
-        {"claim": "B bribes the harbormaster — failed, margin -1", "fidelity": "reliable",
-         "heard_week": 3, "source_hint": "b"},
-    ], "origin first, then what arrived, sorted by heard_week"
+    ], "origin first; the failed bribe stays at its origin, a never hears it"
     assert heard(state, "c") == [
         {"claim": "A raises the watch — succeeded, margin +2", "fidelity": "hearsay",
          "heard_week": 3, "source_hint": "a"},
@@ -235,6 +232,36 @@ def test_full_pipeline_three_weeks():
     ], "heard_week tie breaks by rumor id"
     assert heard(state, "d") == [], "d has heard nothing yet"
     print("  pipeline: three hand-worked weeks match the embedded example  OK")
+
+
+def test_structured_events_spawn_clean_claims_and_quiet_failures():
+    """Structured events (tick's event_record shape): the rumor quotes the
+    ACTION only — no margin, no contested-vs — and a failed action is quiet
+    at its origin while the rival who contested it hears it at once."""
+    state = small_state(week=4)
+    state["events"] = [
+        {"week": 4, "actor": "b", "text": "B burgles A's vault — failed (contested vs a), margin -7",
+         "action": "B burgles A's vault", "outcome": "failed", "contested": True,
+         "vs": "a", "margin": -7},
+        {"week": 4, "actor": "a", "text": "A buys grain — succeeded, margin +1",
+         "action": "A buys grain", "outcome": "succeeded", "contested": False,
+         "margin": 1},
+    ]
+    spawned = spawn_from_events(state)
+    assert spawned[0]["claim"] == "B burgles A's vault", "claim carries no resolution"
+    assert spawned[0]["quiet"] == ["b"], "the failed burglar does not retell it"
+    assert spawned[0]["heard_by"] == ["b", "a"], "the rival who contested it saw it too"
+    assert "quiet" not in spawned[1], "successes spread normally"
+    # and the quiet rumor moves only through the rival, never the burglar
+    state["rumors"] = spawned
+    state["meta"]["clock"]["week"] = 5
+    spread(state, state["rumors"])
+    assert spawned[0]["transmissions"] == [
+        {"week": 5, "from": "a", "to": "c",
+         "fidelity_before": "eyewitness", "fidelity_after": "reliable"},
+    ], "the rival who contested it does the talking — not the origin"
+    assert spawned[1]["transmissions"][0]["from"] == "a", "the success travels"
+    print("  structured: clean claims, quiet failures, rival hears  OK")
 
 
 if __name__ == "__main__":
@@ -248,6 +275,7 @@ if __name__ == "__main__":
         test_no_audience_no_decay,
         test_heard_only_held_rumors_with_source_hints,
         test_full_pipeline_three_weeks,
+        test_structured_events_spawn_clean_claims_and_quiet_failures,
     ]
     for fn in tests:
         try:

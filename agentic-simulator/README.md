@@ -63,8 +63,16 @@ agentic-simulator/  (in Documents/D&D)
     why.py                   causality inspector: every event explains itself
     ingest.py                session notes -> pending events -> canon
   chronicle/                 one reviewable delta per week
-  tests/
-    test_resolve.py          zero-dependency resolver tests
+  tests/                     zero-dependency suites; pytest or direct-run
+    test_resolve.py          dice and contests
+    test_scheduler.py        activation gate
+    test_consistency.py      advisory fact-checks
+    test_rumors.py           spawn, spread, fidelity decay
+    test_ingest.py           session-notes pipeline
+    test_views.py            fog-of-war slices
+    test_why.py              causal chains
+    test_tick.py             consequences, chronicle, replay
+    test_llm.py              prompt/validation/HTTP paths (network faked)
 AGENTS.md                    the on-ramp for any agent new to this directory
 ```
 

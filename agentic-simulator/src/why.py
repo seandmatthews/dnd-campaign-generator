@@ -2,8 +2,10 @@
 
 Every event explains itself from the recorded events it collided with or
 built upon. Two links, one sentence each:
-  - collision: "(contested vs <id>)" in the text names the same-week event
-    this one was rolled against; the margin is this event's own.
+  - collision: the event's contested-vs field (or, for events recorded
+    before structured fields, the "(contested vs <id>)" suffix in the text)
+    names the same-week event this one was rolled against; the margin is
+    this event's own.
   - build-up: an earlier event is a build-on when it shares at least two
     content words (length>3, lowercase, plural-s folded) with this event's
     action text, outcome suffix ignored; each step takes the single best
@@ -22,22 +24,12 @@ import pathlib
 import re
 import sys
 
-import yaml
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "world" / "state.yaml"
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import events
+from store import STATE_FILE, load_state
 
 _BAR = 2        # content tokens two events must share to count as a build-on
 _MAX_LINKS = 3  # build-on links rendered at most, walking back from the anchor
-
-_CONTEST = re.compile(r"\(contested vs ([a-z_]+)\)")
-_MARGIN = re.compile(r"margin ([+-]\d+)")
-_OUTCOME = re.compile(r"\s+—\s+(?:succeeded|failed)\b.*$", re.S)
-
-
-def load_state():
-    with open(STATE_FILE, encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 def find_event(state, week, actor):
@@ -63,18 +55,13 @@ def _tokens(text):
     return out
 
 
-def _action(text):
-    """Event text with the recorded outcome suffix stripped."""
-    return _OUTCOME.sub("", text)
-
-
 def _best_buildon(state, week, toks):
     """Best earlier event sharing >= _BAR tokens; order (week desc, shared desc, actor asc)."""
     best_key, best = None, None
     for ev in state["events"]:
         if ev["week"] >= week:
             continue
-        shared = len(toks & _tokens(_action(ev["text"])))
+        shared = len(toks & _tokens(events.action_text(ev)))
         if shared < _BAR:
             continue
         key = (-ev["week"], -shared, ev["actor"])
@@ -84,19 +71,19 @@ def _best_buildon(state, week, toks):
 
 
 def _walk(state, ev, depth, lines):
-    vs = _CONTEST.search(ev["text"])
+    vs = events.vs_of(ev)
     if depth == 0 and vs:
-        line = f"contested against {_name(state, vs.group(1))}"
-        m = _MARGIN.search(ev["text"])
-        if m:
-            line += f", margin {int(m.group(1)):+d}"
-        partner = find_event(state, ev["week"], vs.group(1))
+        line = f"contested against {_name(state, vs)}"
+        margin = events.margin_of(ev)
+        if margin is not None:
+            line += f", margin {margin:+d}"
+        partner = find_event(state, ev["week"], vs)
         if partner is not None:
             line += f" — {partner['text']}"
         lines.append("  " + line)
     if depth >= _MAX_LINKS:
         return
-    nxt = _best_buildon(state, ev["week"], _tokens(_action(ev["text"])))
+    nxt = _best_buildon(state, ev["week"], _tokens(events.action_text(ev)))
     if nxt is None:
         return
     lines.append("  " * (depth + 1)
@@ -121,7 +108,7 @@ def why_cli(state, argv):
     args = argv[1:]
     as_json = "--json" in args
     args = [a for a in args if a != "--json"]
-    if len(args) != 2 or not args[0].lstrip("-").isdigit():
+    if len(args) != 2 or not args[0].isdigit():
         print("usage: python src/why.py <week> <actor>", file=sys.stderr)
         return 1
     week, actor = int(args[0]), args[1]

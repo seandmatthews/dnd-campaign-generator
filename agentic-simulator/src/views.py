@@ -19,10 +19,10 @@ from copy import deepcopy
 
 import yaml
 
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import rumors
-
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "world" / "state.yaml"
+from store import STATE_FILE
+from store import load_state
 
 # What an outsider can roughly estimate by watching, not by reading ledgers.
 _OUTSIDER_STRENGTH = {
@@ -46,6 +46,7 @@ def faction_view(state, faction_id):
             continue
         others.append(
             {
+                "id": f["id"],
                 "name": f["name"],
                 "kind": f["kind"],
                 "apparent_strength": _OUTSIDER_STRENGTH.get(
@@ -69,13 +70,6 @@ def faction_view(state, faction_id):
     return view
 
 
-def load_state(path=None):
-    """The state file, loaded exactly the way tick.py loads it; `path`
-    overrides the default world/state.yaml (absolute, or relative to cwd)."""
-    with open(path or STATE_FILE, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
 def main(argv):
     """`python src/views.py <faction_id> [--state PATH]`: print the view as
     YAML; 0 known faction, 2 unknown faction or bad args, 1 unreadable state."""
@@ -96,11 +90,18 @@ def main(argv):
     except OSError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    try:
-        view = faction_view(state, args[0])
-    except KeyError:
+    ids = {f["id"] for f in state["factions"]} if state else set()
+    if args[0] not in ids:
         print(f"unknown faction id: {args[0]}", file=sys.stderr)
         return 2
+    try:
+        view = faction_view(state, args[0])
+    except KeyError as e:
+        # the id was verified above, so this is a state missing a key the
+        # view needs (a rumor without id/heard_by/transmissions, say) —
+        # report the schema gap, not a wrong diagnosis of the faction id
+        print(f"state is missing a key the view needs: {e}", file=sys.stderr)
+        return 1
     sys.stdout.write(yaml.safe_dump(view, sort_keys=False, allow_unicode=True))
     return 0
 

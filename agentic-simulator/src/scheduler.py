@@ -10,18 +10,31 @@ resolved week. Call activation(state) before advancing the clock.
 
 import re
 
-_VS_RE = re.compile(r"\(contested vs (\w+)\)")
+import events
+
 _WORD_RE = re.compile(r"[a-z0-9_]+")
 _ARTICLES = {"the", "of", "a", "an"}
 _IDLE_CAP = 3
 
 
-def _name_tokens(faction):
+def _name_tokens(faction, city_words=frozenset()):
     """Distinctive mention tokens: the faction id plus its name words,
-    minus articles and single letters."""
+    minus articles, single letters, and words that name the city or one of
+    its districts — a word that names both a place and a faction (the
+    Reliquary quarter vs the Reliquary) must not activate the faction on a
+    mere mention of the place."""
     words = set(_WORD_RE.findall(faction["name"].lower()))
     words.add(faction["id"])
-    return {w for w in words if len(w) > 1 and w not in _ARTICLES}
+    return {w for w in words if len(w) > 1 and w not in _ARTICLES} - city_words
+
+
+def _city_words(state):
+    """Words that name the city or any of its districts."""
+    city = state.get("city", {}) or {}
+    words = set(_WORD_RE.findall(str(city.get("name", "")).lower()))
+    for d in city.get("districts", []) or []:
+        words |= set(_WORD_RE.findall(str(d).lower()))
+    return words - _ARTICLES
 
 
 def _words(text):
@@ -29,29 +42,33 @@ def _words(text):
 
 
 def _vs_target(event):
-    m = _VS_RE.search(event.get("text", ""))
-    return m.group(1) if m else None
+    return events.vs_of(event)
 
 
-def _touched(events, fid, tokens):
+def _in_week(evs, fid, tokens, include_actor):
+    """The shared walk: vs target (of another faction's event unless
+    include_actor), text-mention, and — when include_actor — being the
+    actor. _touched and _present are this predicate with the actor term
+    on/off."""
+    for ev in evs:
+        if _vs_target(ev) == fid and (include_actor or ev.get("actor") != fid):
+            return True
+        if include_actor and ev.get("actor") == fid:
+            return True
+        if _words(ev.get("text", "")) & tokens:
+            return True
+    return False
+
+
+def _touched(events_list, fid, tokens):
     """The +2 test: vs target of another faction's contested event, or
     named in any event text."""
-    for ev in events:
-        if ev.get("actor") != fid and _vs_target(ev) == fid:
-            return True
-        if _words(ev.get("text", "")) & tokens:
-            return True
-    return False
+    return _in_week(events_list, fid, tokens, include_actor=False)
 
 
-def _present(events, fid, tokens):
+def _present(events_list, fid, tokens):
     """Idle-breaker: actor, vs target, or text-mentioned this week."""
-    for ev in events:
-        if ev.get("actor") == fid or _vs_target(ev) == fid:
-            return True
-        if _words(ev.get("text", "")) & tokens:
-            return True
-    return False
+    return _in_week(events_list, fid, tokens, include_actor=True)
 
 
 def activation(state):
@@ -61,8 +78,9 @@ def activation(state):
     components, each logged once: +2 targeted last week; +1 hostility
     (outgoing or incoming); +1 pressure (any resource "none"); -1 per
     consecutive week absent from all events, up to 3. Founding week
-    (clock week 1): no history — hostility/pressure plus +2 "founding
-    week". act at score >= 2.
+    (clock week 0 or 1 — 0 is the studio's fresh-sandbox start, 1 a
+    hand-authored state's first playable week): no history yet, so
+    hostility/pressure plus +2 "founding week". act at score >= 2.
     """
     week = state["meta"]["clock"]["week"]
     factions = state["factions"]
@@ -70,13 +88,14 @@ def activation(state):
     for ev in state.get("events") or []:
         by_week.setdefault(ev.get("week"), []).append(ev)
     last_week = by_week.get(week, [])
-    tokens = {f["id"]: _name_tokens(f) for f in factions}
+    city_words = _city_words(state)
+    tokens = {f["id"]: _name_tokens(f, city_words) for f in factions}
 
     out = {}
     for f in factions:
         fid = f["id"]
         score, reasons = 0, []
-        if week == 1:
+        if week <= 1:
             score += 2
             reasons.append("founding week")
         elif _touched(last_week, fid, tokens[fid]):
@@ -92,7 +111,7 @@ def activation(state):
         if "none" in f.get("resources", {}).values():
             score += 1
             reasons.append("pressure")
-        if week != 1:
+        if week > 1:
             quiet, w = 0, week
             while (
                 quiet < _IDLE_CAP
