@@ -1307,3 +1307,33 @@ textarea.input:focus-visible {
     overflow: visible;
   }
 }
+
+/* ---------- entity pages (vault) ---------- */
+
+tr.entity-row { cursor: pointer; }
+tr.entity-row:hover { background: var(--hover, rgba(0, 0, 0, 0.04)); }
+
+.entity-page-host { margin-top: 12px; }
+.entity-page {
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: var(--panel-alt, rgba(0, 0, 0, 0.02));
+}
+.entity-page-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.entity-page-title { flex: 1; }
+.entity-page-body { max-width: 72ch; }
+.entity-backlinks { margin-top: 12px; }
+.backlink-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.backlink-item {
+  padding: 3px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+li.backlink-item[style] { cursor: pointer; }

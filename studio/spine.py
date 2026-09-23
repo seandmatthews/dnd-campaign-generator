@@ -291,9 +291,219 @@ def load_timeline(name: str) -> list:
     return []
 
 
-def load_entities(name: str) -> dict:
+def load_entities(name: str) -> list:
+    """The campaign's entities as a canonical list of dicts
+    (id?/kind/name/aliases/note, plus `file` for page-backed entities).
+
+    Entity pages are canonical (obsidian-integration.md §1): one markdown
+    file per entity in lore/entities/. A legacy lore/entities.yaml that has
+    not been migrated yet still reads (boot migrates it away), so a campaign
+    zipped off an old install degrades gracefully instead of vanishing."""
+    pages = entity_pages(name)
+    if pages:
+        return [{k: p[k] for k in p if k != "body"} for p in pages]
+    return _legacy_entities(name)
+
+
+# ------------------------------------------------------- entity pages (vault)
+
+# Frontmatter fence: --- at the very top, closing --- on its own line.
+_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
+# A page filename is a display name (spaces, dots fine) with the
+# filesystem's trouble characters already excluded; .md rides in the caller.
+_PAGE_STEM_RE = re.compile(r"^[^/\\:*?\"<>|\x00-\x1f]{1,80}$")
+
+
+def valid_page_name(page: str) -> bool:
+    """A lore/entities page stem as it may appear in a URL path segment —
+    a display name, but no separators, control chars, leading dot, or
+    traversal."""
+    return bool(page) and ".." not in page and bool(_PAGE_STEM_RE.match(page))
+
+
+def entity_page_filename(name: str) -> str:
+    """The page filename for an entity name — display names, per the vault
+    design's recommendation (typing [[House Fer autocompletes in Obsidian;
+    nothing here becomes a shell path). Filesystem-hostile characters fold
+    to spaces; a hostile stem (reserved device name, trailing dot/space)
+    raises CampaignError — mint a different name instead."""
+    stem = re.sub(r'[/\\:*?"<>|\x00-\x1f]+', " ", name or "")
+    stem = re.sub(r"\s+", " ", stem).strip()
+    if (not _PAGE_STEM_RE.match(stem) or stem.startswith(".")
+            or windows_hostile_stem(stem)):
+        raise CampaignError(f"cannot make an entity page filename from {name!r}")
+    return stem + ".md"
+
+
+def parse_entity_page(path: Path) -> dict:
+    """One lore/entities/*.md page -> the entity dict (id?/kind/name/
+    aliases/note/body/file).
+
+    Frontmatter carries today's exact fields; the body's first paragraph is
+    the note (what entities.yaml used to carry), the rest is free lore —
+    sections, wiki-links. A page with no frontmatter degrades to its
+    filename stem (a hand-created file is a page, not an error); frontmatter
+    that does not parse is a hand-edit slip -> CampaignFileError (readable
+    422, never an opaque 500)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise CampaignFileError(
+            f"{path.name} is not UTF-8 — fix the encoding, or restore it "
+            f"with git checkout -- lore/entities/{path.name}")
+    m = _FRONTMATTER_RE.match(text)
+    body = text[m.end():].lstrip("\n") if m else text
+    meta = {}
+    if m:
+        try:
+            meta = yaml.safe_load(m.group(1)) or {}
+        except yaml.YAMLError as e:
+            first = str(e).splitlines()[0] if str(e) else type(e).__name__
+            raise CampaignFileError(
+                f"{path.name} does not parse ({first}) — a hand-edit slipped? "
+                f"Fix the frontmatter, or restore it with "
+                f"git checkout -- lore/entities/{path.name}")
+        if not isinstance(meta, dict):
+            raise CampaignFileError(
+                f"{path.name}: frontmatter must be a mapping of fields")
+    aliases = meta.get("aliases") or []
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    return {
+        "id": str(meta.get("id") or "").strip(),
+        "kind": str(meta.get("kind") or "").strip(),
+        "name": str(meta.get("name") or "").strip() or path.stem,
+        "aliases": [str(a) for a in aliases],
+        "note": _first_paragraph(body),
+        "body": body.strip(),
+        "file": f"lore/entities/{path.name}",
+    }
+
+
+def _first_paragraph(body: str) -> str:
+    """The note: the first paragraph, skipping leading headings."""
+    lines, para, started = body.splitlines(), [], False
+    for line in lines:
+        t = line.strip()
+        if not t:
+            if started:
+                break
+            continue
+        if t.startswith("#"):
+            if started:
+                break
+            continue  # a leading heading is a title, not the note
+        started = True
+        para.append(t)
+    return " ".join(para).strip()
+
+
+def entity_pages(name: str) -> list:
+    """Every entity page, sorted by filename. Degrades to [] when the
+    campaign has none; a page that does not parse raises CampaignFileError
+    (the caller maps it to a readable 422)."""
+    d = campaign_dir(name) / "lore" / "entities"
+    if not d.is_dir():
+        return []
+    out = []
+    for p in sorted(d.glob("*.md")):
+        try:
+            out.append(parse_entity_page(p))
+        except FileNotFoundError:
+            continue  # unlinked mid-glob (migration/race) — never a 500
+    return out
+
+
+def write_entity_page(name: str, page_name: str, frontmatter: dict,
+                      body: str) -> Path:
+    """Create (never overwrite) one entity page. Create-only is the point:
+    a re-run migration or a re-stub must never clobber hand edits."""
+    require_campaign(name)
+    filename = entity_page_filename(page_name)
+    path = campaign_dir(name) / "lore" / "entities" / filename
+    if path.exists():
+        raise CampaignExists(f"entity page already exists: {filename}")
+    meta = {k: v for k, v in frontmatter.items()
+            if v not in (None, "", [], {})}
+    text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
+                          default_flow_style=False).strip()
+    page = f"---\n{text}\n---\n\n{body.strip()}\n" if text else f"{body.strip()}\n"
+    return write_text_atomic(path, page)
+
+
+def _legacy_entities(name: str) -> list:
+    """Normalize every entities.yaml shape seen in the wild into the
+    canonical list: {entities: [...]}, a bare list, or groups keyed by kind
+    (the fixture's people/factions/places — the key IS the kind; a singular
+    `alias:` field rides along as a one-item aliases list)."""
     doc = _safe_load(campaign_dir(name) / "lore" / "entities.yaml")
-    return doc if isinstance(doc, dict) else {}
+    if isinstance(doc, dict):
+        entities = doc.get("entities")
+        if isinstance(entities, list):
+            return [_legacy_entity(e) for e in entities
+                    if isinstance(e, dict)]
+        out = []  # grouped shape: {<kind>: [{name, note, alias?...}]}
+        for kind, items in doc.items():
+            if isinstance(items, list):
+                out.extend(_legacy_entity(e, kind=str(kind))
+                           for e in items if isinstance(e, dict))
+        return out
+    if isinstance(doc, list):
+        return [_legacy_entity(e) for e in doc if isinstance(e, dict)]
+    return []
+
+
+def _legacy_entity(e: dict, kind: str = "") -> dict:
+    aliases = e.get("aliases") or []
+    if isinstance(aliases, str):
+        aliases = [aliases]
+    if e.get("alias") and e["alias"] not in aliases:
+        aliases = [str(e["alias"])] + list(aliases)
+    return {
+        "id": str(e.get("id") or "").strip(),
+        "kind": str(e.get("kind") or kind or "").strip(),
+        "name": str(e.get("name") or "").strip(),
+        "aliases": [str(a) for a in aliases],
+        "note": str(e.get("note") or "").strip(),
+    }
+
+
+def migrate_entities_yaml_to_pages(name: str):
+    """One-time entities.yaml -> lore/entities/*.md (vault §1, stage 1).
+
+    Migrate-and-delete, on the same pass: pages are written for entities
+    whose page does not exist yet (a partial earlier migration never
+    clobbers hand edits — filename collisions get a ' (2)' suffix), then
+    entities.yaml is deleted. Returns the number of pages written, 0 when
+    the yaml existed but was empty, None when there was nothing to migrate.
+    The caller holds the campaign lock and takes the canon snapshot."""
+    require_campaign(name)
+    yaml_path = campaign_dir(name) / "lore" / "entities.yaml"
+    if not yaml_path.is_file():
+        return None
+    entities = _legacy_entities(name)
+    pages_dir = campaign_dir(name) / "lore" / "entities"
+    # casefold: Windows filenames are case-insensitive, so "The Reliquary"
+    # and "the Reliquary" are the same file — the second needs the suffix
+    used = {p.name.casefold()
+            for p in pages_dir.glob("*.md")} if pages_dir.is_dir() else set()
+    written = 0
+    for e in entities:
+        if not e["name"]:
+            continue
+        try:
+            filename = entity_page_filename(e["name"])
+        except CampaignError:
+            filename = slugify(e["name"]) + ".md"  # hostile stem: slug it
+        while filename.casefold() in used:
+            filename = f"{filename[:-3]} (2).md"
+        used.add(filename.casefold())
+        meta = {"id": e["id"], "kind": e["kind"], "name": e["name"],
+                "aliases": e["aliases"]}
+        write_entity_page(name, filename[:-3], meta, e["note"])
+        written += 1
+    yaml_path.unlink()
+    return written
 
 
 def style_files(name: str) -> list:
@@ -319,12 +529,6 @@ def create_style(name: str, filename: str, text: str) -> Path:
     path = _style_path(name, filename)
     if path.exists():
         raise CampaignExists(f"style file already exists: {filename}")
-    return write_text_atomic(path, text)
-
-
-def write_entities(name: str, text: str) -> Path:
-    require_campaign(name)
-    path = campaign_dir(name) / "lore" / "entities.yaml"
     return write_text_atomic(path, text)
 
 

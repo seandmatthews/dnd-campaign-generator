@@ -33,6 +33,7 @@ from pydantic import BaseModel, StrictBool, field_validator
 
 import canon
 import engines
+import links
 import spine
 from routers.common import require_campaign, submit_campaign_job
 
@@ -371,6 +372,16 @@ def _run_week_locked(name: str, d: Path, log) -> dict:
         new_files = after - before
         for fn in new_files:
             engines.copy_file(chronicle_dir / fn, sim_dir / "chronicle" / fn)
+            # vault stage 4: linkify the campaign copy on write — the first
+            # occurrence of each known name/alias becomes a wiki-link, so
+            # entity backlinks answer "where did this show up in the story?"
+            # (names that resolve to nothing are left alone). Advisory: a
+            # linkify failure never fails the week.
+            try:
+                if links.linkify_chronicle(name, fn):
+                    log(f"linked lore names in chronicle/{fn}")
+            except Exception as e:  # noqa: BLE001
+                log(f"chronicle linkify skipped for {fn}: {e}")
             log(f"copied back chronicle/{fn}")
 
         new_state = spine.load_state(name)

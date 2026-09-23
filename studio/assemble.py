@@ -351,9 +351,11 @@ def build_timeline(camp, state):
             f"{len(entries)} entries ({weeks[0]}..{weeks[-1]}, source: authored)")
 
 
-# lore/entities.yaml — the retrieval store. Faction notes are the factions'
-# own goal lines from state.yaml; everything else is one line backed by the
-# state or the chronicles.
+# lore/entities/ — the vault pages (obsidian-integration.md §1): one
+# markdown page per entity, frontmatter carrying the exact fields the old
+# entities.yaml had, the note as the opening body. Faction notes are the
+# factions' own goal lines from state.yaml; everything else is one line
+# backed by the state or the chronicles.
 FACTION_ENTITY_IDS = [
     "mint",
     "reliquary",
@@ -368,6 +370,25 @@ FACTION_ALIASES = {
     "longshoremen": ["the Longshoremen", "the guild"],
     "marsh_gang": ["the Marsh Gang", "the Gang"],
 }
+
+_RESERVED_DEVICES = {"con", "prn", "aux", "nul",
+                     *(f"com{i}" for i in range(1, 10)),
+                     *(f"lpt{i}" for i in range(1, 10))}
+
+
+def _page_stem(name: str):
+    """Display-name page stem, or None when the filesystem hates it (the
+    caller slugs instead). Mirrors spine.entity_page_filename's rules."""
+    stem = re.sub(r'[/\\:*?"<>|\x00-\x1f]+', " ", name or "")
+    stem = re.sub(r"\s+", " ", stem).strip()
+    if (not stem or stem.startswith(".") or stem != stem.rstrip(" .")
+            or stem.lower() in _RESERVED_DEVICES or len(stem) > 80):
+        return None
+    return stem
+
+
+def _slug(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "page"
 
 
 def build_entities(camp, state):
@@ -458,9 +479,24 @@ def build_entities(camp, state):
             },
         ]
     )
-    dest = camp / "lore" / "entities.yaml"
-    _write_yaml(dest, {"entities": entities})
-    return ("lore/entities.yaml", "built", f"{len(entities)} entities")
+    pages = camp / "lore" / "entities"
+    pages.mkdir(parents=True, exist_ok=True)
+    for old in pages.glob("*.md"):
+        old.unlink()  # idempotent: every run rewrites its own outputs
+    used = set()  # casefold: Windows filenames are case-insensitive
+    for e in entities:
+        stem = _page_stem(e["name"]) or _slug(e["name"])
+        filename = stem + ".md"
+        while filename.casefold() in used:
+            filename = f"{filename[:-3]} (2).md"
+        used.add(filename.casefold())
+        meta = {k: e[k] for k in ("id", "kind", "name", "aliases") if e.get(k)}
+        front = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
+                               default_flow_style=False).strip()
+        (pages / filename).write_text(
+            f"---\n{front}\n---\n\n{e['note'].strip()}\n", encoding="utf-8")
+    return ("lore/entities/ (13 pages)", "built",
+            f"{len(entities)} entity pages")
 
 
 def build_style(camp, s):
@@ -605,7 +641,6 @@ def verify(root, camp):
         "campaign.yaml",
         "world/geography.yaml",
         "lore/timeline.yaml",
-        "lore/entities.yaml",
         "lore/style/names-shadian.txt",
         "lore/style/voice.md",
         "simulation/state.yaml",
@@ -614,6 +649,8 @@ def verify(root, camp):
     for rel in required:
         if not (camp / rel).is_file():
             errors.append(f"missing output: {rel}")
+    if not list((camp / "lore" / "entities").glob("*.md")):
+        errors.append("missing output: lore/entities/*.md")
     if not any((camp / "world").glob("source.*")):
         errors.append("missing output: world/source.<ext>")
     if not any((camp / "maps" / "cities" / "ruravaqan").glob("*.svg")):
@@ -702,10 +739,10 @@ def check(root):
         return sys.exit(1)
     n_yaml = verify(root, camp)
     tl = yaml.safe_load((camp / "lore" / "timeline.yaml").read_text("utf-8"))
-    ent = yaml.safe_load((camp / "lore" / "entities.yaml").read_text("utf-8"))
+    pages = list((camp / "lore" / "entities").glob("*.md"))
     print(f"check: {camp.relative_to(root)}")
     print(f"  timeline entries: {len(tl['entries'])}")
-    print(f"  entities: {len(ent['entities'])}")
+    print(f"  entity pages: {len(pages)}")
     print(f"  chronicles: {len(list((camp / 'simulation' / 'chronicle').glob('*.md')))}")
     print(f"  {n_yaml} .yaml files parsed clean")
     return 0

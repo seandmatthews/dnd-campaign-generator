@@ -33,7 +33,10 @@ def spine_root(monkeypatch):
 def tmp_spine_root(spine_root, monkeypatch, tmp_path):
     """A writable copy of the fixture tree (for tests that PUT/write)."""
     dest = tmp_path / "campaigns"
-    shutil.copytree(FIXTURES, dest)
+    # .git never copies: a stray repo inside the fixtures (or a future one)
+    # would make every snapshot in the copy a no-op ("nothing to commit")
+    shutil.copytree(FIXTURES, dest,
+                    ignore=shutil.ignore_patterns(".git"))
     monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", dest)
     return dest
 

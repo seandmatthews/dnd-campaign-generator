@@ -85,6 +85,10 @@ def _search_files(root: Path) -> list:
             kind = "pending" if p.name.startswith("pending-") else \
                 ("timeline" if p.name == "timeline.yaml" else "entities")
             add(f"lore/{p.name}", kind)
+        entities = lore / "entities"
+        if entities.is_dir():
+            for p in sorted(entities.glob("*.md")):
+                add(f"lore/entities/{p.name}", "entities")
         style = lore / "style"
         if style.is_dir():
             for p in sorted(style.iterdir()):

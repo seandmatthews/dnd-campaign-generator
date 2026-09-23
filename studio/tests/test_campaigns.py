@@ -26,7 +26,7 @@ def test_campaign_summary_shape(client, spine_root):
     assert burgs[0]["port"] is True
     assert burgs[0]["population"] == 12.3
     assert s["lore"]["timeline_entries"] == 2
-    assert s["lore"]["entities"] == 3  # top-level keys: people, factions, places
+    assert s["lore"]["entities"] == 4  # entity pages: 2 people, 1 faction, 1 place
     assert "voice.md" in s["lore"]["style_files"]
     assert s["simulation"]["clock"] == {"week": 3, "season": "early spring"}
     assert [f["id"] for f in s["simulation"]["factions"]] == ["wardens", "ferrymen"]

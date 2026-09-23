@@ -94,13 +94,16 @@ def test_sites_job_happy_path(client, tmp_spine_root, monkeypatch):
     assert result["slug"] == "marsh-camp"
     assert result["label"] == SITE
     base = "/campaign-file/testvale/maps/sites/marsh-camp/"
-    assert result["svg"] == base + "scene.svg"
-    assert result["png"] == base + "scene.png"
+    assert result["svg"] == base + "marsh-camp.svg"
+    assert result["png"] == base + "marsh-camp.png"
     assert result["uvtt"] == base + "marsh-camp.uvtt"
-    assert result["scene"] == base + "scene.json"
+    assert result["scene"] == base + "marsh-camp.json"
 
+    # vault-unique basenames (obsidian-integration.md §4): embeds resolve by
+    # filename, so scene.* ships as <slug>.*; params + companion note ride along
     dest = tmp_spine_root / "testvale" / "maps" / "sites" / "marsh-camp"
-    for name in ("scene.json", "scene.svg", "scene.png", "marsh-camp.uvtt"):
+    for name in ("marsh-camp.json", "marsh-camp.svg", "marsh-camp.png",
+                 "marsh-camp.uvtt", "params.yaml", "marsh-camp.md"):
         assert (dest / name).is_file(), name
     params = yaml.safe_load((dest / "params.yaml").read_text(encoding="utf-8"))
     assert params["name"] == SITE
@@ -108,6 +111,9 @@ def test_sites_job_happy_path(client, tmp_spine_root, monkeypatch):
     # the default seed is crc32(slug) % 10^7 — a derived artifact's seed,
     # recorded as provenance and passed to the engine
     assert params["seed"] == str(zlib.crc32(b"marsh-camp") % 10_000_000)
+    note = (dest / "marsh-camp.md").read_text(encoding="utf-8")
+    assert "![[marsh-camp.png]]" in note  # embed by vault-unique basename
+    assert "place:" not in note  # no place attached — the field was empty
 
     # the listing serves the new site
     m = client.get("/api/campaign/testvale/maps").json()

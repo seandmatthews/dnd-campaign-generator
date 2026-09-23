@@ -104,11 +104,16 @@ Skip to Step 4 (lore by hand) or Step 5; you can come back later.
 Still on Maps:
 
 - **Map a burg** — pick a town, click **Map it**. A street-level city map
-  appears in the *Cities* grid.
+  appears in the *Cities* grid. The **attach to place** field (it follows
+  the burg unless you edit it) links the map to that place's entity page —
+  "everything about this place" now includes the map.
 - **Battlemap scenes** — pick a kind (dungeon / cave / camp), give it a
-  name (e.g. "The Drowned Crypt"), click **Generate scene**. You get a
-  scene image plus a `.uvtt` file under `campaigns/<name>/maps/sites/…` —
-  drop that into Foundry VTT and walls, doors and lights come with it.
+  name (e.g. "The Drowned Crypt"), optionally attach it to a place, click
+  **Generate scene**. You get a scene image plus a `.uvtt` file under
+  `campaigns/<name>/maps/sites/…` — drop that into Foundry VTT and walls,
+  doors and lights come with it. Each map also gets a small companion note
+  (`<slug>.md`) embedding the image and linking its place; open the
+  campaign folder in Obsidian and the links are live.
 
 **You should see:** thumbnails in both grids; the files on disk under
 `campaigns/<name>/maps/`.
@@ -128,7 +133,16 @@ Now the LLM features (API key needed). On **World Building**:
 Open the **Review** tab. Everything staged is waiting there, with
 verification findings attached as advice. **Approve** writes an entry into
 the campaign's timeline; **Delete** discards it. Nothing has touched your
-campaign until you decide.
+campaign until you decide. Entities are markdown pages now
+(`lore/entities/One Page Per Entity.md`): click an entity in World
+Building to read it with its backlinks ("mentioned in"), and hand-edit the
+pages — or open the campaign folder in Obsidian and use wiki-links there.
+Dangling links are not errors: they appear in Review as findings, and the
+**Write the missing pages** card on World Building turns each one into a
+draft page grounded in the pages that mention it (you approve that too).
+When you approve generated lore, names it coined get small stub pages so
+the graph keeps up with the story — and every new week's chronicle is
+linkified, so an entity's backlinks show where it surfaced in the story.
 
 **You should see:** your approved entries in the Timeline panel of World
 Building, tagged with their source.
@@ -172,9 +186,11 @@ players never see the machinery; you harvest maps, lore and rumors from it.
     campaigns/<name>/
       campaign.yaml          # name, title, created
       world/                 # geography.yaml, the map generator's dump, map.svg
-      lore/                  # timeline.yaml, entities.yaml, style/voice.md
+      lore/                  # timeline.yaml, entities/ (one markdown page per
+                             # entity, wiki-linked), style/voice.md
       simulation/            # state.yaml (the sandbox), chronicle/*.md
-      maps/                  # cities/<slug>/, sites/<slug>/ (incl. Foundry .uvtt)
+      maps/                  # cities/<slug>/, sites/<slug>/ (incl. Foundry
+                             # .uvtt and each map's companion note <slug>.md)
 
 Every generation, approval and week auto-commits just that campaign folder
 to the campaigns workspace's own git repo — `git -C campaigns log -- <name>`

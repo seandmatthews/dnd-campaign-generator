@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 import canon
 import spine
-from routers.common import require_campaign
+from routers.common import ensure_entities_migrated, require_campaign
 
 router = APIRouter()
 
@@ -36,6 +36,7 @@ def create_campaign(body: NewCampaign):
 
 @router.get("/api/campaign/{name}")
 def campaign_summary(name: str):
+    ensure_entities_migrated(name)  # lazy legacy yaml -> pages, no-op when done
     try:
         return spine.summary(name)
     except spine.CampaignNotFound as e:

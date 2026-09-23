@@ -1,7 +1,10 @@
 """Lore tab API: reads, text-form writes, and M2 generation.
 
-PUT entities validates with yaml.safe_load before writing — YAML is the
-source of truth, the textarea is just a form over it. PUT style/{file} is
+Entities are vault pages now (obsidian-integration.md §1): GET lore returns
+the canonical page list, GET lore/pages/{page} serves one page with its
+computed backlinks. The old PUT entities (raw entities.yaml textarea) is
+gone — pages are hand-edited in Obsidian or created by migration/stubbing,
+and a PUT over them would be a form over the wrong file. PUT style/{file} is
 constrained to an already-existing [A-Za-z0-9._-] filename. Generation is
 fed or refused (guardrail 4): POST entries 422s without world/geography.yaml
 and otherwise runs as a job (the LLM call takes a minute), staging pending
@@ -14,9 +17,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 import canon
+import links
 import loregen
 import spine
-from routers.common import require_campaign, submit_campaign_job
+from routers.common import ensure_entities_migrated, require_campaign, submit_campaign_job
 from spine import CampaignError, CampaignExists, CampaignNotFound
 
 router = APIRouter()
@@ -35,6 +39,7 @@ class NameBody(BaseModel):
 @router.get("/api/campaign/{name}/lore")
 def get_lore(name: str):
     require_campaign(name)
+    ensure_entities_migrated(name)
     style = {}
     for fn in spine.style_files(name):
         style[fn] = spine.read_style(name, fn)
@@ -45,19 +50,58 @@ def get_lore(name: str):
     }
 
 
-@router.put("/api/campaign/{name}/lore/entities")
-def put_entities(name: str, body: TextBody):
+@router.get("/api/campaign/{name}/lore/pages/missing")
+def get_missing_pages(name: str):
+    """The stage-4 generation targets: dangling wiki-links grouped by name,
+    most-linked first. Empty list = nothing to write."""
     require_campaign(name)
-    try:
-        doc = yaml.safe_load(body.text)
-    except yaml.YAMLError as e:
-        raise HTTPException(status_code=422, detail=f"invalid YAML: {e}")
-    if not isinstance(doc, dict):
-        raise HTTPException(status_code=422,
-                            detail="entities.yaml must be a YAML mapping")
-    spine.write_entities(name, body.text)
-    canon.snapshot(name, f"campaign/{name}: update lore entities")
-    return {"ok": True}
+    return {"targets": links.missing_page_targets(name)}
+
+
+@router.post("/api/campaign/{name}/lore/pages/missing", status_code=202)
+def post_missing_pages(name: str, body: dict | None = None):
+    """Write the missing pages (fed-or-refused, vault stage 4): each dangling
+    wiki-link is a generation target grounded in the pages that link it.
+    Body {"targets"?: [str]} limits the run; a job stages
+    lore/pending-pages-N.yaml for review — nothing lands unreviewed."""
+    d = require_campaign(name)
+    targets = None
+    if isinstance(body, dict) and isinstance(body.get("targets"), list):
+        targets = [str(t) for t in body["targets"] if str(t).strip()]
+
+    def job(log):
+        result = loregen.generate_missing_pages(d, targets, log=log)
+        canon.snapshot(name,
+                       f"campaign/{name}: stage {result['pages']} pending "
+                       "lore pages")
+        return result
+
+    return submit_campaign_job("lore-missing-pages", name, job)
+
+
+@router.get("/api/campaign/{name}/lore/pages/{page}")
+def get_entity_page(name: str, page: str):
+    """One entity page + its backlinks (the 'everything about this' view).
+
+    {page} is the filename stem (display name, URL-encoded — routes never
+    pass it through a shell). Backlinks list chronicles and entities that
+    link here, computed server-side so Obsidian need not be open."""
+    require_campaign(name)
+    if not spine.valid_page_name(page or ""):
+        raise HTTPException(status_code=422, detail=f"invalid page name: {page!r}")
+    idx = links.build_index(name)
+    target = None
+    for p in idx["pages"]:
+        if p["source"] == "entity" and \
+                p["file"] == f"lore/entities/{page}.md":
+            target = p
+            break
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"no such entity page: {page}")
+    target = dict(target)
+    # the index is already built — pass it so backlinks need no second pass
+    target["backlinks"] = links.backlinks_for(name, target["file"], idx)
+    return target
 
 
 @router.put("/api/campaign/{name}/lore/style/{file}")

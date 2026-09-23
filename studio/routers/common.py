@@ -8,6 +8,7 @@ here is the whole story.
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
+import canon
 import jobs
 import spine
 
@@ -22,6 +23,36 @@ def require_campaign(name: str):
         raise HTTPException(status_code=404, detail=str(e))
     except spine.CampaignError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+def ensure_entities_migrated(name: str):
+    """Lazy one-time entities.yaml -> entity pages migration (vault §1),
+    called when a campaign is opened (summary) or its lore is read.
+
+    Runs under the campaign lock, non-blocking: while a job is mutating the
+    campaign the migration is skipped — the next open retries. Never raises;
+    a campaign that cannot migrate keeps reading its legacy yaml (the loader
+    is tolerant by design). Returns the page count, or None for nothing to
+    do / skipped."""
+    try:
+        if not (spine.campaign_dir(name) / "lore" / "entities.yaml").is_file():
+            return None
+    except spine.CampaignNotFound:
+        return None
+    lock = spine.campaign_lock(name)
+    if not lock.acquire(blocking=False):
+        return None
+    try:
+        written = spine.migrate_entities_yaml_to_pages(name)
+    except (spine.CampaignError, OSError):
+        return None
+    finally:
+        lock.release()
+    if written is not None:
+        canon.snapshot(
+            name, f"campaign/{name}: migrate entities.yaml to {written} "
+                  "entity pages")
+    return written
 
 
 def submit_campaign_job(kind: str, name: str, job):

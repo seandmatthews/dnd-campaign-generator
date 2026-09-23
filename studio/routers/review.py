@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 import canon
 import engines
+import links
 import spine
 from routers.common import require_campaign
 
@@ -44,6 +45,7 @@ _ENTRY_START_RE = re.compile(r"^- id:\s*(\S+)")
 
 CHECK_TIMEOUT_S = 60     # per check.py run
 FINDINGS_BUDGET_S = 1.5  # soft budget for all check.py runs in one GET
+VAULT_FINDINGS_CAP = 20  # dangling/collision rows shown per GET
 
 
 class ReviewBody(BaseModel):
@@ -239,9 +241,10 @@ def get_review(name: str):
                 if not isinstance(entry, dict):
                     continue
                 eid = str(entry.get("id"))
+                is_page = isinstance(entry.get("page"), dict)
                 items.append({
                     "id": eid,
-                    "kind": kind,
+                    "kind": "lore-page" if is_page else kind,
                     "source": str(entry.get("source") or "unknown"),
                     "title": str(entry.get("title") or "(untitled)"),
                     "body": str(entry.get("text") or ""),
@@ -263,6 +266,23 @@ def get_review(name: str):
     out = {"items": items, "files": files}
     if notes:
         out["notes"] = notes
+
+    # Vault findings (dangling wiki-links, name/alias collisions) join the
+    # queue as synthetic items — advisory, and capped so a hand-massacred
+    # vault cannot bury the pending entries under hundreds of rows.
+    try:
+        vault = links.findings(name)
+    except Exception as e:  # noqa: BLE001 — advisory, never blocking
+        notes.append(f"vault findings skipped: {e}")
+        vault = []
+    for f in vault[:VAULT_FINDINGS_CAP]:
+        item = _finding_item(f, "vault")
+        item["source"] = "links"
+        items.append(item)
+    if len(vault) > VAULT_FINDINGS_CAP:
+        notes.append(f"vault findings capped: {len(vault) - VAULT_FINDINGS_CAP} "
+                     "more not shown — fix the links, or run "
+                     "python studio/doctor.py for the full count")
     return out
 
 
@@ -358,6 +378,45 @@ def _rewrite_pending(path: Path, doc: dict, keep: list) -> None:
         path.unlink()
 
 
+def _approve_page_draft(d: Path, entry: dict) -> bool:
+    """Write one approved page draft into the vault (create-only). False
+    when a page of that name already exists — the hand page wins, the draft
+    is discarded."""
+    page = entry.get("page") or {}
+    try:
+        spine.write_entity_page(
+            d.name, str(entry.get("title") or ""),
+            {"kind": str(page.get("kind") or ""),
+             "name": str(entry.get("title") or ""),
+             "aliases": [str(a) for a in (page.get("aliases") or [])]},
+            str(entry.get("text") or ""))
+        return True
+    except (spine.CampaignError, OSError):
+        return False
+
+
+def _stub_new_names(name: str, entry: dict) -> int:
+    """Vault stage 4: approved entries stub their validated new_names as
+    pages (kind 'unknown') — the graph grows with the story instead of
+    lagging it. Create-only: an existing page is never clobbered."""
+    stubbed = 0
+    title = str(entry.get("title") or "")
+    when = str(entry.get("when") or "")
+    for new in entry.get("new_names") or []:
+        new = str(new).strip()
+        if not new:
+            continue
+        try:
+            spine.write_entity_page(
+                name, new, {"kind": "unknown", "name": new},
+                f"(Stub page — first named in '{title}' ({when}). Add lore "
+                "here, or in Obsidian.)")
+            stubbed += 1
+        except (spine.CampaignError, OSError):
+            continue
+    return stubbed
+
+
 @router.post("/api/campaign/{name}/review/approve")
 def post_approve(name: str, body: ReviewBody):
     d = require_campaign(name)
@@ -366,12 +425,32 @@ def post_approve(name: str, body: ReviewBody):
         doc = _load_pending(path, inside)
         chosen_idx = _select(doc, body)
         chosen = [dict(doc["entries"][k]) for k in chosen_idx]
-        _append_approved(d, chosen)
+        pages = [e for e in chosen if isinstance(e.get("page"), dict)]
+        entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
+        written, skipped = 0, 0
+        if pages:
+            for e in pages:
+                if _approve_page_draft(d, e):
+                    written += 1
+                else:
+                    skipped += 1
+        stubbed = 0
+        if entries:
+            _append_approved(d, entries)
+            for e in entries:
+                stubbed += _stub_new_names(name, e)
         keep = [e for k, e in enumerate(doc["entries"]) if k not in set(chosen_idx)]
         _rewrite_pending(path, doc, keep)
-        canon.snapshot(name,
-                       f"campaign/{name}: approve {len(chosen)} pending entries")
-        return {"approved": len(chosen)}
+        msg = f"campaign/{name}: approve {len(chosen)} pending entries"
+        if written or skipped:
+            msg += f" (+{written} page(s)" + (f", {skipped} skipped" if skipped else "") + ")"
+        elif stubbed:
+            msg += f" (+{stubbed} stub page(s))"
+        canon.snapshot(name, msg)
+        # "approved" counts everything chosen (entries + page drafts) so the
+        # pre-vault contract ("approved: N") still reads true
+        return {"approved": len(chosen), "entries": len(entries),
+                "pages": written, "pages_skipped": skipped, "stubs": stubbed}
 
 
 @router.post("/api/campaign/{name}/review/delete")

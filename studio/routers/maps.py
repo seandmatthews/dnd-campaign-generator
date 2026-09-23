@@ -41,6 +41,7 @@ from pydantic import BaseModel
 
 import canon
 import engines
+import links
 import spine
 import worldmap
 from routers.common import require_campaign, submit_campaign_job
@@ -63,12 +64,14 @@ _BAD_SITE_NAME = re.compile(r'[<>:"/\\|?*]')
 
 class CityBody(BaseModel):
     burg: str
+    place: str | None = None
 
 
 class SiteBody(BaseModel):
     kind: str
     name: str
     seed: str | None = None
+    place: str | None = None
 
 
 class WorldBody(BaseModel):
@@ -76,9 +79,95 @@ class WorldBody(BaseModel):
     force: bool = False
 
 
+def _place_link(raw: str | None) -> str | None:
+    """The attach-to-place form value -> a wiki-link target, or None when
+    empty. Stripped; anything else is the DM's display name verbatim."""
+    place = (raw or "").strip()
+    return place or None
+
+
+def _stub_place_page(name: str, place: str, log) -> None:
+    """Create the place's entity page as a stub when nothing resolves it —
+    mechanical metadata (the link target must exist in Obsidian), not
+    generated prose. Create-only; whatever exists is never clobbered."""
+    try:
+        known = {links.normalize_key(p["name"]) for p in spine.entity_pages(name)}
+    except spine.CampaignFileError:
+        return
+    if links.normalize_key(place) in known:
+        return
+    try:
+        spine.write_entity_page(
+            name, place,
+            {"kind": "place", "name": place},
+            "(Stub page — created when this place was mapped. Add lore "
+            "here, or in Obsidian.)")
+        log(f"stubbed place page: lore/entities/{place}.md")
+    except (spine.CampaignError, OSError) as e:
+        log(f"place stub skipped: {e}")
+
+
+def _companion_note(dest: Path, slug: str, front: dict, body: str) -> Path:
+    """The map's companion note (vault §4): generated with the artifact —
+    embed by vault-unique basename, frontmatter links, params summary.
+    Regenerated on re-map, like params.yaml; hand edits do not survive."""
+    meta = yaml.safe_dump(
+        {k: v for k, v in front.items() if v not in (None, "", [], {})},
+        sort_keys=False, allow_unicode=True, default_flow_style=False).strip()
+    text = (f"---\n{meta}\n---\n\n{body.strip()}\n" if meta
+            else f"{body.strip()}\n")
+    path = dest / f"{slug}.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def ensure_site_slugs(name: str):
+    """One-time mechanical rename (vault §4, load-bearing): site directories
+    used to carry identical basenames (scene.png, scene.svg, scene.json) —
+    Obsidian resolves embeds by filename, so every artifact becomes
+    <slug>.<ext> (cities already work this way). Idempotent, non-blocking
+    (skipped while a job holds the lock), never raises; snapshots a real
+    rename. params.yaml keeps its name — nobody embeds it."""
+    try:
+        d = spine.require_campaign(name)
+    except spine.CampaignError:
+        return None
+    sites = d / "maps" / "sites"
+    if not sites.is_dir():
+        return None
+    renames = []
+    for site in sorted(sites.iterdir()):
+        if not site.is_dir():
+            continue
+        for ext in ("png", "svg", "json"):
+            old, new = site / f"scene.{ext}", site / f"{site.name}.{ext}"
+            if old.is_file() and not new.exists():
+                renames.append((old, new))
+    if not renames:
+        return None
+    lock = spine.campaign_lock(name)
+    if not lock.acquire(blocking=False):
+        return None
+    done = 0
+    try:
+        for old, new in renames:
+            try:
+                old.rename(new)
+                done += 1
+            except OSError:
+                pass  # vanished mid-list (concurrent rename) — never a 500
+    finally:
+        lock.release()
+    if done:
+        canon.snapshot(name, f"campaign/{name}: slug site artifact basenames "
+                             f"({done} file(s) renamed for vault-unique embeds)")
+    return done
+
+
 @router.get("/api/campaign/{name}/maps")
 def get_maps(name: str):
     d = require_campaign(name)
+    ensure_site_slugs(name)  # lazy legacy scene.* -> <slug>.*, no-op when done
     return {
         "cities": [_entry(d, "cities", slug) for slug in spine.map_slugs(name, "cities")],
         "sites": [_entry(d, "sites", slug) for slug in spine.map_slugs(name, "sites")],
@@ -139,6 +228,12 @@ def post_city(name: str, body: CityBody):
                    "(Maps tab); a city map is generated from the world dump "
                    "or not at all (fed-or-refused)")
 
+    place = _place_link(body.place) or burg  # cities default to their burg
+    try:
+        spine.entity_page_filename(place)  # nameable before the job runs
+    except spine.CampaignError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
     def job(log):
         out = Path(tempfile.mkdtemp(prefix="studio-city-"))
         try:
@@ -161,6 +256,13 @@ def post_city(name: str, body: CityBody):
             svg = next((p for p in outputs if p.suffix == ".svg"), None)
             if svg is None:
                 raise RuntimeError("no .svg in gen-city output")
+            _stub_place_page(name, place, log)
+            note = _companion_note(
+                dest, slug,
+                {"kind": "city map", "place": f"[[{place}]]", "burg": burg},
+                f"![[{slug}.svg]]\n\nCity map of {place}, generated from the "
+                f"world dump ({source.name}) via settlemaker.")
+            log(f"companion note: maps/cities/{slug}/{note.name}")
             canon.snapshot(name, f"campaign/{name}: map city {slug}")
             return {"slug": slug,
                     "svg": f"/campaign-file/{name}/maps/cities/{slug}/{svg.name}"}
@@ -325,6 +427,12 @@ def post_site(name: str, body: SiteBody):
     seed = (body.seed or "").strip() or str(
         zlib.crc32(spine.slugify(site_name).encode("utf-8")) % 10_000_000)
     slug = spine.slugify(site_name)
+    place = _place_link(body.place)
+    if place:
+        try:
+            spine.entity_page_filename(place)  # nameable before the job runs
+        except spine.CampaignError as e:
+            raise HTTPException(status_code=422, detail=str(e))
 
     def job(log):
         rel = f"worlds/sites/{site_name}"
@@ -383,9 +491,14 @@ def post_site(name: str, body: SiteBody):
                     "scene pipeline did not produce: " + ", ".join(missing))
 
             dest = d / "maps" / "sites" / slug
-            for p in (scene, svg, png, uvtt):
-                engines.copy_file(p, dest / p.name)
+            # vault-unique basenames (§4): <slug>.png/.svg/.json — embeds
+            # resolve by filename, and every site used to collide on scene.*
+            # (the UVTT already ships as <slug>.uvtt)
+            for p in (scene, svg, png):
+                engines.copy_file(p, dest / f"{slug}{p.suffix}")
                 log(f"copied {p.name} -> maps/sites/{slug}/")
+            engines.copy_file(uvtt, dest / uvtt.name)
+            log(f"copied {uvtt.name} -> maps/sites/{slug}/")
         # provenance beside the artifact set, as cities do
         (dest / "params.yaml").write_text(yaml.safe_dump(
             {"name": site_name, "kind": kind, "seed": seed,
@@ -393,10 +506,19 @@ def post_site(name: str, body: SiteBody):
              "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
             sort_keys=False, allow_unicode=True), encoding="utf-8")
 
+        note = _companion_note(
+            dest, slug,
+            {"kind": f"{kind} battlemap", "place": f"[[{place}]]" if place else None,
+             "name": site_name, "seed": seed},
+            f"![[{slug}.png]]\n\n{site_name} — a {kind} scene (seed {seed}). "
+            f"The {uvtt.name} beside this note drops straight into Foundry "
+            "(walls, doors and lights live).")
+        log(f"companion note: maps/sites/{slug}/{note.name}")
+
         base = f"/campaign-file/{name}/maps/sites/{slug}/"
         canon.snapshot(name, f"campaign/{name}: map site {slug}")
         return {"slug": slug, "label": site_name,
-                "svg": base + svg.name, "png": base + png.name,
-                "uvtt": base + uvtt.name, "scene": base + "scene.json"}
+                "svg": base + f"{slug}.svg", "png": base + f"{slug}.png",
+                "uvtt": base + uvtt.name, "scene": base + f"{slug}.json"}
 
     return submit_campaign_job("map-site", name, job)

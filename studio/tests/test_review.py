@@ -116,7 +116,9 @@ def test_approve_assigns_next_free_tids_and_deletes_empty_pending(
     pending = tmp_spine_root / "testvale" / "simulation" / "pending-week-8.yaml"
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "simulation/pending-week-8.yaml", "all": True})
-    assert r.status_code == 200 and r.json() == {"approved": 2}
+    assert r.status_code == 200 and r.json() == {
+        "approved": 2, "entries": 2, "pages": 0, "pages_skipped": 0,
+        "stubs": 0}
     assert not pending.exists()
     entries = _timeline_entries(tmp_spine_root)
     assert [e["id"] for e in entries] == ["t0001", "t0002", "t0003", "t0004"]
@@ -139,7 +141,9 @@ def test_approve_keeps_t_ids_and_refuses_duplicates(client, tmp_spine_root):
     path.write_text(yaml.safe_dump(dup, sort_keys=False), encoding="utf-8")
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "lore/pending-entries-1.yaml", "all": True})
-    assert r.status_code == 200 and r.json() == {"approved": 1}
+    assert r.status_code == 200 and r.json() == {
+        "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
+        "stubs": 0}
     entries = _timeline_entries(tmp_spine_root)
     assert [e["id"] for e in entries] == ["t0001", "t0002", "t0005"]
     assert entries[2]["source"] == "authored"  # source kept

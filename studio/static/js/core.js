@@ -121,7 +121,11 @@
     return s
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+      .replace(/\*([^*\n]+)\*/g, '<em>$1</em>')
+      // vault wiki-links render as their display text here (the real links
+      // live in Obsidian; chronicles are linkified on write, vault §3)
+      .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
+      .replace(/\[\[([^\]]+)\]\]/g, '$1');
   }
 
   function mdRowCells(line) {

@@ -27,6 +27,7 @@ import re
 import yaml
 
 import engines
+import links
 import llm_client
 import spine
 
@@ -57,19 +58,19 @@ def style_texts(campaign_dir: pathlib.Path) -> dict:
     return {p.name: _read(p) for p in sorted(d.iterdir()) if p.is_file()}
 
 
-def _next_pending_path(campaign_dir: pathlib.Path) -> pathlib.Path:
-    """lore/pending-entries-N.yaml at the lowest free integer N."""
+def _next_pending_path(campaign_dir: pathlib.Path, kind: str = "entries") -> pathlib.Path:
+    """lore/pending-<kind>-N.yaml at the lowest free integer N."""
     lore = campaign_dir / "lore"
     used = set()
     if lore.is_dir():
-        for p in lore.glob("pending-entries-*.yaml"):
-            m = re.fullmatch(r"pending-entries-(\d+)\.yaml", p.name)
+        for p in lore.glob(f"pending-{kind}-*.yaml"):
+            m = re.fullmatch(rf"pending-{kind}-(\d+)\.yaml", p.name)
             if m:
                 used.add(int(m.group(1)))
     n = 1
     while n in used:
         n += 1
-    return lore / f"pending-entries-{n}.yaml"
+    return lore / f"pending-{kind}-{n}.yaml"
 
 
 def _next_entry_id(timeline_text: str) -> int:
@@ -90,6 +91,28 @@ _ETHOS = (
     "and voice excerpts. Slop is regression to the mean: no prophecies, no "
     "ancient evils, no tavern meetings, no \"little did they know\"."
 )
+
+
+def _entities_text(entities) -> str:
+    """The entity list as compact one-liners for the prompt (what the old
+    entities.yaml fed whole; now rendered from the canonical page list)."""
+    lines = []
+    for e in entities:
+        head = str(e.get("name") or "").strip()
+        if not head:
+            continue
+        kind = str(e.get("kind") or "").strip()
+        if kind:
+            head += f" ({kind})"
+        bits = [head]
+        aliases = [str(a) for a in (e.get("aliases") or []) if str(a).strip()]
+        if aliases:
+            bits.append("aliases: " + ", ".join(aliases))
+        note = str(e.get("note") or "").strip()
+        if note:
+            bits.append(note)
+        lines.append("- " + " — ".join(bits))
+    return "\n".join(lines)
 
 _ENTRY_SHAPE = """\
 - when: <when, in terms the timeline itself uses, e.g. "week 0" or "before week 1">
@@ -185,15 +208,14 @@ def _normalize(name: str) -> str:
     return re.sub(r"\s+", " ", low).strip()
 
 
-def _canon_names(geo_text, entities_text, styles):
+def _canon_names(geo_text, entities, styles):
     """Every name the spine already knows, normalized. Mechanical, not
-    clever: exact keys plus quoted/alias tokens from the YAML text."""
+    clever: exact keys plus quoted/alias tokens from the geography YAML, the
+    canonical entity list (pages), and the style name lists."""
     known = set()
-    for text in (geo_text, entities_text):
-        if not text:
-            continue
+    if geo_text:
         try:
-            doc = yaml.safe_load(text)
+            doc = yaml.safe_load(geo_text)
         except yaml.YAMLError:
             doc = None
         for m in re.finditer(r"\b([A-Z][A-Za-z0-9'’-]*(?:\s+[A-Z][A-Za-z0-9'’-]*)*)\b",
@@ -201,6 +223,11 @@ def _canon_names(geo_text, entities_text, styles):
             for piece in _split_particles(m.group(1)):
                 known.add(_normalize(piece))
             known.add(_normalize(m.group(1)))
+    for m in re.finditer(r"\b([A-Z][A-Za-z0-9'’-]*(?:\s+[A-Z][A-Za-z0-9'’-]*)*)\b",
+                         _yaml_string_values(list(entities))):
+        for piece in _split_particles(m.group(1)):
+            known.add(_normalize(piece))
+        known.add(_normalize(m.group(1)))
     for fn, text in styles.items():
         if fn.startswith("names-"):
             for line in text.splitlines():
@@ -366,10 +393,11 @@ def generate_entries(campaign_dir, focus="", log=None):
     log(f"fed: world/geography.yaml ({len(geo_text.splitlines())} lines)")
 
     timeline_text = _read(campaign_dir / "lore" / "timeline.yaml")
-    entities_text = _read(campaign_dir / "lore" / "entities.yaml")
+    entities = spine.load_entities(campaign_dir.name)
+    entities_text = _entities_text(entities)
     styles = style_texts(campaign_dir)
     log(f"fed: timeline ({len(timeline_text.splitlines())} lines), "
-        f"entities, style files {sorted(styles)}")
+        f"entities ({len(entities)} pages), style files {sorted(styles)}")
 
     prompt = _entries_prompt(geo_text, timeline_text, entities_text,
                              styles, (focus or "").strip())
@@ -383,18 +411,19 @@ def generate_entries(campaign_dir, focus="", log=None):
     raw_entries = _entries_from_doc(doc)
     log(f"model returned {len(raw_entries)} candidate entries")
 
-    known = _canon_names(geo_text, entities_text, styles)
+    known = _canon_names(geo_text, entities, styles)
     kept, findings = _validate_entries(raw_entries, known)
     if not kept:
         raise RuntimeError(
             "every returned entry failed validation (see findings in the log)")
 
     # ids continue the timeline sequence; source stays "authored" — the DM's
-    # approval (M4) is what makes generated lore canon.
+    # approval (M4) is what makes generated lore canon. new_names ride along
+    # so the approver can stub their pages (vault stage 4).
     next_id = _next_entry_id(timeline_text)
     entries = [{"id": f"t{next_id + i:04d}", "when": e["when"],
                 "title": e["title"], "text": e["text"],
-                "source": "authored"}
+                "source": "authored", "new_names": e["new_names"]}
                for i, e in enumerate(kept[:6])]
 
     pending_path = _next_pending_path(campaign_dir)
@@ -424,6 +453,178 @@ def generate_entries(campaign_dir, focus="", log=None):
     log(f"done: {len(entries)} entries, {len(findings)} findings")
 
     return {"pending": pending_name, "entries": len(entries),
+            "findings": findings}
+
+
+# --------------------------------------------------- the missing-page writer
+
+def _pages_prompt(target_blocks, styles):
+    voice = styles.get("voice.md") or "(no voice.md — match the pages' tone)"
+    name_lists = "\n\n".join(
+        f"--- {fn} ---\n{text}" for fn, text in styles.items()
+        if fn.startswith("names-"))
+    if not name_lists:
+        name_lists = "(no culture name lists staged)"
+    return f"""You are the chronicler of this campaign. The lore contains dangling
+wiki-links: names mentioned on real pages that have no page of their own.
+Write the missing pages.
+
+{_ETHOS}
+
+YOU ARE FED THE PAGES THAT MENTION EACH MISSING NAME (their text is the ONLY
+grounding — read them whole):
+
+{target_blocks}
+
+VOICE EXCERPTS (the tone is defined by these, not by volume of text):
+{voice}
+
+CULTURE NAME LISTS (seed names; any new name must be built from these phonetics):
+{name_lists}
+
+TASK: write ONE short page per missing name fed above, grounded only in what
+those pages say. Each page matches this shape:
+
+- name: <the missing name, exactly as linked>
+  kind: <freeform — person, place, thing, faction…>
+  aliases: [<other spellings the pages use>]
+  body: <ONE to THREE sentences, past tense, dry and concrete>
+  new_names: [<names coined for this page that appear in none of the files above>]
+
+Reply with the YAML block ONLY."""
+
+
+def _missing_page_findings(raw_pages, groups, known):
+    """Shape-check, target-match, and hallucination-check page drafts;
+    return (kept, findings). The name MUST be one of the requested dangling
+    targets — a draft for anything else is dropped, not renamed."""
+    kept, findings = [], []
+    seen = set()
+    for i, p in enumerate(raw_pages):
+        where = f"page draft {i + 1}"
+        if not isinstance(p, dict):
+            findings.append(_finding(
+                "loregen/page-shape", "warning", str(p)[:80],
+                f"{where}: not a mapping — dropped"))
+            continue
+        name = str(p.get("name") or "").strip()
+        body = str(p.get("body") or "").strip()
+        if not (name and body):
+            findings.append(_finding(
+                "loregen/page-shape", "warning", name or where,
+                f"{where}: missing name/body — dropped"))
+            continue
+        norm = links.normalize_key(name)
+        if norm not in groups:
+            findings.append(_finding(
+                "loregen/page-target", "warning", name,
+                f"{where}: {name!r} is not one of the dangling links — dropped"))
+            continue
+        if norm in seen:
+            continue  # duplicate draft for the same target: first wins
+        bad = _hallucinated_names({"title": name, "text": body,
+                                   "new_names": p.get("new_names")}, known)
+        if bad:
+            findings.append(_finding(
+                "loregen/hallucinated-name", "error", name,
+                f"{where}: names not grounded in the linking pages/new_names: "
+                f"{', '.join(bad)} — dropped"))
+            continue
+        seen.add(norm)
+        aliases = [str(a) for a in (p.get("aliases") or [])
+                   if isinstance(a, str) and a.strip()]
+        kept.append({"name": name, "kind": str(p.get("kind") or "").strip(),
+                     "aliases": aliases, "body": body,
+                     "new_names": [str(n) for n in (p.get("new_names") or [])
+                                   if isinstance(n, str)]})
+    return kept, findings
+
+
+def generate_missing_pages(campaign_dir, targets=None, log=None):
+    """Vault stage 4: dangling wiki-links become fed-or-refused generation
+    prompts (obsidian-integration.md §3). The grounding is already present —
+    the pages that link the missing name — so the prompt is fed those pages
+    whole. Drafts stage to lore/pending-pages-N.yaml; nothing lands
+    unreviewed. Raises FedOrRefused when there are no dangling links (or
+    none of the requested targets is one)."""
+    campaign_dir = pathlib.Path(campaign_dir)
+    log = log or (lambda line: None)
+    cname = campaign_dir.name
+
+    groups = {}
+    for t in links.missing_page_targets(cname):
+        groups[links.normalize_key(t["target"])] = t
+    if not groups:
+        raise FedOrRefused(
+            "no dangling wiki-links in the lore — nothing to write "
+            "(fed-or-refused). Type [[Something New]] on an entity page "
+            "(or in Obsidian) and it becomes a generation target")
+    if targets:
+        wanted = [links.normalize_key(t) for t in targets
+                  if links.normalize_key(t) in groups]
+        if not wanted:
+            raise FedOrRefused(
+                "none of the requested targets is a dangling link — the "
+                "missing-page list may have changed; refresh and retry")
+        groups = {k: groups[k] for k in wanted}
+    chosen = list(groups.values())[:6]  # the most-linked first
+
+    blocks = []
+    for t in chosen:
+        parts = [f"[[{t['target']}]] is mentioned on: "
+                 f"{', '.join(t['sources'])}"]
+        for rel in t["sources"]:
+            text = _read(campaign_dir / rel)[:2400]
+            parts.append(f"--- {rel} ---\n{text}")
+        blocks.append("\n".join(parts))
+    target_blocks = "\n\n".join(blocks)
+    styles = style_texts(campaign_dir)
+    entities = spine.load_entities(cname)
+    log(f"fed: {len(chosen)} dangling link(s) with their linking pages")
+
+    prompt = _pages_prompt(target_blocks, styles)
+    log("asking the model for the missing pages ...")
+    raw = llm_client.complete(prompt)
+
+    try:
+        doc = _extract_yaml(raw)
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"could not parse LLM output as YAML: {e}")
+    raw_pages = doc if isinstance(doc, list) else []
+
+    known = _canon_names(_read(campaign_dir / "world" / "geography.yaml"),
+                         entities, styles)
+    kept, findings = _missing_page_findings(raw_pages, groups, known)
+    if not kept:
+        raise RuntimeError(
+            "every returned page draft failed validation (see findings)")
+
+    pending_path = _next_pending_path(campaign_dir, kind="pages")
+    created = datetime.datetime.now(datetime.timezone.utc).isoformat(
+        timespec="seconds")
+    entries = [{"id": f"page-{i + 1}", "title": p["name"],
+                "text": p["body"], "source": "authored",
+                "page": {"kind": p["kind"], "aliases": p["aliases"]},
+                "new_names": p["new_names"]}
+               for i, p in enumerate(kept)]
+    spine.write_text_atomic(
+        pending_path,
+        yaml.safe_dump({"entries": entries, "created": created,
+                        "mode": "missing-pages"},
+                       sort_keys=False, allow_unicode=True, width=100))
+    pending_name = f"lore/{pending_path.name}"
+    log(f"staged {len(entries)} page drafts to {pending_name} — nothing "
+        "lands until approval in the Review tab")
+
+    pages_yaml = yaml.safe_dump(entries, sort_keys=False, allow_unicode=True)
+    state_text = "KNOWN ENTITIES:\n" + _entities_text(entities)
+    log("structural check (verification/check.py) ...")
+    findings.extend(_structural_findings(pending_path, log))
+    log("canon-audit pass (one LLM pass, advisory) ...")
+    findings.extend(_canon_findings(pages_yaml, state_text,
+                                    pending_name, log))
+    log(f"done: {len(entries)} page drafts, {len(findings)} findings")
+    return {"pending": pending_name, "pages": len(entries),
             "findings": findings}
 
 

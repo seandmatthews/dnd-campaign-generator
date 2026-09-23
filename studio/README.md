@@ -112,30 +112,45 @@ Work through the app, or copy the state back into the campaign yourself.
 
 - **Maps** — generate a world from a seed, map a burg (a town on the world
   map) into a city, roll a battlemap scene (dungeon / cave / camp) with a
-  Foundry UVTT.
+  Foundry UVTT. Both forms take an optional **attach to place** — the map's
+  companion note (`<slug>.md` beside the images) wiki-links the place, and
+  city maps stub their burg's page when it doesn't exist yet.
 - **World Building** — the campaign's grounding: geography, timeline,
-  entities, naming voice. Generates backstory entries that are constrained
-  to those files, staged as *pending* lore. Missing a culture's name seed
-  list? The name helper offers to stage one from the page.
+  entities, naming voice. Entities are markdown pages
+  (`lore/entities/One Page Per Entity.md`, wiki-links as relationships —
+  obsidian-integration.md §1); click a row to read the page with its
+  backlinks ("mentioned in"). Generates backstory entries that are
+  constrained to those files, staged as *pending* lore. Missing a culture's
+  name seed list? The name helper offers to stage one from the page.
+  Dangling wiki-links get their own card: *Write the missing pages* turns
+  each one into an LLM draft grounded in the linking pages, staged to
+  Review like everything else.
 - **Agent Simulation** — the faction sandbox: create it right on the tab
   (premise + 2-5 factions, no LLM involved — it writes
   `simulation/state.yaml`), then fog-of-war views, live weeks on dice
-  (costs API credits), chronicles, why-chains, rumor spread. A finished
-  week proposes timeline entries, also pending.
+  (costs API credits), chronicles, why-chains, rumor spread. New
+  chronicles are linkified on copy-in: the first mention of each known
+  name becomes a wiki-link, so backlinks answer "where did this faction
+  show up in the story". A finished week proposes timeline entries, also
+  pending.
 - **Review** — one queue for everything awaiting your decision: pending
-  lore, pending week events, verification findings inline. Approve writes
-  into the timeline; delete discards.
+  lore, pending page drafts, pending week events, verification findings
+  inline — plus the vault's own advisory findings (dangling wiki-links,
+  name/alias collisions). Approve writes into the timeline (and stubs the
+  entry's new names as pages); delete discards.
 
 The header's search box greps the selected campaign — chronicles, timeline,
-entities, style files, geography, pending queue, `campaign.yaml` — one
+entity pages, style files, geography, pending queue, `campaign.yaml` — one
 case-insensitive line match per hit, capped at 50. Enter runs it, Esc or
 the X dismisses it.
 
 ## Where campaigns live
 
 `<checkout>/campaigns/<name>/` — one folder per campaign: `campaign.yaml`,
-`world/`, `lore/`, `simulation/`, `maps/`. Portable by zip; a new machine
-needs the parent folder, Python, and the pip line above.
+`world/`, `lore/` (timeline, `entities/` pages, style), `simulation/`,
+`maps/`. Portable by zip; a new machine needs the parent folder, Python,
+and the pip line above. Opening a campaign whose lore still lives in the
+old `lore/entities.yaml` migrates it to pages once, automatically.
 `python studio/assemble.py` builds the sample Ruravaqan campaign from the
 engines' own artifacts.
 

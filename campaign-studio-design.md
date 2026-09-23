@@ -47,8 +47,9 @@ campaigns/<name>/
   lore/
     timeline.yaml          ordered entries: {id, when, title, text,
                            source: authored | sim:week-N | session}
-    entities.yaml          people, factions, deities, places — one-liners
-                           + aliases (the retrieval store, such as it is)
+    entities/              one markdown page per entity (obsidian-
+                           integration.md §1): frontmatter id/kind/name/
+                           aliases + body; wiki-links are relationships
     style/
       names-<culture>.txt  canonical name lists per culture
       voice.md             excerpts that DEFINE the tone; the anti-mean device
@@ -57,7 +58,8 @@ campaigns/<name>/
     chronicle/             weekly chronicle files (as today)
   maps/
     cities/<slug>/         settlemaker outputs: svg, geojson, params.yaml
-    sites/<slug>/          battlemap scenes: scene.json, svg, png, .uvtt
+    sites/<slug>/          battlemap scenes: <slug>.json/svg/png, .uvtt
+                           (+ companion note <slug>.md — vault §4)
 ```
 
 Design notes:
@@ -65,10 +67,12 @@ Design notes:
 - **`lore/style/voice.md` is the anti-slop device for naming.** New names
   are generated with the name lists + voice excerpts in the prompt. This is
   a soft guarantee ("in-voice"), never a hard one — say so in the UI.
-- **`entities.yaml` is the retrieval store.** At one-campaign scale we load
-  it whole into prompts. No vector DB, deliberately (infinite-dm §3
-  non-goals). If it ever grows past a few hundred lines, that is a later
-  problem with a later design.
+- **The entity pages are the retrieval store.** Since the vault stages
+  (obsidian-integration.md §1) `spine.load_entities()` parses
+  `lore/entities/*.md` into the same dicts and loregen feeds them whole into
+  prompts — no vector DB, deliberately (infinite-dm §3 non-goals). If lore
+  ever grows past a few hundred pages, that is a later problem with a later
+  design.
 - **`timeline.yaml` entries carry `source`.** Provenance per entry: authored
   (the DM wrote it), session (ingested from real play), or sim:week-N
   (emerged from the agents). The chronicle-to-lore loop (M3) writes
@@ -84,7 +88,7 @@ The three flows, stated as reads against the spine:
 |---|---|---|---|
 | generate backstory | `world/geography.yaml` (nations, towns, populations — the logistics grounding) + `lore/timeline.yaml` | LLM prompt constrained to those files | `lore/timeline.yaml` (pending, DM-approved) |
 | flesh out a town | burg record + road bearings from `world/source.*`; `lore/style/` for naming voice | headless FMG dump → settlemaker (generalized) | `maps/cities/<slug>/` |
-| run the agentic sim | `simulation/state.yaml` + `lore/entities.yaml` + place names | tick --live (scheduler, consistency, rumors, dice) | `simulation/chronicle/`, `state.yaml`, `state["rumors"]` |
+| run the agentic sim | `simulation/state.yaml` + `lore/entities/` pages + place names | tick --live (scheduler, consistency, rumors, dice) | `simulation/chronicle/`, `state.yaml`, `state["rumors"]` |
 | approve a week's history | chronicle delta + `why` causal chains | human decision | `lore/timeline.yaml` entries, `source: sim:week-N` |
 
 Note the symmetry in the last row: the Agents tab *reads* lore for naming
@@ -238,7 +242,7 @@ prompt against `names-<culture>.txt` size — with ~50–100 canon names the
 phonetics carry; with 10 they will not.
 
 **Verify:** generate a backstory entry for a region with no authored lore;
-every place/name it mentions exists in `geography.yaml` or `entities.yaml`
+every place/name it mentions exists in `geography.yaml` or the entity pages
 (the canon-audit prompt from `verification/prompts/` checks this
 mechanically — dogfood it); generated names read in-voice to the DM's ear.
 

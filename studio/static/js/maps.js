@@ -72,13 +72,20 @@
         '<form class="inline-form">' +
           '<label class="field"><span class="field-label">Burg</span>' +
             '<select class="input burg-select"></select></label>' +
+          '<label class="field"><span class="field-label">Attach to place</span>' +
+            '<input type="text" class="input burg-place" ' +
+              'placeholder="entity page the city map belongs to"></label>' +
           '<button type="submit" class="btn btn-primary">Map it</button>' +
         '</form>' +
+        '<p class="muted form-note">The place defaults to the burg itself; edit it to ' +
+          'attach the map to another entity page. The map&rsquo;s companion note ' +
+          'links the two (&ldquo;everything about this place&rdquo; finds it).</p>' +
         '<pre class="log-tail hidden"></pre>' +
         '<div class="form-error"></div>' +
       '</div>'
     );
     const select = wrap.querySelector('.burg-select');
+    const placeIn = wrap.querySelector('.burg-place');
     const sorted = burgs.slice().sort((a, b) =>
       String(a.name || '').localeCompare(String(b.name || '')));
     sorted.forEach((b) => {
@@ -95,6 +102,14 @@
       );
       select.appendChild(opt);
     });
+    // the place follows the burg until the DM types their own
+    let placeDirty = false;
+    const syncPlace = () => {
+      if (!placeDirty) placeIn.value = select.value || '';
+    };
+    select.addEventListener('change', syncPlace);
+    placeIn.addEventListener('input', () => { placeDirty = true; });
+    syncPlace();
 
     const form = wrap.querySelector('form');
     const btn = form.querySelector('button[type="submit"]');
@@ -108,8 +123,12 @@
       btn.disabled = true;
       errBox.innerHTML = '';
       log.open();
+      const place = placeIn.value.trim();
       (async () => {
-        const resp = await S.api(S.campUrl('/maps/cities'), { method: 'POST', body: { burg: burg } });
+        const resp = await S.api(S.campUrl('/maps/cities'), {
+          method: 'POST',
+          body: place ? { burg: burg, place: place } : { burg: burg }
+        });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
         const result = await S.pollJob(resp.job_id, (line) => log.push(line));
         S.toast('City map ready: ' + ((result && result.slug) ? result.slug : burg), 'ok');
@@ -137,6 +156,9 @@
             '</select></label>' +
           '<label class="field"><span class="field-label">Name</span>' +
             '<input type="text" class="input site-name" placeholder="e.g. The Drowned Crypt"></label>' +
+          '<label class="field"><span class="field-label">Attach to place (optional)</span>' +
+            '<input type="text" class="input site-place" ' +
+              'placeholder="e.g. the Docks — a new name becomes a dangling link"></label>' +
           '<button type="submit" class="btn btn-primary">Generate scene</button>' +
         '</form>' +
         '<p class="muted form-note">battlemap gen &rarr; render &rarr; PNG (sharp) &rarr; UVTT wrap. The .uvtt drops straight into Foundry (walls, doors and lights live).</p>' +
@@ -193,10 +215,12 @@
       btn.disabled = true;
       errBox.innerHTML = '';
       log.open();
+      const place = wrap.querySelector('.site-place').value.trim();
       (async () => {
         const resp = await S.api(S.campUrl('/maps/sites'), {
           method: 'POST',
-          body: { kind: kind, name: nm }
+          body: place ? { kind: kind, name: nm, place: place }
+                      : { kind: kind, name: nm }
         });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
         const result = await S.pollJob(resp.job_id, (line) => log.push(line));

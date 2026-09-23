@@ -93,25 +93,33 @@ shapes in this document true.
 - `GET /api/campaign/{name}/geography` → full `world/geography.yaml` as JSON
   (World tab logistics grounding; burg pickers read this).
 
-### Maps (B stub → G, M1)
+### Maps (B stub → G, M1; vault stage 3)
 - `GET /api/campaign/{name}/maps` → `{"cities":[{"slug","label","svg","params","geojson"}],"sites":[…]}`;
-  file URLs are `/campaign-file/<name>/maps/...`.
-- `POST /api/campaign/{name}/maps/cities` `{"burg": str}` → job.
-  Takes the campaign lock (**409 busy**, see hardening above); on success
+  file URLs are `/campaign-file/<name>/maps/...`. The GET first performs the
+  lazy site-slug migration: legacy `scene.png/svg/json` basenames are renamed
+  to `<slug>.<ext>` (Obsidian resolves embeds by filename), snapshot
+  `campaign/<name>: slug site artifact basenames (...)`.
+- `POST /api/campaign/{name}/maps/cities` `{"burg": str, "place"?: str}` → job.
+  `place` defaults to the burg. Takes the campaign lock (**409 busy**, see
+  hardening above); on success copies outputs → `maps/cities/<slug>/`, writes
+  the companion note `<slug>.md` (embed + `place:` wiki-link + provenance),
+  stubs the place's entity page (`kind: place`) when no page resolves it, and
   commits snapshot `campaign/<name>: map city <slug>`.
   Engine: `node scripts/gen-city.mjs --world <path inside campaign world/> --burg "<name>" --out <tmp>`
   with `cwd=dnd-mapping`; copy outputs → `maps/cities/<slug>/`.
   Result `{"slug","svg":url}`. `--world` accepts anything import_fmg.py
   accepts (full JSON export, headless dump, or .map save) — a campaign's
   `world/source.json` qualifies.
-- `POST /api/campaign/{name}/maps/sites` `{"kind":"dungeon|cave|camp","name":str,"seed"?:str}` → job.
+- `POST /api/campaign/{name}/maps/sites` `{"kind":"dungeon|cave|camp","name":str,"seed"?:str,"place"?:str}` → job.
   Engine chain (cwd=dnd-mapping, list-form args): `python -X utf8
   src/battlemap.py gen-<kind> --seed <seed> --name "<name>"` →
   `... render --dir worlds/sites/<name>` →
   `node scripts/render-scene-png.mjs worlds/sites/<name>` (sharp) →
   `... wrap --dir worlds/sites/<name>`; artifact set
-  {scene.json, scene.svg, scene.png, <slug>.uvtt} copied →
-  `maps/sites/<slug>/` (+ a provenance `params.yaml` with name/kind/seed).
+  {<slug>.json, <slug>.svg, <slug>.png, <slug>.uvtt} copied →
+  `maps/sites/<slug>/` (+ a provenance `params.yaml` and the companion note
+  `<slug>.md`; an optional `place` becomes the note's `place:` wiki-link —
+  a name with no page stays dangling, which the review queue reports).
   Takes the campaign lock (**409 busy**); on success commits snapshot
   `campaign/<name>: map site <slug>`.
   `seed` defaults to crc32(slug) % 10^7 (recorded in params.yaml — every
@@ -146,12 +154,38 @@ shapes in this document true.
   from the dump's own polygons (mode `schematic-render`). 422 if the
   campaign has no `world/source.*`. Result `{"svg":url,"mode":str}`.
 
-### Lore (B reads → F, M2)
-- `GET /api/campaign/{name}/lore` → `{"timeline":[entries],"entities":{...},
-  "style":{"names-shadian.txt":str,"voice.md":str}}`
-- `PUT /api/campaign/{name}/lore/entities` `{"text": "<yaml>"}` → validate
-  `yaml.safe_load`, write file, `{"ok":true}`; commits snapshot
-  `campaign/<name>: update lore entities`.
+### Lore (B reads → F, M2; vault stages 1–3)
+- `GET /api/campaign/{name}/lore` → `{"timeline":[entries],
+  "entities":[entity pages],"style":{"names-shadian.txt":str,"voice.md":str}}`.
+  Entities are the canonical vault pages (`lore/entities/*.md`) as
+  `{id?,kind,name,aliases,note,body?,file}` — one markdown page per entity,
+  frontmatter carrying the fields the old `entities.yaml` had. A legacy
+  `entities.yaml` still reads; the first open of the campaign (summary or
+  lore GET) migrates it to pages and deletes it, under the campaign lock,
+  with snapshot `campaign/<name>: migrate entities.yaml to N entity pages`.
+- `GET /api/campaign/{name}/lore/pages/missing` → `{"targets":[{"target":str,
+  "sources":[campaign-relative files]}]}` — the dangling wiki-links grouped
+  by name, most-linked first. Empty list = nothing to write. (Declared
+  before the `{page}` route: "missing" is not a page stem.)
+- `POST /api/campaign/{name}/lore/pages/missing` `{"targets"?: [str]}` → job
+  (fed-or-refused, vault stage 4): each dangling link is a generation target
+  whose grounding is the pages that link it — those pages are fed whole.
+  **422-equivalent refusal (job error) when there are no dangling links** or
+  none of the requested targets is one. Drafts stage to
+  `lore/pending-pages-N.yaml` (entry shape below) and the run attaches
+  structural + canon-audit findings; commits snapshot
+  `campaign/<name>: stage N pending lore pages`.
+  Result `{"pending":str,"pages":n,"findings":[…]}`.
+- `GET /api/campaign/{name}/lore/pages/{page}` → one entity page plus its
+  computed backlinks: `{id?,kind,name,aliases,note,body,file,
+  "backlinks":[{"source_file","source_kind":"entity|chronicle|map",
+  "source_name","line","target"}]}`. `{page}` is the filename stem
+  (display name, URL-encoded). 404 for an unknown page; 422 for a
+  non-page-shaped name. Backlink sources: entity pages, chronicles, and
+  the maps' companion notes.
+- `PUT /api/campaign/{name}/lore/entities` — RETIRED with `entities.yaml`
+  (405): pages are hand-edited in Obsidian, or created by migration/stubbing,
+  and a form over the wrong file would be a lie.
 - `PUT /api/campaign/{name}/lore/style/{file}` `{"text":str}` → write (filename
   constrained to `[A-Za-z0-9._-]`, must exist already); commits snapshot
   `campaign/<name>: update style/<file>`.
@@ -223,25 +257,35 @@ shapes in this document true.
   Passthrough `{"week","faction","lines":[str]}` — lines render as an indented
   causal chain.
 
-### Review (B stub → H, M4)
+### Review (B stub → H, M4; vault stage 4)
 - `GET /api/campaign/{name}/review` → `{"items":[{"id","kind":
-  "lore-entry|timeline-approval|finding","source","title","body","findings":[…],"file"}]}`
-  — the union of `lore/pending-*.yaml`, `simulation/pending-week-*.yaml`, and
-  verification `findings.json` if present.
+  "lore-entry|lore-page|timeline-approval|finding","source","title","body",
+  "findings":[…],"file"}]}` — the union of `lore/pending-*.yaml`,
+  `simulation/pending-week-*.yaml`, and verification `findings.json` if
+  present, PLUS the vault's own advisory findings (`source: "links"`):
+  dangling wiki-links and name/alias collisions across entity pages,
+  chronicles, and companion notes — capped at 20 per GET, with a note when
+  more exist. Pending entries carrying a `page` payload surface as
+  `kind: "lore-page"` (the missing-page drafts).
 - `POST /api/campaign/{name}/review/approve` `{"file":str,"ids":[str]}` or
-  `{"file":str,"all":true}` → append approved entries into `lore/timeline.yaml`
-  (entries keep their `source`), remove from pending → `{"approved":n}`.
-  Takes the shared campaign lock **blocking** (waits for an in-flight
-  week/generation job), then commits snapshot
-  `campaign/<name>: approve N pending entries`.
+  `{"file":str,"all":true}` → entries append into `lore/timeline.yaml`
+  (entries keep their `source`); page drafts write into
+  `lore/entities/<Title>.md` (create-only — an existing page wins and the
+  draft is discarded, counted in `pages_skipped`); approved entries'
+  validated `new_names` are stubbed as pages (`kind: unknown`) so the graph
+  grows with the story → `{"approved":n,"entries":n,"pages":n,
+  "pages_skipped":n,"stubs":n}`. Takes the shared campaign lock
+  **blocking** (waits for an in-flight week/generation job), then commits
+  snapshot `campaign/<name>: approve N pending entries (+K page(s)/stub
+  page(s))`.
 - `POST /api/campaign/{name}/review/delete` same body → `{"deleted":n}`;
   same lock, snapshot `campaign/<name>: delete N pending entries`.
 
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive
   substring grep over the campaign's text files: `lore/*.yaml`,
-  `lore/style/*`, `simulation/chronicle/*.md`, `simulation/pending-*.yaml`,
-  `world/geography.yaml`, `campaign.yaml`. →
+  `lore/entities/*.md`, `lore/style/*`, `simulation/chronicle/*.md`,
+  `simulation/pending-*.yaml`, `world/geography.yaml`, `campaign.yaml`. →
   `{"q": str, "results": [{"file": campaign-relative posix path,
   "kind": "chronicle|timeline|entities|style|geography|pending|campaign",
   "line": n, "text": str (trimmed to ~200 chars), "context": str}]}`
@@ -258,8 +302,9 @@ shapes in this document true.
   or a crashed one has not been restored by the boot hook yet).
 - `GET /api/doctor` → the full `doctor.py` JSON (key diagnosis, tool-tree
   health, the `week run` check reports an in-progress/interrupted week
-  (`agentic-simulator/world/.week-run-flag`); it is informational, not
-  required. `doctor.py --fix` (CLI only, not an API) performs the safe
+  (`agentic-simulator/world/.week-run-flag`); the `vault links` check counts
+  dangling wiki-links and name/alias collisions across campaigns — advisory,
+  never required. `doctor.py --fix` (CLI only, not an API) performs the safe
   repairs: `CI=true pnpm install --offline` in a broken tool tree, and
   `pip install -r studio/requirements.txt`.
 - `GET /api/doctor?quick=1` → same shape, but the LLM key check is
@@ -272,6 +317,10 @@ shapes in this document true.
 ### Shared file shapes
 Timeline entry: `{"id","when","title","text","source"}` with
 `source ∈ {authored, session, sim:week-N}`; ids `t0001`… increasing.
+Entity page `lore/entities/<Display Name>.md`: YAML frontmatter
+(`id?/kind/name/aliases`) + markdown body; the first body paragraph is the
+`note` the loaders return. Wiki-links (`[[Name]]`, `[[target|display]]`)
+are the relationship model — dangling ones are findings, never errors.
 Pending lore file `lore/pending-entries-N.yaml`:
 `{"entries":[entry,…],"created":"ISO-8601","focus":str}`.
 Sim timeline proposal `simulation/pending-week-N.yaml` (staged
@@ -282,6 +331,17 @@ Review; ids `pw<N>-<k>`):
   text, cut at punctuation>,"text":<full event text>,"source":"sim:week-N"},
   …]}` — one entry per NON-WORLD event of the week; re-staging a week
 overwrites the file (it is derived; approved entries live in the timeline).
+Pending page draft `lore/pending-pages-N.yaml` (staged by the missing-pages
+job): `{"created":"ISO-8601","mode":"missing-pages","entries":[
+  {"id":"page-N","title":<the missing name>,"text":<body 1-3 sentences>,
+   "source":"authored","page":{"kind":str,"aliases":[str]},"new_names":[str]},
+  …]}` — approving an entry writes `lore/entities/<Title>.md`; deleting
+discards it.
+Chronicle linkifying (vault stage 4): after a week copies its new
+chronicles into the campaign, the FIRST occurrence of each known entity
+name/alias per file is wrapped in a wiki-link (headings and roll tables are
+left alone, and nothing inside an existing link is touched). The studio's
+markdown renderer shows the display text; Obsidian gets the real links.
 
 ## Frontend contract (C, M0)
 
@@ -305,11 +365,15 @@ Tab behaviors (build complete against this contract; a generation button may
 hit a 501 until wave 2 — render the error inline, never console-only):
 - **Maps**: world map (`world/map.svg`) hero; cities grid (SVG via `<img>`).
   "Map a burg" form: burg dropdown (from geography; port flag shown, harbour
-  handled engine-side), submit → job → poll → refresh. Sites form (kind+name), same.
+  handled engine-side), an "attach to place" input defaulting to the burg,
+  submit → job → poll → refresh (companion note + place stub server-side).
+  Sites form (kind + name + optional place), same.
 - **World Building**: geography digest (nations + burgs tables); timeline with
-  source badges; entities table; style viewer (textarea, PUT save);
+  source badges; entities table (page-backed rows click through to a page
+  view with computed backlinks); style viewer (textarea, PUT save);
   "Generate backstory" (focus input) → pending → point at Review tab;
-  "Name helper" (culture + count) → list.
+  "Name helper" (culture + count) → list; "Write the missing pages" card
+  (dangling-link pills → confirm → job → pending page drafts).
 - **Agent Simulation**: clock + premise; faction cards (resource chips,
   disposition, secret behind `<details>`); rumor board (claim, fidelity badge
   fresh/reliable/hearsay/dead, born week, heard-by count; a trailing

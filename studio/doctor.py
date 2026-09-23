@@ -267,6 +267,53 @@ def check_campaigns():
                "(a-z, 0-9, hyphens) — the studio only lists addressable names")
 
 
+def check_vault():
+    """The campaign vault's links (obsidian-integration.md §2): dangling
+    wiki-links and name/alias collisions across all campaigns — advisory
+    (required=False), the same findings the review queue shows."""
+    root = PARENT / "campaigns"
+    if not root.is_dir():
+        return _mk("vault links", True, "no campaigns folder yet",
+                   required=False)
+    try:
+        import links as links_mod
+    except Exception as e:  # noqa: BLE001 — a broken import is the finding
+        return _mk("vault links", False, f"link index unusable: {e}",
+                   fix="pip install -r studio/requirements.txt", required=False)
+    dangling = 0
+    collisions = 0
+    problems = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or not (d / "campaign.yaml").is_file():
+            continue
+        if not spine.valid_name(d.name):
+            continue
+        try:
+            idx = links_mod.build_index(d.name)
+        except Exception as e:  # noqa: BLE001 — one bad page must not kill the check
+            problems.append(f"{d.name}: {e}")
+            continue
+        dangling += len(idx["dangling"])
+        collisions += len(idx["collisions"])
+        for c in idx["collisions"]:
+            problems.append(f"{d.name}: '{c['key']}' claimed by "
+                            f"{', '.join(c['files'])}")
+    detail = "vault links fine"
+    bits = []
+    if dangling:
+        bits.append(f"{dangling} dangling link(s)")
+    if collisions:
+        bits.append(f"{collisions} name/alias collision(s)")
+    if bits:
+        detail = ", ".join(bits) + " — see the Review queue"
+    if problems:
+        detail = "; ".join(problems[:3])
+    return _mk("vault links", not (dangling or collisions or problems), detail,
+               fix="resolve dangling links by creating the page (or fix the "
+                   "link); collisions: rename or de-alias one page",
+               required=False)
+
+
 # ------------------------------------------------------------------ llm key
 
 
@@ -378,6 +425,7 @@ def run_all_checks(probe=None, modules=None, live_llm=True):
     checks.append(check_week_run())
     checks.append(check_vale())
     checks.append(check_campaigns())
+    checks.append(check_vault())
     checks.append(check_llm(probe) if live_llm else check_llm_key())
     return checks
 

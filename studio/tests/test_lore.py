@@ -1,4 +1,4 @@
-"""Lore reads, text-form writes, and the honest 501 generation stubs."""
+"""Lore reads, entity pages, and the fed-or-refused generation guards."""
 
 
 def test_lore_get_shape(client, spine_root):
@@ -7,26 +7,40 @@ def test_lore_get_shape(client, spine_root):
     lore = r.json()
     assert [e["id"] for e in lore["timeline"]] == ["t0001", "t0002"]
     assert lore["timeline"][0]["source"] == "authored"
-    assert "Alweric Tealeaf" in str(lore["entities"]["people"])
+    names = {e["name"] for e in lore["entities"]}
+    assert "Alweric Tealeaf" in names
+    assert {e["file"] for e in lore["entities"]} == {
+        "lore/entities/Alweric Tealeaf.md",
+        "lore/entities/Besiana Crow.md",
+        "lore/entities/The Bridge Wardens.md",
+        "lore/entities/The Vane.md",
+    }
     assert lore["style"]["voice.md"].startswith("Excerpts")
     assert "Alweric" in lore["style"]["names-shadian.txt"]
 
 
-def test_lore_put_entities_roundtrip_and_validation(client, tmp_spine_root):
-    url = "/api/campaign/testvale/lore/entities"
-    new_yaml = "people:\n  - name: Corvin Dane\n    note: sells rope\n"
-    r = client.put(url, json={"text": new_yaml})
-    assert r.status_code == 200 and r.json() == {"ok": True}
-    on_disk = (tmp_spine_root / "testvale" / "lore" / "entities.yaml").read_text(
-        encoding="utf-8")
-    assert "Corvin Dane" in on_disk
-    assert "Corvin Dane" in str(
-        client.get("/api/campaign/testvale/lore").json()["entities"])
+def test_lore_entities_put_is_gone(client, tmp_spine_root):
+    """The raw entities.yaml textarea is retired with the file: pages are
+    hand-edited in Obsidian (or migrated/stubbed), not form-written."""
+    r = client.put("/api/campaign/testvale/lore/entities",
+                   json={"text": "people: []"})
+    assert r.status_code == 405  # route no longer exists
 
-    bad = client.put(url, json={"text": "people: [unclosed"})
-    assert bad.status_code == 422
-    scalar = client.put(url, json={"text": "just a string"})
-    assert scalar.status_code == 422
+
+def test_entity_page_route_with_backlinks(client, spine_root):
+    """The 'everything about this' view: one page + who links to it."""
+    r = client.get("/api/campaign/testvale/lore/pages/The Vane")
+    assert r.status_code == 200, r.text
+    page = r.json()
+    assert page["name"] == "The Vane"
+    assert page["kind"] == "places"
+    assert "river" in page["note"]
+    assert isinstance(page["backlinks"], list)
+
+    r = client.get("/api/campaign/testvale/lore/pages/Nonesuch")
+    assert r.status_code == 404
+    r = client.get("/api/campaign/testvale/lore/pages/..%2F..%2Fcampaign.yaml")
+    assert r.status_code in (404, 422)  # traversal never resolves
 
 
 def test_lore_put_style(client, tmp_spine_root):
