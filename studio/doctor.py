@@ -32,6 +32,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import spine
+
 STUDIO_DIR = Path(__file__).resolve().parent
 PARENT = STUDIO_DIR.parent
 
@@ -140,9 +142,9 @@ def check_pnpm():
     where = shutil.which("pnpm")
     if not where:
         return _mk("pnpm", False, "not on PATH",
-                   fix="install pnpm only (e.g. `corepack enable` or "
-                       "https://pnpm.io/installation) — the nodist npm/npx "
-                       "shims on this machine are broken; do not rely on them")
+                   fix="install pnpm (e.g. `corepack enable` or "
+                       "https://pnpm.io/installation) — the map tool "
+                       "recipes use pnpm")
     ran, line = _version_of(["pnpm", "--version"])
     return _mk("pnpm", ran, f"on PATH at {where}" + (f" ({line})" if ran else f" ({line})"),
                fix=None if ran else "pnpm exists but would not run")
@@ -219,7 +221,16 @@ def check_campaigns():
                    "campaign.yaml inside)",
                    fix="run python studio/assemble.py, or create "
                        "campaigns/<name>/campaign.yaml")
-    return _mk("campaigns", True, f"{len(found)} campaign(s): " + ", ".join(found))
+    # Folders whose names cannot be addressed (bad slug) are skipped by the
+    # app itself — name them so "where did my campaign go?" has an answer.
+    skipped = spine.skipped_campaign_folders()
+    detail = f"{len(found)} campaign(s): " + ", ".join(found)
+    if skipped:
+        detail += f" (skipped, unaddressable names: {', '.join(skipped)})"
+    return _mk("campaigns", True, detail,
+               fix=None if not skipped else
+               "rename the skipped folder(s) to a lowercase slug "
+               "(a-z, 0-9, hyphens) — the studio only lists addressable names")
 
 
 # ------------------------------------------------------------------ llm key
@@ -309,21 +320,35 @@ def check_llm(probe=None):
     return _mk("llm key", ok, detail, fix=fix, required=False)
 
 
+def check_llm_key():
+    """Presence-only llm check (no network) — the health strip's quick mode:
+    a page load must not spend tokens or wait on an API round-trip."""
+    key = find_key()
+    if key is None:
+        return _mk("llm key", False, "no key found",
+                   fix="set ZAI_API_KEY, or put the Z.ai key in "
+                       "~/.zcode/v2/provider_config.json — generation and live "
+                       "weeks need it; everything else works without",
+                   required=False)
+    return _mk("llm key", True, "key found (presence check — not probed)",
+               required=False)
+
+
 # ------------------------------------------------------------------- report
 
 
-def run_all_checks(probe=None, modules=None):
+def run_all_checks(probe=None, modules=None, live_llm=True):
     checks = [check_python(), check_imports(modules), check_node(), check_pnpm()]
     checks.extend(check_engines())
     checks.append(check_week_run())
     checks.append(check_vale())
     checks.append(check_campaigns())
-    checks.append(check_llm(probe))
+    checks.append(check_llm(probe) if live_llm else check_llm_key())
     return checks
 
 
-def report(probe=None, modules=None):
-    checks = run_all_checks(probe=probe, modules=modules)
+def report(probe=None, modules=None, live_llm=True):
+    checks = run_all_checks(probe=probe, modules=modules, live_llm=live_llm)
     overall = all(c["ok"] for c in checks if c["required"])
     return {"ok": overall, "checks": checks}
 

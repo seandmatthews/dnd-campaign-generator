@@ -10,10 +10,12 @@ Engine roots resolve relative to the studio parent — studio is a fourth
 sibling of dnd-mapping / agentic-simulator / verification (D1).
 """
 
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -23,6 +25,16 @@ PARENT = STUDIO_DIR.parent
 DND_MAPPING = PARENT / "dnd-mapping"
 AGENTIC_SIMULATOR = PARENT / "agentic-simulator"
 VERIFICATION = PARENT / "verification"
+
+# The simulator engine home (agentic-simulator/world/state.yaml) is ONE
+# scratch file shared by every campaign (D4): copy-in before an engine run,
+# copy-out after. Every copy-in + engine-run + copy-out sequence therefore
+# holds this process-wide lock — the week job for its whole run, the
+# views/why routes around their copy-in + subprocess. Per-campaign locks
+# (spine.campaign_lock) cannot protect it: two campaigns share the home.
+# Ordering: campaign lock (outer, held by week jobs) then engine lock —
+# never the reverse, or a views call could deadlock a running week.
+ENGINE_LOCK = threading.Lock()
 
 
 def run_py(engine_root: Path, script: str, *args, timeout: int = 600,
@@ -85,11 +97,16 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
             if on_line is not None:
                 on_line(line)
         rc = proc.wait()
+    except BaseException:
+        proc.kill()      # a callback exception must not leak the child
+        proc.wait()
+        raise
     finally:
         watchdog.cancel()
     if timed_out.is_set():
         lines.append(f"[studio] engine killed after {timeout}s timeout")
-        rc = rc if rc else 124
+        if rc == 0:  # a killed child usually exits nonzero; 0 still means timeout
+            rc = 124
     return rc, lines
 
 
@@ -98,3 +115,35 @@ def copy_file(src: Path, dst: Path) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
     return dst
+
+
+def copy_file_atomic(src: Path, dst: Path) -> Path:
+    """copy_file for files a reader may open mid-copy (campaign canon:
+    simulation/state.yaml). tmp + os.replace in the destination's own
+    directory, so a concurrent GET never sees a half-written state and a
+    crash mid-copy never truncates it."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(dst.name + ".tmp")
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dst)
+    return dst
+
+
+def run_check(path, timeout: int = 180) -> list:
+    """verification/check.py's ladder over one file (structural always; vale
+    when installed). Returns the findings list — [] when clean. The ONE
+    invocation of the checker (list-form args, cwd=verification, tmp out
+    dir); review.py and loregen.py both used to hand-roll it.
+
+    Raises RuntimeError when check.py produces no findings.json — callers
+    decide whether that is advisory (a note) or fatal."""
+    out_dir = Path(tempfile.mkdtemp(prefix="studio-check-"))
+    try:
+        rc, _lines = run_py(VERIFICATION, "check.py", str(path),
+                            "--out", str(out_dir), timeout=timeout)
+        findings_file = out_dir / "findings.json"
+        if findings_file.is_file():
+            return json.loads(findings_file.read_text(encoding="utf-8"))
+        raise RuntimeError(f"check.py produced no findings.json (rc={rc})")
+    finally:
+        shutil.rmtree(out_dir, ignore_errors=True)

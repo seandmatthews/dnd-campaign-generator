@@ -11,15 +11,13 @@ a names-<culture>.txt seed list.
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import canon
-import jobs
 import loregen
 import spine
-from routers.common import require_campaign
-from spine import CampaignError, CampaignNotFound
+from routers.common import require_campaign, submit_campaign_job
+from spine import CampaignError, CampaignExists, CampaignNotFound
 
 router = APIRouter()
 
@@ -75,6 +73,37 @@ def put_style(name: str, file: str, body: TextBody):
     return {"ok": True}
 
 
+@router.post("/api/campaign/{name}/lore/style/{file}", status_code=201)
+def post_style(name: str, file: str, body: TextBody):
+    """Create a style file from the UI (PUT only edits existing ones). The
+    purpose is staging a culture's name seed list — without one the name
+    helper refuses to generate (fed-or-refused), and until now there was no
+    way to stage the list from the app. Name lists need at least 3 seeds:
+    an empty list would send the LLM in with nothing in-voice to draw from."""
+    require_campaign(name)
+    if file.startswith("names-"):
+        seeds = [ln for ln in body.text.splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")]
+        if len(seeds) < 3:
+            raise HTTPException(
+                status_code=422,
+                detail="a name list needs at least 3 names, one per line "
+                       "(lines starting with # are comments) — the helper "
+                       "draws in-voice from these seeds")
+    try:
+        spine.create_style(name, file, body.text)
+    except CampaignExists as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{e} — edit it in Style & voice instead")
+    except CampaignNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except CampaignError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    canon.snapshot(name, f"campaign/{name}: stage style/{file}")
+    return {"ok": True}
+
+
 @router.post("/api/campaign/{name}/lore/entries", status_code=202)
 def post_entries(name: str, body: dict | None = None):
     d = require_campaign(name)
@@ -84,8 +113,9 @@ def post_entries(name: str, body: dict | None = None):
     if not (d / "world" / "geography.yaml").is_file():
         raise HTTPException(
             status_code=422,
-            detail="world/geography.yaml is missing — generation is fed or "
-                   "refused (guardrail 4); import a world first")
+            detail="world/geography.yaml is missing — generate a world "
+                   "first (Maps tab), then come back. Generation is fed or "
+                   "refused: it needs ground data before it runs")
 
     def job(log):
         result = loregen.generate_entries(d, focus, log=log)
@@ -96,8 +126,7 @@ def post_entries(name: str, body: dict | None = None):
                        "lore entries")
         return result
 
-    return JSONResponse({"job_id": jobs.submit("lore-entries", job)},
-                        status_code=202)
+    return submit_campaign_job("lore-entries", name, job)
 
 
 @router.post("/api/campaign/{name}/lore/name")

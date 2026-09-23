@@ -182,7 +182,8 @@
         '<textarea class="input style-text" rows="10" spellcheck="false"></textarea>' +
         '<div class="form-actions">' +
           '<button type="button" class="btn btn-primary style-save">Save</button>' +
-          '<span class="muted form-note">Written straight to the spine — edit with care.</span>' +
+          '<span class="muted form-note">Saves straight into the campaign&rsquo;s files ' +
+            '(<code>lore/style/</code>) &mdash; edit with care.</span>' +
         '</div>' +
         '<div class="form-error"></div>' +
       '</div>'
@@ -252,9 +253,14 @@
     const errBox = card.querySelector('.form-error');
     const resultBox = card.querySelector('.gen-result');
 
-    form.addEventListener('submit', (ev) => {
+    form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       if (btn.disabled) return;
+      const ok = await S.confirmRun(
+        'Generate pending backstory entries with the LLM? This spends API ' +
+        'credits; the entries land in Review — nothing is applied directly.'
+      );
+      if (!ok) return;
       btn.disabled = true;
       errBox.innerHTML = '';
       resultBox.classList.add('hidden');
@@ -301,7 +307,8 @@
     const card = S.el(
       '<section class="panel panel-card">' +
         '<h3 class="panel-title">Name helper</h3>' +
-        '<p class="panel-note">Names are drawn from the culture&rsquo;s name list and voice excerpts — in-voice, not guaranteed.</p>' +
+        '<p class="panel-note">Names are drawn from the culture&rsquo;s seed list ' +
+          '(<code>lore/style/names-&lt;culture&gt;.txt</code>) and voice excerpts — in-voice, not guaranteed.</p>' +
         '<div class="form-block">' +
           '<form class="inline-form">' +
             '<label class="field"><span class="field-label">Culture</span>' +
@@ -312,6 +319,17 @@
           '</form>' +
           '<div class="form-error"></div>' +
           '<div class="name-results hidden"></div>' +
+          '<div class="names-stage hidden">' +
+            '<p class="panel-note"><strong>No seed list for this culture yet.</strong> ' +
+              'The helper refuses to invent names from nothing (fed-or-refused) — ' +
+              'give it 3+ names to draw from, one per line:</p>' +
+            '<textarea class="input names-seeds" rows="5" ' +
+              'placeholder="e.g. Kestra&#10;Olvane&#10;Dross&#10;Margan"></textarea>' +
+            '<div class="inline-form">' +
+              '<button type="button" class="btn btn-primary names-stage-btn">Stage seed list</button>' +
+            '</div>' +
+            '<div class="stage-error"></div>' +
+          '</div>' +
         '</div>' +
       '</section>'
     );
@@ -321,12 +339,20 @@
     const btn = form.querySelector('button[type="submit"]');
     const errBox = card.querySelector('.form-error');
     const out = card.querySelector('.name-results');
+    const stageBox = card.querySelector('.names-stage');
+    const seedsArea = card.querySelector('.names-seeds');
+    const stageBtn = card.querySelector('.names-stage-btn');
+    const stageErr = card.querySelector('.stage-error');
 
-    form.addEventListener('submit', (ev) => {
+    form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const culture = cultureIn.value.trim();
       if (!culture || btn.disabled) return;
       const count = Math.max(1, Math.min(50, Number(countIn.value) || 8));
+      const ok = await S.confirmRun(
+        'Suggest names with the LLM? This spends a few API credits.'
+      );
+      if (!ok) return;
       btn.disabled = true;
       errBox.innerHTML = '';
       (async () => {
@@ -348,8 +374,39 @@
       }).catch((err) => {
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
+        // the fed-or-refused 422 is actionable: offer to stage the seed list
+        if (err && err.status === 422 && /names-/.test(err.error || '')) {
+          stageBox.classList.remove('hidden');
+          if (!seedsArea.value.trim()) seedsArea.focus();
+        }
         S.toast('Naming failed' + (err && err.error ? ': ' + err.error : ''), 'error');
       }).finally(() => { btn.disabled = false; });
+    });
+
+    stageBtn.addEventListener('click', async () => {
+      if (stageBtn.disabled) return;
+      const culture = cultureIn.value.trim();
+      if (!culture) {
+        S.toast('Type the culture name above first.', 'info');
+        return;
+      }
+      const file = 'names-' + culture.toLowerCase() + '.txt';
+      stageBtn.disabled = true;
+      stageErr.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/lore/style/' + encodeURIComponent(file)), {
+          method: 'POST',
+          body: { text: seedsArea.value }
+        });
+        S.toast('Seed list staged (' + file + ') — Suggest names is ready.', 'ok');
+        stageBox.classList.add('hidden');
+        errBox.innerHTML = '';
+      } catch (err) {
+        stageErr.innerHTML = '';
+        stageErr.appendChild(S.errorPanel(err));
+      } finally {
+        stageBtn.disabled = false;
+      }
     });
     host.appendChild(card);
   }

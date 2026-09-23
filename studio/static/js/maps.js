@@ -455,6 +455,8 @@
     const burgPanel = S.el(
       '<section class="panel">' +
         '<h3 class="panel-title">Map a burg</h3>' +
+        '<p class="panel-note">A burg is a town on the world map — this turns it ' +
+          'into a street-level city map.</p>' +
         '<div class="form-slot"><div class="loading">Loading burgs&hellip;</div></div>' +
       '</section>'
     );

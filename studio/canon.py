@@ -18,6 +18,7 @@ import logging
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 import spine
@@ -56,6 +57,15 @@ def _git(*args: str) -> tuple:
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# One snapshot at a time, process-wide. Several callers write from request
+# threads with only their campaign lock held (or none): two concurrent
+# snapshots race on git's index.lock, the loser's add fails, and its undo
+# point is silently lost — precisely in the concurrent cases where the user
+# most needs it. Campaign locks are always held OUTSIDE this one (a week
+# job holds the campaign lock, then snapshots), so no lock cycle.
+_SNAPSHOT_LOCK = threading.Lock()
+
+
 def snapshot(campaign_name: str, message: str):
     """Commit the campaign's current state with `message`. Returns the short
     commit hash, or None when skipped (git absent / campaign outside the
@@ -78,6 +88,11 @@ def snapshot(campaign_name: str, message: str):
                  campaign_name, REPO_ROOT)
         return None
 
+    with _SNAPSHOT_LOCK:
+        return _snapshot_locked(campaign_name, rel, message)
+
+
+def _snapshot_locked(campaign_name: str, rel: str, message: str):
     message = " ".join(str(message).split())[:MESSAGE_MAX]
     rc, out, err = _git("add", "-A", "--", rel)
     if rc != 0:

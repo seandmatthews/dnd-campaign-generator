@@ -28,7 +28,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.staticfiles import StaticFiles
 
@@ -82,6 +82,18 @@ for r in (campaigns, system, maps, simulation, lore, review):
     app.include_router(r.router)
 
 
+@app.get("/tutorial", response_class=PlainTextResponse)
+def tutorial():
+    """The first-campaign walkthrough, served straight from the repo root —
+    the help modal links here; one file, never a stale copy."""
+    path = STUDIO_DIR.parent / "TUTORIAL.md"
+    if not path.is_file():
+        raise StarletteHTTPException(
+            404, "TUTORIAL.md is missing from the repo root — it lives "
+                 "next to README.md")
+    return PlainTextResponse(path.read_text(encoding="utf-8"))
+
+
 # loopback-only Host allowlist (DNS-rebinding protection): a browser page
 # from e.g. attacker.com (rebinding to 127.0.0.1) sends Host: attacker.com
 # and is refused before any route runs.
@@ -127,6 +139,23 @@ async def validation_error(request: Request, exc: RequestValidationError):
     msg = first.get("msg", "invalid request")
     detail = f"{loc}: {msg}" if loc else msg
     return JSONResponse({"error": detail}, status_code=422)
+
+
+@app.exception_handler(spine.CampaignFileError)
+async def campaign_file_error(request: Request, exc: spine.CampaignFileError):
+    """A campaign file that does not parse is the DM's input problem, not a
+    server fault: readable 422 naming the file, never an opaque 500."""
+    return JSONResponse({"error": str(exc)}, status_code=422)
+
+
+@app.exception_handler(Exception)
+async def unhandled_error(request: Request, exc: Exception):
+    """The contract says every error response is {"error": ...} — without
+    this, any unexpected exception (OSError from a reserved name, YAML
+    PermissionError mid-read) leaks Starlette's plain-text 500."""
+    log.exception("unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse({"error": f"internal error: {type(exc).__name__}"},
+                        status_code=500)
 
 
 # Campaign files (map SVGs, chronicle markdown, geojson) — read-only intent,

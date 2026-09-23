@@ -14,7 +14,8 @@ import uuid
 
 _LOCK = threading.Lock()
 _JOBS: dict = {}
-LOG_CAP = 40  # log_tail keeps roughly the last 40 lines
+LOG_CAP = 40    # log_tail keeps roughly the last 40 lines
+JOB_CAP = 200   # finished jobs older than the newest JOB_CAP are dropped
 
 # job progress lines are mirrored to the studio log (server.py attaches the
 # rotating file handler); uvicorn's access log stays console-only
@@ -77,6 +78,18 @@ def submit(kind: str, fn) -> str:
                 job["error"] = f"{type(e).__name__}: {e}"
                 job["status"] = "error"
             _log.error("job %s (%s) failed: %s", job_id, job["kind"], e)
+        finally:
+            # GC: the full log is dead weight once the job is over (the tail
+            # stays), and the dict itself grows without bound on a long-lived
+            # server — keep only the newest JOB_CAP records.
+            with _LOCK:
+                job["_log_all"] = job["log_tail"]
+                if len(_JOBS) > JOB_CAP:
+                    finished = [j for j in _JOBS.values()
+                                if j["status"] in ("done", "error")]
+                    finished.sort(key=lambda j: j["started"])
+                    for old in finished[:len(_JOBS) - JOB_CAP]:
+                        _JOBS.pop(old["id"], None)
 
     threading.Thread(target=run, name=f"job-{job_id}", daemon=True).start()
     return job_id

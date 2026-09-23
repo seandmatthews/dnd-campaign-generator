@@ -12,7 +12,7 @@ via campaigns_root(), never at import time.
 
 import re
 import datetime
-import re
+import os
 import threading
 from pathlib import Path
 
@@ -27,6 +27,13 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # URL segment, and it should stay a lowercase slug like its siblings —
 # no leading/trailing hyphens, no doubles, 1-40 chars.
 _NEW_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
+# Windows reserves device names as directories in any drive path — mkdir
+# would raise raw OSError, so they are refused at validation time.
+_RESERVED_DEVICE_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{i}" for i in range(1, 10)),
+    *(f"lpt{i}" for i in range(1, 10)),
+}
 # lore/style files are constrained the same way (API.md, PUT style/{file})
 _STYLE_RE = _NAME_RE
 _CHRONICLE_RE = re.compile(r"^(\d{4})-(.+)\.md$")
@@ -43,6 +50,12 @@ class CampaignNotFound(CampaignError):
 
 class CampaignExists(CampaignError):
     """Campaign directory already exists — the server maps this to 409."""
+
+
+class CampaignFileError(CampaignError):
+    """A campaign file exists but does not parse (a hand-edit slipped).
+    Carries the file name; the server maps this to a readable 422, never
+    an opaque 500."""
 
 
 # ------------------------------------------------------- per-campaign locks
@@ -81,8 +94,28 @@ def slugify(name: str) -> str:
 def _safe_load(path: Path):
     if not path.exists():
         return None
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except OSError:
+        # a concurrent writer holds the file (Windows shares) or it vanished;
+        # loaders degrade to "empty" rather than 500ing a read route
+        return None
+    except (yaml.YAMLError, UnicodeDecodeError) as e:
+        first = str(e).splitlines()[0] if str(e) else type(e).__name__
+        raise CampaignFileError(
+            f"{path.name} does not parse ({first}) — a hand-edit slipped? "
+            f"Fix or delete the file, or restore it with git checkout -- {path}")
+
+
+def write_text_atomic(path: Path, text: str) -> Path:
+    """Write via tmp + os.replace so a crash or concurrent reader never sees
+    a half-written spine file. Same volume, so the replace is atomic."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    return path
 
 
 def valid_name(name: str) -> bool:
@@ -123,6 +156,8 @@ def create_campaign(name: str, title: str = "") -> dict:
         raise CampaignError(
             "campaign name must be a lowercase slug — a-z, 0-9, hyphens, "
             "1-40 chars, starting with a letter or digit (e.g. ember-coast)")
+    if name in _RESERVED_DEVICE_NAMES:
+        raise CampaignError(f"campaign name {name!r} is reserved on Windows")
     d = campaigns_root() / name
     if d.exists():
         raise CampaignExists(f"campaign already exists: {name}")
@@ -138,8 +173,8 @@ def create_campaign(name: str, title: str = "") -> dict:
         "created": datetime.date.today().isoformat(),
         "engines": dict(_CREATE_ENGINE_POINTERS),
     }
-    with open(d / "campaign.yaml", "w", encoding="utf-8") as f:
-        yaml.safe_dump(meta, f, sort_keys=False, allow_unicode=True)
+    write_text_atomic(d / "campaign.yaml",
+                      yaml.safe_dump(meta, sort_keys=False, allow_unicode=True))
     return {"name": name, "title": title, "created": meta["created"],
             "has": _has_sections(d)}
 
@@ -155,9 +190,24 @@ def list_campaigns() -> list:
     for d in sorted(root.iterdir()):
         if not d.is_dir() or not (d / "campaign.yaml").is_file():
             continue
-        meta = _safe_load(d / "campaign.yaml") or {}
+        # A folder whose name fails _NAME_RE can never be addressed by the
+        # API (campaign_dir refuses it), so listing it would hand the UI an
+        # option every route 404s on — skip it; the doctor names the skips.
+        if not valid_name(d.name):
+            continue
+        try:
+            meta = _safe_load(d / "campaign.yaml") or {}
+        except CampaignFileError:
+            # one corrupt campaign.yaml must not 4xx the whole listing —
+            # degrade to folder-name identity; the file routes still 422
+            # with the file name when that campaign is opened
+            meta = {}
+        # identity must stay addressable even if campaign.yaml was hand-edited
+        listed_name = str(meta.get("name") or "")
+        if not valid_name(listed_name):
+            listed_name = d.name
         out.append({
-            "name": meta.get("name") or d.name,
+            "name": listed_name,
             "title": meta.get("title") or d.name,
             "created": str(meta.get("created") or ""),
             "has": _has_sections(d),
@@ -173,6 +223,20 @@ def _has_sections(d: Path) -> dict:
         "simulation": (d / "simulation" / "state.yaml").is_file(),
         "maps": bool(_map_slugs(d, "cities") or _map_slugs(d, "sites")),
     }
+
+
+def skipped_campaign_folders() -> list:
+    """Folders under campaigns/ that look like campaigns (campaign.yaml
+    inside) but whose names cannot be addressed — the doctor reports them
+    so a rename is the obvious fix instead of a silent absence."""
+    root = campaigns_root()
+    if not root.is_dir():
+        return []
+    return sorted(
+        d.name for d in root.iterdir()
+        if d.is_dir() and (d / "campaign.yaml").is_file()
+        and not valid_name(d.name)
+    )
 
 
 # ------------------------------------------------------------------ loaders
@@ -225,16 +289,22 @@ def read_style(name: str, filename: str) -> str:
 
 def write_style(name: str, filename: str, text: str) -> Path:
     path = _style_path(name, filename, must_exist=True)
-    path.write_text(text, encoding="utf-8")
-    return path
+    return write_text_atomic(path, text)
+
+
+def create_style(name: str, filename: str, text: str) -> Path:
+    """Create (never overwrite) a lore/style file — the staging path for the
+    seed lists the fed-or-refused guardrail demands (name helper)."""
+    path = _style_path(name, filename)
+    if path.exists():
+        raise CampaignExists(f"style file already exists: {filename}")
+    return write_text_atomic(path, text)
 
 
 def write_entities(name: str, text: str) -> Path:
     require_campaign(name)
     path = campaign_dir(name) / "lore" / "entities.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
-    return path
+    return write_text_atomic(path, text)
 
 
 def _style_path(name: str, filename: str, must_exist: bool = False) -> Path:
@@ -249,6 +319,15 @@ def _style_path(name: str, filename: str, must_exist: bool = False) -> Path:
 def load_state(name: str) -> dict:
     doc = _safe_load(campaign_dir(name) / "simulation" / "state.yaml")
     return doc if isinstance(doc, dict) else {}
+
+
+def write_state(name: str, doc: dict) -> Path:
+    """Write simulation/state.yaml from a dict (the create-a-simulation
+    flow). The caller validates content; this is the typed writer."""
+    require_campaign(name)
+    path = campaign_dir(name) / "simulation" / "state.yaml"
+    return write_text_atomic(
+        path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
 
 
 def chronicles(name: str) -> list:

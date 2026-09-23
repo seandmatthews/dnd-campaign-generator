@@ -21,10 +21,7 @@ success commits a canon snapshot ("campaign/<name>: approve/delete N
 pending entries").
 """
 
-import json
 import re
-import shutil
-import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
@@ -124,26 +121,17 @@ def _select(doc: dict, body: ReviewBody) -> list:
 
 
 def _structural_findings(path: Path, inside: str, deadline, notes: list):
-    """check.py on one pending file — once per file per request, subprocess
-    list-form args (the parent path contains `&`), cwd=verification. Skipped
-    with a note when the request blows its budget; never blocks approval."""
+    """check.py on one pending file — once per file per request via
+    engines.run_check (the shared invocation). Skipped with a note when the
+    request blows its budget; never blocks approval."""
     if deadline is not None and time.monotonic() > deadline:
         notes.append(f"findings skipped for {inside}: the queue took too long "
                      "to assemble — refresh to retry")
         return None
-    out_dir = Path(tempfile.mkdtemp(prefix="studio-review-"))
     try:
-        rc, _lines = engines.run_py(
-            engines.VERIFICATION, "check.py", str(path),
-            "--out", str(out_dir), timeout=CHECK_TIMEOUT_S)
-        findings_file = out_dir / "findings.json"
-        if findings_file.is_file():
-            return json.loads(findings_file.read_text(encoding="utf-8"))
-        notes.append(f"check.py produced no findings.json for {inside} (rc={rc})")
+        return engines.run_check(path, timeout=CHECK_TIMEOUT_S)
     except Exception as e:  # noqa: BLE001 — advisory, never blocking
         notes.append(f"structural check failed for {inside}: {e}")
-    finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
     return None
 
 
@@ -288,7 +276,11 @@ def _load_timeline(campaign_dir: Path):
     path = _timeline_path(campaign_dir)
     if not path.is_file():
         return None, []
-    doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError) as e:
+        raise HTTPException(status_code=422,
+                            detail=f"lore/timeline.yaml does not parse: {e}")
     if isinstance(doc, list):
         return doc, doc
     if isinstance(doc, dict) and isinstance(doc.get("entries"), list):
@@ -308,9 +300,14 @@ def _existing_tnums(entries: list) -> set:
 
 def _append_approved(campaign_dir: Path, chosen: list) -> None:
     """Append entries into lore/timeline.yaml, keeping ^t\\d+$ ids and
-    assigning the next free t-number to provisional ones."""
+    assigning the next free t-number to provisional ones. A batch whose
+    title+text is already in the timeline is refused (409) — that is the
+    crash-between-writes recovery path: the append landed, the pending
+    rewrite did not, and re-approving would silently duplicate."""
     doc, entries = _load_timeline(campaign_dir)
     existing = _existing_tnums(entries)
+    seen = {(str(e.get("title") or ""), str(e.get("text") or ""))
+            for e in entries if isinstance(e, dict)}
     for entry in chosen:
         eid = str(entry.get("id") or "")
         if eid and T_ID_RE.match(eid):
@@ -320,9 +317,18 @@ def _append_approved(campaign_dir: Path, chosen: list) -> None:
                     detail=f"id {eid} already exists in lore/timeline.yaml")
             existing.add(int(eid[1:]))  # also guards duplicates within the batch
             continue  # keep the entry's own t-id
+        identity = (str(entry.get("title") or ""), str(entry.get("text") or ""))
+        if identity != ("", "") and identity in seen:
+            raise HTTPException(
+                status_code=409,
+                detail=f"an entry titled {identity[0]!r} with this exact text "
+                       f"is already in lore/timeline.yaml — if a previous "
+                       f"approve crashed midway, delete it from the pending "
+                       f"file instead of re-approving")
         next_num = (max(existing) + 1) if existing else 1
         entry["id"] = f"t{next_num:04d}"
         existing.add(next_num)
+        seen.add(identity)
 
     if doc is None:
         doc = {"entries": list(entries)}
@@ -334,18 +340,17 @@ def _append_approved(campaign_dir: Path, chosen: list) -> None:
         raise HTTPException(status_code=422,
                             detail="lore/timeline.yaml has an unsupported shape")
     _timeline_path(campaign_dir).parent.mkdir(parents=True, exist_ok=True)
-    _timeline_path(campaign_dir).write_text(
-        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100),
-        encoding="utf-8")
+    spine.write_text_atomic(
+        _timeline_path(campaign_dir),
+        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
 
 
 def _rewrite_pending(path: Path, doc: dict, keep: list) -> None:
     if keep:
         out = {k: v for k, v in doc.items() if k != "entries"}
         out["entries"] = keep
-        path.write_text(
-            yaml.safe_dump(out, sort_keys=False, allow_unicode=True, width=100),
-            encoding="utf-8")
+        spine.write_text_atomic(
+            path, yaml.safe_dump(out, sort_keys=False, allow_unicode=True, width=100))
     else:
         path.unlink()
 

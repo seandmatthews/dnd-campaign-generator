@@ -115,11 +115,17 @@ def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatc
     ok = client.get("/api/campaign/testvale/simulation/views/wardens")
     assert ok.status_code == 200 and ok.json() == {"week": 3}
 
-    # CLI not landed (today's reality): clean 501, never a 500
+    # engine crash (nonzero rc) or empty output: honest 502, never a 500
+    # and never a misleading "not landed yet" 501 (found 2026-09-23)
     monkeypatch.setattr(engines, "run_py", lambda *a, **k: (0, [""]))
-    not_landed = client.get("/api/campaign/testvale/simulation/views/wardens")
-    assert not_landed.status_code == 501
-    assert "error" in not_landed.json()
+    empty = client.get("/api/campaign/testvale/simulation/views/wardens")
+    assert empty.status_code == 502
+    monkeypatch.setattr(engines, "run_py",
+                        lambda *a, **k: (1, ["Traceback ...", "KeyError: 'id'"]))
+    crashed = client.get("/api/campaign/testvale/simulation/views/wardens")
+    assert crashed.status_code == 502
+    assert "rc=1" in crashed.json()["error"]
+    assert "KeyError" in crashed.json()["error"]
 
     # engine binary missing entirely: clean 503
     def missing(*a, **k):
@@ -129,8 +135,8 @@ def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatc
         "/api/campaign/testvale/simulation/views/wardens").status_code == 503
 
 
-def test_why_passthrough_and_501_until_json_flag(client, spine_root, monkeypatch,
-                                                 tmp_path):
+def test_why_passthrough_and_engine_failure_502(client, spine_root, monkeypatch,
+                                                tmp_path):
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "engine-home")
     body = {"week": 2, "faction": "ferrymen"}
     url = "/api/campaign/testvale/simulation/why"
@@ -142,9 +148,20 @@ def test_why_passthrough_and_501_until_json_flag(client, spine_root, monkeypatch
     assert r.json() == {"week": 2, "faction": "ferrymen",
                         "lines": ["WEEK 2 — one", "  built on: two"]}
 
-    # today's why.py without --json: usage error / non-JSON -> honest 501
+    # why.py has had --json since M3: a crash or non-JSON output is an
+    # engine failure -> 502 with the engine's words, not a 501 "not landed"
     monkeypatch.setattr(engines, "run_py",
                         lambda *a, **k: (1, ["usage: python src/why.py <week> <actor>"]))
     r = client.post(url, json=body)
-    assert r.status_code == 501
-    assert "--json" in r.json()["error"]
+    assert r.status_code == 502
+    assert "rc=1" in r.json()["error"]
+    monkeypatch.setattr(engines, "run_py", lambda *a, **k: (0, ["not json at all"]))
+    r = client.post(url, json=body)
+    assert r.status_code == 502
+    assert "non-JSON" in r.json()["error"]
+
+    # unknown faction is checked server-side before the engine runs
+    monkeypatch.setattr(engines, "run_py",
+                        lambda *a, **k: (0, ['{"lines": []}']))
+    r = client.post(url, json={"week": 2, "faction": "ghosts"})
+    assert r.status_code == 404

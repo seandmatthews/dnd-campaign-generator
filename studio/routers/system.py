@@ -33,9 +33,13 @@ def health():
 
 
 @router.get("/api/doctor")
-def get_doctor():
+def get_doctor(quick: bool = False):
     # doctor.py is stdlib-only and runs its probes (engine CLIs + one tiny
     # live LLM probe) per request; tests monkeypatch doctor.report.
+    # quick=1 skips the live LLM probe (presence-only key check) so a page
+    # load can poll it without spending tokens or waiting on the API.
+    if quick:
+        return doctor.report(live_llm=False)
     return doctor.report()
 
 

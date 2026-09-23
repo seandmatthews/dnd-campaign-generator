@@ -1,5 +1,7 @@
 """Campaign discovery, summary shape, geography, 404 mapping."""
 
+import spine
+
 
 def test_campaigns_list_contains_fixture(client, spine_root):
     r = client.get("/api/campaigns")
@@ -52,3 +54,35 @@ def test_unknown_campaign_is_404_with_error_body(client, spine_root):
         assert "error" in r.json(), path
     # path tricks must not escape into the tree either
     assert client.get("/api/campaign/..%2Fetc").status_code == 404
+
+
+def test_odd_sibling_folder_does_not_break_the_list(client, tmp_spine_root):
+    """A hand-made campaigns/My Campaign (space in the name, no geography —
+    the README invites zip-and-edit) must be skipped, not 500 the list.
+    Found live 2026-09-23: every GET /api/campaigns returned
+    'internal error: CampaignNotFound' and the whole app showed
+    'Unavailable' until the folder was renamed."""
+    bad = tmp_spine_root / "My Campaign"
+    bad.mkdir()
+    (bad / "campaign.yaml").write_text(
+        "name: My Campaign\ntitle: A hand-made folder\n", encoding="utf-8")
+    assert spine.skipped_campaign_folders() == ["My Campaign"]
+
+    r = client.get("/api/campaigns")
+    assert r.status_code == 200, r.text
+    names = [c["name"] for c in r.json()["campaigns"]]
+    assert "My Campaign" not in names
+    assert "testvale" in names, "the healthy sibling must survive"
+
+
+def test_hand_edited_campaign_name_falls_back_to_addressable_slug(
+        client, tmp_spine_root):
+    """campaign.yaml edited to a name the routes can't address must not
+    poison the dropdown: the identity falls back to the folder name."""
+    y = tmp_spine_root / "testvale" / "campaign.yaml"
+    y.write_text("name: My Test Vale\ntitle: The Test Vale\n", encoding="utf-8")
+    r = client.get("/api/campaigns")
+    assert r.status_code == 200
+    tv = next(c for c in r.json()["campaigns"] if c["title"] == "The Test Vale")
+    assert tv["name"] == "testvale", "identity stays addressable"
+    assert client.get("/api/campaign/testvale").status_code == 200

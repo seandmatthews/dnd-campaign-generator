@@ -1209,6 +1209,59 @@ textarea.input:focus-visible {
   .btn:hover:not(:disabled) { transform: none; }
 }
 
+/* ---------- help button + setup health strip ---------- */
+
+.btn-help {
+  font-weight: 700;
+  min-width: 2.2rem;
+}
+
+.help-tabs {
+  margin: 0 0 0.75rem;
+  padding-left: 1.2rem;
+}
+
+.help-tabs li { margin: 0.25rem 0; }
+
+.setup-strip {
+  border-bottom: 2px solid var(--line-strong);
+  background: var(--paper-dim);
+}
+
+.setup-strip-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.5rem 1rem;
+}
+
+.setup-item {
+  margin: 0.2rem 0;
+  line-height: 1.4;
+}
+
+.setup-pill {
+  background: var(--oxblood);
+  color: var(--paper-bright);
+}
+
+.setup-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+}
+
+.setup-foot .btn { padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+
+.sand-faction {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  margin: 0.4rem 0;
+  background: var(--paper-dim);
+}
+
 /* ---------- print: a chronicle should print cleanly ---------- */
 
 @media print {

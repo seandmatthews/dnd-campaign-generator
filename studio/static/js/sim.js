@@ -186,6 +186,132 @@
 
   /* ----- tab renderer ----- */
 
+  /* ----- create-a-simulation form (the fresh-campaign path) ----- */
+
+  const RESOURCES = ['coin', 'muscle', 'legitimacy'];
+
+  function factionRow() {
+    return S.el(
+      '<div class="sand-faction">' +
+        '<div class="inline-form">' +
+          '<label class="field grow"><span class="field-label">Faction name</span>' +
+            '<input type="text" class="input f-name" placeholder="e.g. The Bridge Wardens"></label>' +
+          '<label class="field field-narrow"><span class="field-label">Kind (optional)</span>' +
+            '<input type="text" class="input f-kind" placeholder="e.g. toll Brotherhood"></label>' +
+        '</div>' +
+        '<div class="inline-form">' +
+          '<label class="field grow"><span class="field-label">Goal — what it wants, one line</span>' +
+            '<input type="text" class="input f-goal" placeholder="e.g. rebuild the bridge and the toll with it"></label>' +
+          RESOURCES.map((r) =>
+            '<label class="field field-narrow"><span class="field-label">' + r + '</span>' +
+              '<select class="input f-res" data-res="' + r + '">' +
+                ['none', 'low', 'medium', 'high'].map((lvl) =>
+                  '<option value="' + lvl + '"' + (lvl === 'low' ? ' selected' : '') + '>' + lvl + '</option>'
+                ).join('') +
+              '</select></label>'
+          ).join('') +
+          '<button type="button" class="btn f-remove" title="Remove this faction">&times;</button>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function createSimulationPanel(root) {
+    const panel = S.el(
+      '<section class="panel">' +
+        '<h3 class="panel-title">Create a simulation</h3>' +
+        '<p class="panel-note">A sandbox is a premise and 2-5 factions that want ' +
+          'things from each other. Nothing here calls the LLM or costs credits — ' +
+          'this is the DM&rsquo;s setup; a week run is where generation happens.</p>' +
+        '<div class="form-block">' +
+          '<label class="field"><span class="field-label">Premise — the tension, one line</span>' +
+            '<textarea class="input sand-premise" rows="2" ' +
+              'placeholder="e.g. The toll bridge burned the night the wardens raised the toll."></textarea></label>' +
+          '<div class="inline-form">' +
+            '<label class="field"><span class="field-label">City or place (optional)</span>' +
+              '<input type="text" class="input sand-city" placeholder="e.g. Provis"></label>' +
+            '<label class="field field-narrow"><span class="field-label">Population (optional)</span>' +
+              '<input type="number" class="input sand-pop" min="1" placeholder="12300"></label>' +
+            '<label class="field field-narrow"><span class="field-label">Season</span>' +
+              '<input type="text" class="input sand-season" value="early spring"></label>' +
+          '</div>' +
+          '<div class="sand-factions"></div>' +
+          '<div class="inline-form">' +
+            '<button type="button" class="btn sand-add">+ Add a faction</button>' +
+            '<button type="button" class="btn btn-primary sand-create">Create simulation</button>' +
+          '</div>' +
+          '<div class="form-error"></div>' +
+          '<p class="muted form-note">Prefer hand-editing? This form writes ' +
+            '<code>simulation/state.yaml</code> — you can edit that file directly instead.</p>' +
+        '</div>' +
+      '</section>'
+    );
+    const host = panel.querySelector('.sand-factions');
+    const errBox = panel.querySelector('.form-error');
+    const addBtn = panel.querySelector('.sand-add');
+    const createBtn = panel.querySelector('.sand-create');
+
+    function addRow() {
+      const row = factionRow();
+      row.querySelector('.f-remove').addEventListener('click', () => {
+        if (host.children.length <= 2) {
+          S.toast('Keep at least two factions — the tension needs two sides.', 'info');
+          return;
+        }
+        row.remove();
+      });
+      host.appendChild(row);
+    }
+    addRow();
+    addRow();
+    addBtn.addEventListener('click', () => {
+      if (host.children.length >= 5) {
+        S.toast('Five factions is plenty — more than that and weeks get muddy.', 'info');
+        return;
+      }
+      addRow();
+    });
+
+    createBtn.addEventListener('click', async () => {
+      if (createBtn.disabled) return;
+      const factions = Array.from(host.querySelectorAll('.sand-faction')).map((row) => {
+        const resources = {};
+        row.querySelectorAll('.f-res').forEach((sel) => { resources[sel.getAttribute('data-res')] = sel.value; });
+        return {
+          name: row.querySelector('.f-name').value.trim(),
+          kind: row.querySelector('.f-kind').value.trim(),
+          goal: row.querySelector('.f-goal').value.trim(),
+          resources: resources
+        };
+      });
+      const body = {
+        premise: panel.querySelector('.sand-premise').value.trim(),
+        season: panel.querySelector('.sand-season').value.trim() || 'early spring',
+        factions: factions,
+        force: false
+      };
+      const city = panel.querySelector('.sand-city').value.trim();
+      const pop = Number(panel.querySelector('.sand-pop').value);
+      if (city) {
+        body.city = { name: city };
+        if (pop > 0) body.city.population = pop;
+      }
+      createBtn.disabled = true;
+      errBox.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/simulation/state'), { method: 'POST', body: body });
+        S.toast('Simulation created — factions are live below. Run week 1 when ready.', 'ok');
+        S.showTab('sim'); // re-render: the real sim view with the run button
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        createBtn.disabled = false;
+      }
+    });
+
+    root.appendChild(panel);
+  }
+
   S.tabs.sim = async function (container) {
     container.innerHTML = '';
     if (!S.state.campaign) {
@@ -204,16 +330,16 @@
       root.innerHTML = '';
       if (err && err.status === 404) {
         // A campaign without simulation/state.yaml is normal (a fresh world
-        // has no factions yet) — this is an empty state, not an error.
+        // has no factions yet) — this is an empty state with a working
+        // create form, not an error.
         root.appendChild(S.el(
-          '<section class="panel"><h3 class="panel-title">No simulation in this campaign yet</h3>' +
-            '<p class="muted">The faction sandbox needs <code>simulation/state.yaml</code> — ' +
-            'a premise and the factions that want things from each other — before weeks can run. ' +
-            'Maps and World Building above work without it. ' +
-            'To bootstrap one, see <code>agentic-simulator/AGENTS.md</code>; ' +
-            'a create-a-sandbox flow for fresh campaigns is a planned feature.</p>' +
+          '<section class="panel sim-intro"><h3 class="panel-title">No simulation in this campaign yet</h3>' +
+            '<p class="muted">Maps and World Building work without it. Create the ' +
+            'faction sandbox below — then <em>Run week</em> simulates what happens ' +
+            'next, one week at a time, and writes the chronicle.</p>' +
           '</section>'
         ));
+        createSimulationPanel(root);
         return;
       }
       root.appendChild(S.errorPanel(err, 'The simulation state could not be loaded.'));

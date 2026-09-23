@@ -21,6 +21,7 @@
         </select>
       </label>
       <button type="button" class="btn btn-new-campaign" id="new-campaign-btn" title="Start a new, empty campaign">+ New</button>
+      <button type="button" class="btn btn-help" id="help-btn" title="What is this? First-campaign help" aria-label="Help: what is this?">?</button>
       <form class="header-search" id="header-search" role="search">
         <input type="search" id="search-input" class="input" placeholder="Search this campaign&hellip;" autocomplete="off" spellcheck="false" aria-label="Search chronicles, lore, geography">
       </form>
@@ -45,7 +46,9 @@
   <div id="toasts" aria-live="polite"></div>
   <div id="modal-root"></div>
 
-  <!-- Load order is part of the frontend contract: core first, then tabs. -->
+  <!-- Load order is part of the frontend contract: esc/logtail first, core, then tabs. -->
+  <script src="js/esc.js"></script>
+  <script src="js/logtail.js"></script>
   <script src="js/core.js"></script>
   <script src="js/maps.js"></script>
   <script src="js/world.js"></script>

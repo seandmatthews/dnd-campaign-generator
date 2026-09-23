@@ -6,6 +6,11 @@ and write campaign folders full of YAML. No database, no accounts, no
 internet required: the server binds `127.0.0.1`, and a campaign is one
 directory you can zip and move.
 
+New here? Follow [`TUTORIAL.md`](../TUTORIAL.md) (served live at
+`/tutorial` once the app runs) — it walks a first campaign end to end.
+The **?** button in the app header has the short version, and on boot the
+page shows a setup strip whenever the doctor finds something missing.
+
 ## Prerequisites
 
 The honest boot story: this is a technical newcomer's app, not zero-config.
@@ -18,14 +23,19 @@ point at them, not conjure them.
   [python.org/downloads](https://www.python.org/downloads/)).
 - Python packages: `pip install -r studio/requirements.txt`
   (fastapi, uvicorn, pyyaml, httpx).
-- Node + pnpm, for the map engines. On this machine use pnpm only — the
-  nodist npm/npx shims are broken.
+- Node + pnpm, for the map engines. Use pnpm, not npm/npx: every tool
+  recipe in `dnd-mapping` is written and tested with pnpm (npm was broken
+  in the original author's setup, so it never got covered). If you have
+  working npm, it will probably work — pnpm is the known-good path.
 - An API key, eventually. The app works read-only without one: browse maps,
   lore, chronicles, factions, the review queue. Generating backstory or
   running a live week needs a Z.ai **coding-plan** key — set `ZAI_API_KEY`
   or put the key in `~/.zcode/v2/provider_config.json`. Requests go to the
   coding endpoint (`api/coding/paas/v4`); the pay-as-you-go endpoint returns
   error 1113 "insufficient balance" even when the plan pool is fine.
+  The page itself tells you when the key is missing: a dismissible setup
+  strip under the header appears on boot whenever any doctor check fails
+  (it polls `/api/doctor?quick=1`, presence-only — no tokens spent).
 
 ## Boot
 
@@ -96,14 +106,18 @@ Work through the app, or copy the state back into the campaign yourself.
 
 ## The four tabs
 
-- **Maps** — generate a world from a seed, map a burg into a city, roll a
-  battlemap scene (dungeon / cave / camp) with a Foundry UVTT.
+- **Maps** — generate a world from a seed, map a burg (a town on the world
+  map) into a city, roll a battlemap scene (dungeon / cave / camp) with a
+  Foundry UVTT.
 - **World Building** — the campaign's grounding: geography, timeline,
   entities, naming voice. Generates backstory entries that are constrained
-  to those files, staged as *pending* lore.
-- **Agent Simulation** — the faction sandbox: fog-of-war views, live weeks
-  on dice (costs API credits), chronicles, why-chains, rumor spread. A
-  finished week proposes timeline entries, also pending.
+  to those files, staged as *pending* lore. Missing a culture's name seed
+  list? The name helper offers to stage one from the page.
+- **Agent Simulation** — the faction sandbox: create it right on the tab
+  (premise + 2-5 factions, no LLM involved — it writes
+  `simulation/state.yaml`), then fog-of-war views, live weeks on dice
+  (costs API credits), chronicles, why-chains, rumor spread. A finished
+  week proposes timeline entries, also pending.
 - **Review** — one queue for everything awaiting your decision: pending
   lore, pending week events, verification findings inline. Approve writes
   into the timeline; delete discards.
@@ -115,7 +129,7 @@ the X dismisses it.
 
 ## Where campaigns live
 
-`Documents/D&D/campaigns/<name>/` — one folder per campaign: `campaign.yaml`,
+`<checkout>/campaigns/<name>/` — one folder per campaign: `campaign.yaml`,
 `world/`, `lore/`, `simulation/`, `maps/`. Portable by zip; a new machine
 needs the parent folder, Python, and the pip line above.
 `python studio/assemble.py` builds the sample Ruravaqan campaign from the

@@ -8,15 +8,21 @@ change — never let them drift.
 
 ## Fixed decisions
 
-- Root: `Documents/D&D/studio/`. Campaigns live at `Documents/D&D/campaigns/<name>/`
-  (user data separate from code; `spine.py` resolves the path relative to itself).
+- Root: the studio checkout's `studio/` directory (path-agnostic —
+  `spine.py` resolves everything relative to itself). Campaigns live at
+  `<checkout>/campaigns/<name>/` (user data separate from code).
 - Server: FastAPI, bound `127.0.0.1:8765` (env `STUDIO_PORT` overrides).
-  `python studio/server.py` starts uvicorn programmatically and prints the URL.
-- Responses are JSON unless noted. Errors: `{"error": "..."}` with a 4xx/5xx status.
+  Boot with `python studio/run.py` (prints the URL, opens a browser);
+  `python studio/server.py` is the bare uvicorn equivalent.
+- Responses are JSON unless noted. Errors: `{"error": "..."}` with a 4xx/5xx
+  status — including unhandled exceptions (a catch-all handler maps them to
+  `{"error": "internal error: <type>"}`, 500).
 - Jobs (D5): long work returns `{"job_id": "..."}` with status 202.
   `GET /api/jobs/{id}` → `{"id","kind","status":"queued|running|done|error",
-  "log_tail":[str,...],"result":object|null,"error":str|null}`. UI polls ~1 s.
-  The jobs dict is in-process and ephemeral; canon lives on disk only.
+  "log_tail":[str,...],"result":object|null,"error":str|null,"started":ts}`.
+  UI polls ~1 s and gives up after 31 minutes (the job itself may still be
+  running server-side). The jobs dict is in-process: finished records beyond
+  the newest ~200 are dropped, and a finished job keeps only its log tail.
 - Engine invocation (D3): subprocess with **list-form args, never `shell=True`**
   (the parent path contains `&`). Pattern: `[sys.executable, "-X", "utf8",
   "src/thing.py", ...]` with `cwd=<engine root>`. Node engines:
@@ -32,10 +38,18 @@ change — never let them drift.
   protection). `STUDIO_EXTRA_HOSTS` (comma-separated) extends the list.
 - Per-campaign mutation lock (hardening): one mutating job at a time per
   campaign. The long jobs — `POST .../simulation/week`, `POST .../world`,
-  `POST .../maps/cities`, `POST .../maps/sites` — take the lock at submit
-  time and answer `409 {"error": "another job is already modifying this
-  campaign"}` while it is held. Review approve/delete take the same lock
-  blocking: they wait for an in-flight job instead of failing.
+  `POST .../maps/cities`, `POST .../maps/sites`, `POST .../lore/entries`,
+  `POST .../maps/world-map` — take the lock at submit time and answer
+  `409 {"error": "another job is already modifying this campaign"}` while it
+  is held. Review approve/delete take the same lock blocking: they wait for
+  an in-flight job instead of failing.
+- Shared engine home (hardening): the simulator's
+  `agentic-simulator/world/state.yaml` is ONE scratch file across campaigns.
+  A second, process-wide lock (`engines.ENGINE_LOCK`) serializes every
+  copy-in → engine-run → copy-out sequence: the week job holds it for its
+  whole run; `GET .../simulation/views/{id}` and `POST .../simulation/why`
+  hold it around their copy-in + subprocess. Lock order: campaign lock
+  outside, engine lock inside.
 - Canon snapshots (hardening): after every successful canon mutation the
   studio commits `campaigns/<name>` to the enclosing git repo (`git add -A`
   + `git commit --only` the campaign path, list-form args) with a
@@ -141,6 +155,12 @@ shapes in this document true.
 - `PUT /api/campaign/{name}/lore/style/{file}` `{"text":str}` → write (filename
   constrained to `[A-Za-z0-9._-]`, must exist already); commits snapshot
   `campaign/<name>: update style/<file>`.
+- `POST /api/campaign/{name}/lore/style/{file}` `{"text":str}` → create (201)
+  a style file that does not exist yet — the staging path for name seed
+  lists from the UI. **409 if it exists** (edit via PUT instead). Name
+  lists (`names-*.txt`) must carry ≥3 non-comment lines or **422** (an
+  empty seed list would send the LLM in with nothing in-voice). Commits
+  snapshot `campaign/<name>: stage style/<file>`.
 - `POST /api/campaign/{name}/lore/entries` `{"focus"?:str}` → job.
   **Refuses 422 if `world/geography.yaml` is missing** (fed-or-refused,
   guardrail 4). LLM prompt constrained to geography + timeline + entities
@@ -158,7 +178,22 @@ shapes in this document true.
   "premise":str,"factions":[full dicts],"events":[…],"rumors":[…],
   "chronicles":[{"week","title","file"}],"views_available":[ids]}`.
   **404 is a normal state for a fresh campaign** (no state.yaml yet — no
-  factions exist); the UI renders it as an empty state, not an error.
+  factions exist); the UI renders it as the create-a-simulation form, not
+  an error.
+- `POST /api/campaign/{name}/simulation/state` → 201, author
+  `simulation/state.yaml` from the UI (the fresh-campaign path; no LLM).
+  Body: `{"premise":str, "season"?:str="early spring",
+  "city"?:{"name":str,"population"?:int},
+  "factions":[2-5 × {"name":str,"kind"?:str,"goal":str,
+  "resources"?:{"coin|muscle|legitimacy":"none|low|medium|high"}}],
+  "force"?:StrictBool=false}`. Faction ids are derived from names
+  (underscore slugs — tick.py's HOLDS log lines parse `[a-z_]+`);
+  missing resources default to `low`; ids must be unique and `world` is
+  reserved. **409 when state.yaml exists without `force`** (replacing a
+  sandbox rewrites its history). Clock starts at week 0: tick.py
+  increments before running, so the first live week is week 1. Commits
+  snapshot `campaign/<name>: simulation created|replaced`.
+  Returns `{"ok":true,"week":0,"factions":[ids]}`.
 - `GET /api/campaign/{name}/simulation/views/{faction_id}` → the fog-of-war
   `faction_view` dict as JSON. Engine: `python -X utf8 src/views.py <faction_id>`
   (cwd=agentic-simulator; E adds this CLI, printing YAML).
@@ -221,12 +256,18 @@ shapes in this document true.
   "week_run_in_progress":bool}` — the flag is true while
   `agentic-simulator/world/.week-run-flag` exists (a week job is running,
   or a crashed one has not been restored by the boot hook yet).
-- `GET /api/doctor` → H wires to `doctor.py` JSON; B returns 501 until then.
-  The `week run` check reports an in-progress/interrupted week
+- `GET /api/doctor` → the full `doctor.py` JSON (key diagnosis, tool-tree
+  health, the `week run` check reports an in-progress/interrupted week
   (`agentic-simulator/world/.week-run-flag`); it is informational, not
   required. `doctor.py --fix` (CLI only, not an API) performs the safe
   repairs: `CI=true pnpm install --offline` in a broken tool tree, and
   `pip install -r studio/requirements.txt`.
+- `GET /api/doctor?quick=1` → same shape, but the LLM key check is
+  presence-only (no live probe, no tokens, no network wait) — what the
+  page's setup strip polls on boot.
+- `GET /tutorial` → the repo-root `TUTORIAL.md` as `text/plain` (the help
+  modal links here); 404 with a pointer to the repo root if the file is
+  missing.
 
 ### Shared file shapes
 Timeline entry: `{"id","when","title","text","source"}` with
@@ -245,7 +286,9 @@ overwrites the file (it is derived; approved entries live in the timeline).
 ## Frontend contract (C, M0)
 
 One page (guardrail 6). `index.html` loads, in order, plain scripts
-(no modules, no build): `js/core.js, js/maps.js, js/world.js, js/sim.js, js/review.js`.
+(no modules, no build): `js/esc.js, js/logtail.js, js/core.js, js/maps.js,
+js/world.js, js/sim.js, js/review.js` (`esc.js`/`logtail.js` are UMD and
+double as CommonJS modules for the Node suites `studio/tests/js/`).
 
 `js/core.js` defines `window.Studio`:
 - `Studio.api(path, opts)` → fetch JSON; throws `{status, error}` on !ok.

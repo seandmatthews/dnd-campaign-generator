@@ -23,13 +23,12 @@ import datetime
 import json
 import pathlib
 import re
-import shutil
-import tempfile
 
 import yaml
 
 import engines
 import llm_client
+import spine
 
 
 class FedOrRefused(Exception):
@@ -264,26 +263,14 @@ def _finding(rule, level, quote, note, file_="?", line=1):
 
 
 def _structural_findings(pending_path, log):
-    """Run verification/check.py on the pending file: subprocess, list-form
-    args (the parent path contains `&`), cwd=verification. The structural
-    layer has no deps; vale may add a skipped note. Never blocks."""
-    out_dir = pathlib.Path(tempfile.mkdtemp(prefix="studio-check-"))
+    """Run verification/check.py via engines.run_check (the shared
+    invocation). The structural layer has no deps; vale may add a skipped
+    note. Never blocks."""
     try:
-        rc, lines = engines.run_py(
-            engines.VERIFICATION, "check.py", str(pending_path),
-            "--out", str(out_dir), timeout=180)
-        for line in lines:
-            log(f"  check.py: {line}")
-        findings_file = out_dir / "findings.json"
-        if findings_file.is_file():
-            return json.loads(findings_file.read_text(encoding="utf-8"))
-        return [_finding("loregen/structural", "warning", "",
-                         f"check.py produced no findings.json (rc={rc})")]
+        return engines.run_check(pending_path, timeout=180)
     except Exception as e:  # noqa: BLE001 — advisory, never blocking
         return [_finding("loregen/structural", "suggestion", "",
                          f"structural check could not run: {e}")]
-    finally:
-        shutil.rmtree(out_dir, ignore_errors=True)
 
 
 _CANON_PROMPT = engines.VERIFICATION / "prompts" / "canon-audit.md"
@@ -373,8 +360,8 @@ def generate_entries(campaign_dir, focus="", log=None):
     geo_path = campaign_dir / "world" / "geography.yaml"
     if not geo_path.is_file():
         raise FedOrRefused(
-            "world/geography.yaml is missing — generation is fed or refused "
-            "(guardrail 4); import a world first")
+            "world/geography.yaml is missing — generate a world first "
+            "(Maps tab); generation is fed or refused")
     geo_text = _read(geo_path)
     log(f"fed: world/geography.yaml ({len(geo_text.splitlines())} lines)")
 
@@ -411,14 +398,15 @@ def generate_entries(campaign_dir, focus="", log=None):
                for i, e in enumerate(kept[:6])]
 
     pending_path = _next_pending_path(campaign_dir)
-    pending_path.parent.mkdir(parents=True, exist_ok=True)
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
-    pending_path.write_text(
+    # atomic: under the campaign lock (submit_campaign_job), but a concurrent
+    # review GET may read this file mid-write — tmp+replace keeps it whole
+    spine.write_text_atomic(
+        pending_path,
         yaml.safe_dump({"entries": entries, "created": created,
                         "focus": focus or ""},
-                       sort_keys=False, allow_unicode=True),
-        encoding="utf-8")
+                       sort_keys=False, allow_unicode=True, width=100))
     pending_name = f"lore/{pending_path.name}"
     log(f"staged {len(entries)} entries to {pending_name} — nothing touches "
         "timeline.yaml until approval")
@@ -455,8 +443,10 @@ def name_candidates(campaign_dir, culture, count=8, hint=""):
             break
     if names_path is None:
         raise FedOrRefused(
-            f"lore/style/names-{culture}.txt is missing — naming is fed or "
-            "refused (guardrail 4); stage a seed list for this culture first")
+            f"no seed list for culture '{culture}' yet (lore/style/names-"
+            f"{culture}.txt is missing) — stage one first: a few names, one "
+            "per line. The helper refuses to invent names from nothing "
+            "(fed-or-refused)")
     names_text = _read(names_path)
     voice_text = _read(style / "voice.md")
 

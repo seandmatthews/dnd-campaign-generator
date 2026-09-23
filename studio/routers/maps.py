@@ -36,12 +36,10 @@ from pathlib import Path
 
 import yaml
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import canon
 import engines
-import jobs
 import spine
 import worldmap
 from routers.common import require_campaign, submit_campaign_job
@@ -85,7 +83,10 @@ def _entry(d: Path, kind: str, slug: str) -> dict:
     params = _first(base, "params.yaml")
     label = slug
     if params is not None:
-        doc = yaml.safe_load(params.read_text(encoding="utf-8")) or {}
+        try:
+            doc = yaml.safe_load(params.read_text(encoding="utf-8")) or {}
+        except (yaml.YAMLError, OSError):
+            doc = {}  # a corrupt hand-edited params.yaml must not 500 the list
         if isinstance(doc, dict):
             label = doc.get("name") or doc.get("label") or slug
     return {
@@ -117,12 +118,17 @@ def post_city(name: str, body: CityBody):
     burg = (body.burg or "").strip()
     if not burg:
         raise HTTPException(status_code=422, detail="burg must be a non-empty name")
+    if not spine.slugify(burg):
+        raise HTTPException(
+            status_code=422,
+            detail=f"burg {burg!r} has no usable slug — name it with letters or digits")
     source = spine.world_source(name)
     if source is None:
         raise HTTPException(
             status_code=422,
-            detail="campaign has no world/source.* — a city map is generated "
-                   "from the world dump or not at all (fed-or-refused)")
+            detail="campaign has no world/source.* — generate a world first "
+                   "(Maps tab); a city map is generated from the world dump "
+                   "or not at all (fed-or-refused)")
 
     def job(log):
         out = Path(tempfile.mkdtemp(prefix="studio-city-"))
@@ -261,8 +267,9 @@ def post_world_map(name: str):
     if source is None:
         raise HTTPException(
             status_code=422,
-            detail="campaign has no world/source.* — the world map renders "
-                   "from the genesis record or not at all (fed-or-refused)")
+            detail="campaign has no world/source.* — generate a world first "
+                   "(Maps tab); the world map renders from the genesis "
+                   "record or not at all (fed-or-refused)")
 
     def job(log):
         out = d / "world" / "map.svg"
@@ -273,7 +280,9 @@ def post_world_map(name: str):
         return {"svg": f"/campaign-file/{name}/world/map.svg",
                 "mode": info["mode"]}
 
-    return JSONResponse({"job_id": jobs.submit("world-map", job)}, status_code=202)
+    # world-map writes world/map.svg, which a force world-gen also replaces —
+    # it takes the same per-campaign mutation lock as every other writer
+    return submit_campaign_job("world-map", name, job)
 
 
 # ---------------------------------------------------------- battlemap sites
@@ -296,6 +305,10 @@ def post_site(name: str, body: SiteBody):
         raise HTTPException(
             status_code=422,
             detail='name must not contain any of <>:"/\\|?*')
+    if not spine.slugify(site_name):
+        raise HTTPException(
+            status_code=422,
+            detail=f"site {site_name!r} has no usable slug — name it with letters or digits")
     seed = (body.seed or "").strip() or str(
         zlib.crc32(spine.slugify(site_name).encode("utf-8")) % 10_000_000)
     slug = spine.slugify(site_name)

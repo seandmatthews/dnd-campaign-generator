@@ -13,14 +13,16 @@
 
   /* ---------- text + DOM helpers ---------- */
 
-  function esc(value) {
+  // esc is THE escaping rule (js/esc.js) — everything server- or LLM-derived
+  // goes through it or textContent before touching innerHTML
+  const esc = (window.StudioEsc && window.StudioEsc.esc) || function (value) {
     return String(value == null ? '' : value)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
-  }
+  };
 
   function el(html) {
     const tpl = document.createElement('template');
@@ -66,10 +68,28 @@
     return data;
   }
 
-  function pollJob(id, onLog) {
+  function pollJob(id, onLog, timeoutMs) {
+    // A wedged job (engine killed, LLM hanging) must not tick forever: after
+    // timeoutMs (default 31 min = the week job's 1800 s engine cap + slack)
+    // polling gives up with a readable error. The job itself keeps running
+    // server-side; reload the tab to re-attach to it.
+    const giveUpAfter = timeoutMs || (31 * 60 * 1000);
     return new Promise((resolve, reject) => {
-      let seen = 0;
+      // The server's log_tail is a rotating 40-line window (jobs.py LOG_CAP):
+      // consume it through StudioLogTail, which anchors on the last emitted
+      // line's text — an index alone freezes once the window fills.
+      let logCursor = { seen: 0, last: null };
+      const startedAt = Date.now();
       const tick = async () => {
+        if (Date.now() - startedAt > giveUpAfter) {
+          clearInterval(timer);
+          reject({
+            status: 504,
+            error: 'Gave up waiting for the job after ' + Math.round(giveUpAfter / 60000)
+              + ' minutes (the job may still be running server-side — reload to re-attach)'
+          });
+          return;
+        }
         let job;
         try {
           job = await api('/api/jobs/' + encodeURIComponent(id));
@@ -78,13 +98,9 @@
           reject(err);
           return;
         }
-        const tail = Array.isArray(job.log_tail) ? job.log_tail : [];
-        if (tail.length < seen) seen = tail.length; // tail rotated: skip old lines
-        if (typeof onLog === 'function') {
-          while (seen < tail.length) { onLog(tail[seen]); seen += 1; }
-        } else {
-          seen = tail.length;
-        }
+        const merged = StudioLogTail.mergeLogTail(job.log_tail, logCursor);
+        logCursor = merged.cursor;
+        if (typeof onLog === 'function') merged.lines.forEach((line) => onLog(line));
         if (job.status === 'done') {
           clearInterval(timer);
           resolve(job.result);
@@ -335,9 +351,112 @@
   }
 
   function noCampaign() {
-    return emptyState(
-      'No campaign selected. Create one under Documents/D&D/campaigns/ (or run assemble.py), then refresh this page.'
+    return el(
+      '<div class="empty-state">' +
+        'No campaign selected. Click <strong>+ New</strong> in the header to ' +
+        'create one, or pick one from the Campaign list. New here? The ' +
+        '<a href="/tutorial" target="_blank" rel="noopener">first-campaign ' +
+        'tutorial</a> goes from zero to a living campaign in about 20 minutes.' +
+      '</div>'
     );
+  }
+
+  /* ---------- help modal (header ? button) ---------- */
+
+  function helpModal() {
+    const root = document.getElementById('modal-root');
+    const overlay = el(
+      '<div class="modal-overlay">' +
+        '<div class="modal" role="dialog" aria-modal="true" aria-label="About Campaign Studio">' +
+          '<h3 class="modal-title">What is this?</h3>' +
+          '<p class="modal-body">Campaign Studio is a localhost workbench for ' +
+            'a D&amp;D campaign&rsquo;s world: generate maps, grow lore, and ' +
+            'simulate factions week by week. You are the DM &mdash; everything ' +
+            'the machine produces is a <em>proposal</em> until you approve it ' +
+            'in the Review tab.</p>' +
+          '<ul class="help-tabs">' +
+            '<li><strong>Maps</strong> &mdash; generate a world from a seed, then city and battlemap scenes (Foundry-ready).</li>' +
+            '<li><strong>World Building</strong> &mdash; geography, timeline, naming voice; generates backstory as pending lore.</li>' +
+            '<li><strong>Agent Simulation</strong> &mdash; the faction sandbox: create factions, run a week, read the chronicle, ask why.</li>' +
+            '<li><strong>Review</strong> &mdash; one queue: nothing enters the campaign until you approve it.</li>' +
+          '</ul>' +
+          '<p class="modal-body"><strong>First campaign?</strong><br>' +
+            '1. Click <strong>+ New</strong> and name it<br>' +
+            '2. Maps &rarr; <em>Generate a world</em> with any seed<br>' +
+            '3. Maps &rarr; map a burg, roll a battlemap scene<br>' +
+            '4. World Building &rarr; <em>Generate backstory</em>, approve it in Review<br>' +
+            '5. Agent Simulation &rarr; <em>Create a simulation</em>, then <em>Run week</em></p>' +
+          '<p class="modal-body">Full walkthrough with troubleshooting: ' +
+            '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
+            '(also at <code>TUTORIAL.md</code> in the repo). Something not ' +
+            'booting? Run <code>python studio/doctor.py</code>.</p>' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn btn-primary" data-act="close">Close</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    const done = () => overlay.remove();
+    overlay.addEventListener('click', (ev) => {
+      const act = ev.target && ev.target.getAttribute ? ev.target.getAttribute('data-act') : null;
+      if (act === 'close' || ev.target === overlay) done();
+    });
+    overlay.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') done();
+    });
+    root.appendChild(overlay);
+    overlay.querySelector('[data-act="close"]').focus();
+  }
+
+  /* ---------- setup health strip (doctor, quick mode) ---------- */
+
+  // checks worth a line on the page: anything required that fails, plus the
+  // optional LLM key (lore generation and live weeks silently need it).
+  // vale/week-run are advisory noise for a first run — the doctor CLI has them.
+  function setupStripRelevant(check) {
+    if (!check || check.ok) return false;
+    return !!check.required || check.name === 'llm key';
+  }
+
+  function renderSetupStrip(reportData) {
+    const old = document.querySelector('.setup-strip');
+    if (old) old.remove();
+    const checks = (reportData && Array.isArray(reportData.checks))
+      ? reportData.checks.filter(setupStripRelevant) : [];
+    if (!checks.length) return;
+    const strip = el(
+      '<div class="setup-strip" role="status">' +
+        '<div class="setup-strip-inner">' +
+          '<div class="setup-items"></div>' +
+          '<div class="setup-foot">' +
+            '<span class="muted">Full check: <code>python studio/doctor.py</code></span>' +
+            '<button type="button" class="btn setup-dismiss" aria-label="Dismiss setup notes">Dismiss</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>'
+    );
+    const items = strip.querySelector('.setup-items');
+    checks.forEach((c) => {
+      items.appendChild(el(
+        '<p class="setup-item"><span class="pill setup-pill">' + esc(c.name) + '</span> ' +
+          esc(c.detail) +
+          (c.fix ? ' <span class="muted">Fix: ' + esc(c.fix) + '</span>' : '') +
+        '</p>'
+      ));
+    });
+    strip.querySelector('.setup-dismiss').addEventListener('click', () => {
+      strip.remove();
+      try { sessionStorage.setItem('studio-setup-dismissed', '1'); } catch (_) {}
+    });
+    const header = document.querySelector('.app-header');
+    if (header) header.insertAdjacentElement('afterend', strip);
+  }
+
+  function checkSetup() {
+    try { if (sessionStorage.getItem('studio-setup-dismissed')) return; } catch (_) {}
+    api('/api/doctor?quick=1')
+      .then(renderSetupStrip)
+      .catch(() => {}); // a missing doctor never blocks the page
   }
 
   function loading(msg) {
@@ -416,7 +535,8 @@
         '<form class="modal" role="dialog" aria-modal="true" aria-label="New campaign">' +
           '<h3 class="modal-title">New campaign</h3>' +
           '<p class="modal-body">A campaign is a folder of files under ' +
-            'Documents/D&amp;D/campaigns/ &mdash; portable by zip, editable by hand.</p>' +
+            '<code>campaigns/&lt;name&gt;/</code> in this checkout &mdash; ' +
+            'portable by zip, editable by hand.</p>' +
           '<div class="modal-fields">' +
             '<label class="field"><span class="field-label">Name (lowercase, hyphens)</span>' +
               '<input type="text" class="input" id="new-camp-name" ' +
@@ -445,7 +565,8 @@
       api('/api/campaigns', { method: 'POST', body: { name: name, title: title } })
         .then((created) => {
           done();
-          toast('Campaign created: ' + (created.title || created.name), 'ok');
+          toast('Campaign created: ' + (created.title || created.name) +
+                ' — next: generate a world on the Maps tab', 'ok');
           if (onCreated) onCreated(created);
         })
         .catch((err) => {
@@ -478,6 +599,9 @@
       });
     }
 
+    const helpBtn = document.getElementById('help-btn');
+    if (helpBtn) helpBtn.addEventListener('click', helpModal);
+
     const searchForm = document.getElementById('header-search');
     const searchInput = document.getElementById('search-input');
     if (searchForm && searchInput) {
@@ -497,6 +621,7 @@
 
     await refreshCampaigns(null);
     showTab(Studio.state.activeTab);
+    checkSetup(); // fire-and-forget: the strip appears only if setup is incomplete
   }
 
   /* ---------- exports ---------- */
@@ -513,6 +638,7 @@
   Studio.errorPanel = errorPanel;
   Studio.emptyState = emptyState;
   Studio.noCampaign = noCampaign;
+  Studio.helpModal = helpModal;
   Studio.loading = loading;
   Studio.showTab = showTab;
 
