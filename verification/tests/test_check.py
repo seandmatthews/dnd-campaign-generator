@@ -71,6 +71,72 @@ ok("typo variant flagged", "Ruravaquan" in flagged, str(flagged))
 ok("possessive of exact term not flagged", "Ruravaqan's" not in flagged)
 ok("exact term not flagged", "Ruravaqan" not in flagged and "Sera" not in flagged)
 
+# --- multi-word canon terms (once inert) -----------------------------------
+multi_hits = check.canon_variants("The Reliquarry fell. The Dockes stayed shut.",
+                                  ["the Reliquary", "the Docks"])
+multi_flagged = {v for _, _, v in multi_hits}
+multi_terms = {t for _, t, _ in multi_hits}
+ok("multi-word term typo flagged (Reliquarry)", "the Reliquary" in multi_terms,
+   str(multi_hits))
+ok("multi-word term typo flagged (Dockes)", "the Docks" in multi_terms,
+   str(multi_hits))
+ok("the variants themselves are the tokens", {"Reliquarry", "Dockes"} == multi_flagged)
+ok("exact multi-word member word not flagged",
+   not check.canon_variants("The Reliquary itself stood.", ["the Reliquary"]))
+
+# --- sentences(): frontmatter and lists are not prose ----------------------
+doc = ("---\ntitle: week one\npunctuation: none\n---\n\n"
+       "# Week one\n\n- fog rolls in\n- the strike holds\n- no coin moves\n\n"
+       "The Mint opened its coffers and found the bottom of them. Silence fell.")
+sf = check.structural_findings(pathlib.Path("x.md"), doc)
+ok("frontmatter/bullets produce no long-sentence false positive",
+   not any(x["rule"] == "structural/long-sentence" for x in sf), str(sf))
+ok("the real prose sentence still counts",
+   len(check.sentences(doc)) == 2, str(check.sentences(doc)))
+
+# --- LLM finding decoration: model shape -> schema shape -------------------
+model_finding = {"rule": "canon-audit", "quote": "The Mint opened its coffers",
+                 "note": "STATE does not back it", "severity": "error"}
+decorated = check._decorate(model_finding, pathlib.Path("canon-audit.md"),
+                            "intro line\nThe Mint opened its coffers and found the bottom.",
+                            pathlib.Path("chronicle/0001.md"))
+ok("decorated finding passes validate", check.validate(decorated)[0], str(decorated))
+ok("decoration locates the quote's line", decorated["line"] == 2, str(decorated["line"]))
+ok("decoration attributes the audited file", decorated["file"] == str(pathlib.Path("chronicle/0001.md")))
+ok("severity maps to level", decorated["level"] == "error")
+bad_sev = check._decorate(dict(model_finding, severity="catastrophic"),
+                          pathlib.Path("canon-audit.md"), "text", None)
+ok("unknown severity folds to suggestion", bad_sev["level"] == "suggestion"
+   and check.validate(bad_sev)[0])
+
+# --- the schema file is the contract ---------------------------------------
+ok("required keys loaded from findings.schema.json",
+   check._schema_required() == {"file", "line", "rule", "level", "quote"},
+   str(check._schema_required()))
+
+# --- vale alert key: Check (2.x/3.x) with Rule fallback --------------------
+import subprocess as _sp
+vale_json = '{"file.md": {"path": [{"Line": 4, "Check": "Tabletop.Regression", "Level": "warning", "Match": "ancient evil", "Message": "no"}]}}'
+saved_which, saved_run = check.shutil.which, check.subprocess.run
+check.shutil.which = lambda name: "/fake/vale"
+check.subprocess.run = lambda *a, **k: _sp.CompletedProcess(a[0], 0, vale_json, "")
+try:
+    vfindings, ran = check.vale_findings([pathlib.Path("file.md")])
+finally:
+    check.shutil.which, check.subprocess.run = saved_which, saved_run
+ok("vale ran in fake mode", ran)
+ok("vale rule id read from Check key",
+   any(x["rule"] == "vale/Tabletop.Regression" for x in vfindings), str(vfindings))
+old_json = vale_json.replace('"Check": "Tabletop.Regression"', '"Rule": "Tabletop.Regression"')
+check.shutil.which = lambda name: "/fake/vale"
+check.subprocess.run = lambda *a, **k: _sp.CompletedProcess(a[0], 0, old_json, "")
+try:
+    vfindings_old, _ = check.vale_findings([pathlib.Path("file.md")])
+finally:
+    check.shutil.which, check.subprocess.run = saved_which, saved_run
+ok("older vale Rule key still works",
+   any(x["rule"] == "vale/Tabletop.Regression" for x in vfindings_old), str(vfindings_old))
+
 # --- findings schema ------------------------------------------------------
 good = {"file": "x.md", "line": 3, "rule": "vale/Regression", "level": "error", "quote": "ancient evil"}
 ok("valid finding accepted", check.validate(good)[0])

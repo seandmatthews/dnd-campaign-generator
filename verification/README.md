@@ -27,12 +27,17 @@ Cheapest layer first; each sees only what survives the last.
    with a narrow mandate and a JSON findings contract —
    - `canon-audit.md` — every claim not derivable from the world state
    - `discriminator.md` — can a model tell this world's prose from generic
-     fantasy? If not, it is slop by operational definition (needs decoy
-     passages; run it deliberately)
+     fantasy? If not, it is slop by operational definition (run via
+     `--discriminate CANON DECOY1 DECOY2`)
    - `compression.md` — which paragraphs change nothing at the table if
      deleted
    - `specificity.md` — rewrite sentences that could appear in any
      campaign so they belong to this one
+
+   The prompts ask the model only for `{rule, quote, note, severity}`;
+   `check.py` decorates each finding into the full schema shape (`file`,
+   `line` located from the quote, `level` from severity) before it enters
+   the queue.
 
 Findings land in `--out` (default `findings/`) as `findings.json` plus a
 human-readable `queue.md`. Nothing blocks; the DM decides.
@@ -43,6 +48,7 @@ human-readable `queue.md`. Nothing blocks; the DM decides.
 python tests/test_check.py                                  # the kit tests itself
 python check.py ../agentic-simulator/chronicle/0004-*.md    # structural layer only
 python check.py draft.md --state ../agentic-simulator/world/state.yaml --llm
+python check.py --discriminate canon.md generic-one.md generic-two.md         --state ../agentic-simulator/world/state.yaml
 ```
 
 ## Growing the kit
