@@ -25,3 +25,21 @@ def test_campaign_file_serves_and_blocks_traversal(client):
             "/campaign-file/does-not-exist.svg").status_code == 404
     finally:
         probe.unlink(missing_ok=True)
+
+
+def test_campaign_file_never_serves_dot_git(client):
+    """campaigns/ is its own git repo: .git (config, packed history) must
+    not be readable over HTTP even though it lives under the mount root."""
+    import spine
+    root = spine.campaigns_root()
+    git_dir = root / ".git"
+    probe = git_dir / "studio-probe.txt"
+    probe.write_text("git secret", encoding="utf-8")
+    try:
+        for evil in ("/campaign-file/.git/studio-probe.txt",
+                     "/campaign-file/.git/config"):
+            r = client.get(evil)
+            assert r.status_code == 404, evil
+            assert "git secret" not in r.text
+    finally:
+        probe.unlink(missing_ok=True)

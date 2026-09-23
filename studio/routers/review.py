@@ -66,6 +66,9 @@ def _pending_file(campaign_dir: Path, rel: str) -> tuple[Path, str]:
     if not text or text.startswith("/") or ".." in text.split("/"):
         raise HTTPException(status_code=422,
                             detail=f"not a pending file of this campaign: {rel!r}")
+    if any(ord(ch) < 32 for ch in text):  # NUL/control chars: resolve() raises raw ValueError
+        raise HTTPException(status_code=422,
+                            detail=f"not a pending file of this campaign: {rel!r}")
     root = campaign_dir.resolve()
     path = (campaign_dir / text).resolve()
     try:

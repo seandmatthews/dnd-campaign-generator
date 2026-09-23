@@ -111,12 +111,20 @@ def test_seedless_dump_gets_a_noseed_suffix(tmp):
        str(doc["meta"]["seed"]))
 
 
-def test_imported_at_is_the_source_mtime_not_now(tmp):
+def test_output_is_mtime_and_clock_free(tmp):
+    """The regression: meta stamped `imported_at` from the source's mtime (and
+    once from the wall clock) — not reproducible content, so every
+    regeneration permanently dirtied the tracked derivative. Provenance is
+    seed + fmg_version only; re-importing an unchanged dump is byte-identical
+    no matter when it runs."""
     p = make_map(tmp, include=("features", "burgs"), mtime=1000000000)
     out, doc, _ = import_to(tmp, p)
-    ok("imported_at stamps the source file",
-       doc["meta"]["imported_at"] == "2001-09-09",
-       str(doc["meta"]["imported_at"]))
+    ok("no timestamp key in meta",
+       not any("at" in k for k in doc["meta"] if k.endswith("_at")),
+       str(sorted(doc["meta"])))
+    ok("provenance is seed + version",
+       doc["meta"]["seed"] == "12345" and doc["meta"]["fmg_version"],
+       str(doc["meta"]))
 
 
 def test_cli_batch_survives_one_bad_file(tmp):
@@ -168,7 +176,7 @@ def test_json_export_reports_no_missing(tmp):
 if __name__ == "__main__":
     for fn in [test_full_import, test_missing_sections_are_reported_not_silent,
                test_seedless_dump_gets_a_noseed_suffix,
-               test_imported_at_is_the_source_mtime_not_now,
+               test_output_is_mtime_and_clock_free,
                test_cli_batch_survives_one_bad_file,
                test_json_export_reports_no_missing]:
         with tempfile.TemporaryDirectory() as d:

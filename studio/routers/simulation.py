@@ -368,7 +368,7 @@ def _run_week_locked(name: str, d: Path, log) -> dict:
         new_state_file = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
         engines.copy_file_atomic(new_state_file, sim_dir / "state.yaml")
         after = {p.name for p in chronicle_dir.glob("*.md")}
-        new_files = sorted(after - before)
+        new_files = after - before
         for fn in new_files:
             engines.copy_file(chronicle_dir / fn, sim_dir / "chronicle" / fn)
             log(f"copied back chronicle/{fn}")
@@ -379,7 +379,9 @@ def _run_week_locked(name: str, d: Path, log) -> dict:
         held = {m.group(1) for ln in lines
                 if (m := _HOLDS_RE.match(ln))}
         if new_files:
-            fn = new_files[-1]
+            # the run's chronicle = the newest new file by mtime; sorted-by-
+            # name is wrong for reruns (0005-a-2.md sorts before 0005-a.md)
+            fn = max(new_files, key=lambda f: (chronicle_dir / f).stat().st_mtime)
             chronicle = _chronicle_result(name, fn)
             held |= _held_from_chronicle(sim_dir / "chronicle" / fn)
 

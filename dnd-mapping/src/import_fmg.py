@@ -6,9 +6,10 @@ FMG sources accepted:
 
 Maps are derived artifacts: the raw FMG file stays untouched in
 worlds/raw/ and this script derives a terse geography.yaml beside the
-canonical state. Re-run any time; never hand-edit the output. `imported_at`
-stamps the SOURCE FILE's mtime, so re-importing an unchanged file is
-byte-stable (no midnight diff noise).
+canonical state. Re-run any time; never hand-edit the output. meta carries
+no timestamps at all (seed + fmg_version are the provenance), so
+re-importing an unchanged file is byte-stable — a wall-clock or mtime stamp
+permanently dirtied tracked derivatives on every regeneration.
 
 Usage:
   python src/import_fmg.py <path-to-.map-or-.json> [more paths...]
@@ -19,7 +20,6 @@ import json
 import pathlib
 import re
 import sys
-from datetime import datetime, timezone
 
 import yaml
 
@@ -173,7 +173,6 @@ def summarize(info, pack):
             "map_name": info.get("mapName"),
             "seed": str(info.get("seed")),
             "fmg_version": info.get("version"),
-            "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         },
         "summary": {
             "nations": len(nations),
@@ -199,11 +198,11 @@ def import_file(path):
     # full JSON exports report every section found, so `missing` is .map-only
     missing = sorted(set(_SIGNATURES) - found)
     doc = summarize(info, pack)
-    # `imported_at` is the SOURCE's mtime (UTC), not now(): re-importing an
-    # unchanged dump produces byte-identical output ("never hand-edit" only
-    # works if regeneration is diff-clean)
-    stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
-    doc["meta"]["imported_at"] = stamp.strftime("%Y-%m-%d")
+    # provenance records the dump's own seed + name, never a wall-clock or
+    # mtime stamp: re-importing an unchanged dump must stay byte-identical
+    # ("never hand-edit" only works if regeneration is diff-clean), and an
+    # mtime is not reproducible content — it permanently dirtied tracked
+    # derivatives on every regeneration (found 2026-09-23)
     seed = info.get("seed")
     suffix = str(seed)[-4:] if seed not in (None, "") else "noseed"
     slug = f"{slugify(info.get('mapName') or 'unnamed')}-{suffix}"

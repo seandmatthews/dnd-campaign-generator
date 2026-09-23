@@ -161,9 +161,21 @@ async def unhandled_error(request: Request, exc: Exception):
 # Campaign files (map SVGs, chronicle markdown, geojson) — read-only intent,
 # served straight off the campaigns root. StaticFiles refuses path escapes
 # (404 outside the tree). Created on boot so a fresh clone can serve [].
+class _NoDotGit(StaticFiles):
+    """The campaigns root is its own git repo; .git (config, packed history)
+    is nobody's business over HTTP — one deny at lookup, everything else
+    serves exactly as before."""
+
+    def lookup_path(self, path: str):
+        parts = path.replace("\\", "/").split("/")
+        if any(p.lower() == ".git" for p in parts[:2]):
+            return "", ""
+        return super().lookup_path(path)
+
+
 campaigns_root = spine.campaigns_root()
 campaigns_root.mkdir(parents=True, exist_ok=True)
-app.mount("/campaign-file", StaticFiles(directory=str(campaigns_root)),
+app.mount("/campaign-file", _NoDotGit(directory=str(campaigns_root)),
           name="campaign-file")
 
 # The one page (C's static/); mounted last so /api routes win.

@@ -586,16 +586,24 @@ if __name__ == "__main__":
         SCENE_DIR = pathlib.Path(arg("--dir", str(SCENE_DIR)))
         SCENE_FILE = SCENE_DIR / "scene.json"
         render() if cmd == "render" else wrap(arg("--png", "scene.png"))
-    elif cmd == "gen-dungeon":
-        try:
-            rooms = int(arg("--rooms", "7"))
-        except ValueError:
-            sys.exit("error: --rooms must be an integer")
-        gen_dungeon(arg("--seed", "1"), arg("--name", "dungeon"), rooms)
-    elif cmd == "gen-cave":
-        gen_cave(arg("--seed", "1"), arg("--name", "cave"))
-    elif cmd == "gen-camp":
-        gen_camp(arg("--seed", "1"), arg("--name", "camp"))
+    elif cmd in ("gen-dungeon", "gen-cave", "gen-camp"):
+        name = arg("--name", cmd.removeprefix("gen-"))
+        # --name becomes a directory under worlds/: a separator or dot-dot
+        # escapes the engine tree (the studio validates its own input; this
+        # guards the documented CLI entry point)
+        if ("/" in name or "\\" in name or name in (".", "..")
+                or pathlib.Path(name).name != name):
+            sys.exit(f"error: --name must be a bare directory name, got {name!r}")
+        if cmd == "gen-dungeon":
+            try:
+                rooms = int(arg("--rooms", "7"))
+            except ValueError:
+                sys.exit("error: --rooms must be an integer")
+            gen_dungeon(arg("--seed", "1"), name, rooms)
+        elif cmd == "gen-cave":
+            gen_cave(arg("--seed", "1"), name)
+        else:
+            gen_camp(arg("--seed", "1"), name)
     else:
         print(__doc__)
         print("site generators: gen-dungeon --seed S --name N [--rooms N] | "

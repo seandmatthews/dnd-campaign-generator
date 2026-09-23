@@ -387,3 +387,18 @@ def test_job_log_lines_mirror_into_the_log(client):
     finally:
         logging.getLogger("studio.jobs").removeHandler(handler)
     assert any(marker in m for m in captured), captured[-5:]
+
+
+def test_hostile_site_and_style_names_are_422_not_500(client, tmp_spine_root):
+    """Reserved Windows device names and trailing dot/space cannot exist as
+    directories — the studio knows this (campaign names refuse them) and now
+    refuses them for site dirs and style files too, with the same readable
+    422 instead of a raw OSError 500 from deep inside the pipeline."""
+    for name in ("con", "nul", "trailing dot."):  # a trailing space cannot survive .strip()
+        r = client.post("/api/campaign/testvale/maps/sites",
+                        json={"kind": "dungeon", "name": name})
+        assert r.status_code == 422, (name, r.text)
+        assert "error" in r.json()
+    r = client.post("/api/campaign/testvale/lore/style/con.txt",
+                    json={"text": "a\nb\nc\n"})
+    assert r.status_code == 422, r.text

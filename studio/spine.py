@@ -14,6 +14,7 @@ import re
 import datetime
 import os
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -108,13 +109,28 @@ def _safe_load(path: Path):
             f"Fix or delete the file, or restore it with git checkout -- {path}")
 
 
+def _replace_with_retry(tmp: Path, path: Path, attempts: int = 3) -> None:
+    """os.replace, but tolerant of a Windows sharing violation: a reader
+    holding the destination open without FILE_SHARE_DELETE makes the replace
+    raise PermissionError for an instant. Three short tries covers it; a
+    genuine failure still raises."""
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
 def write_text_atomic(path: Path, text: str) -> Path:
     """Write via tmp + os.replace so a crash or concurrent reader never sees
     a half-written spine file. Same volume, so the replace is atomic."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    _replace_with_retry(tmp, path)
     return path
 
 
@@ -162,7 +178,12 @@ def create_campaign(name: str, title: str = "") -> dict:
     if d.exists():
         raise CampaignExists(f"campaign already exists: {name}")
     title = (title or "").strip() or name
-    (d / "world").mkdir(parents=True)
+    try:
+        (d / "world").mkdir(parents=True)
+    except FileExistsError:
+        # two concurrent creates: the exists() check above raced — map to the
+        # same typed error instead of a raw OSError 500
+        raise CampaignExists(f"campaign already exists: {name}")
     (d / "lore" / "style").mkdir(parents=True)
     (d / "simulation" / "chronicle").mkdir(parents=True)
     (d / "maps" / "cities").mkdir(parents=True)
@@ -307,9 +328,24 @@ def write_entities(name: str, text: str) -> Path:
     return write_text_atomic(path, text)
 
 
+def windows_hostile_stem(stem: str) -> str | None:
+    """Why a would-be directory/file stem cannot exist on Windows, or None
+    when it is fine: reserved device names, trailing dot/space (Windows
+    silently strips them, so the path written is not the path asked for).
+    Callers turn this into a readable 422 instead of a raw OSError."""
+    if stem.lower() in _RESERVED_DEVICE_NAMES:
+        return f"'{stem}' is a reserved Windows device name"
+    if stem != stem.rstrip(" ."):
+        return f"'{stem}' ends with a dot or space — Windows strips it"
+    return None
+
+
 def _style_path(name: str, filename: str, must_exist: bool = False) -> Path:
     if not _STYLE_RE.match(filename or ""):
         raise CampaignError(f"invalid style filename: {filename!r}")
+    hostile = windows_hostile_stem(Path(filename).stem)
+    if hostile:
+        raise CampaignError(f"invalid style filename: {hostile}")
     path = campaign_dir(name) / "lore" / "style" / filename
     if must_exist and not path.is_file():
         raise CampaignNotFound(f"no such style file: {filename}")

@@ -1,4 +1,6 @@
-# Provenance record — regenerate with scripts/gen-ruravaqan.mjs, never hand-edit outputs.
+# Provenance record — this city was hand-assembled from settlemaker + the recorded
+# inputs below (the one-off scripts/gen-ruravaqan.mjs was removed in 3844f1a).
+# Outputs regenerate from worlds/raw/candidate-03.map + these params; never hand-edit outputs.
 source_map: worlds/raw/candidate-03.map
 source_seed: '878636343'
 settlemaker_version: 3.0.1

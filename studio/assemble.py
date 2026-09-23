@@ -25,6 +25,7 @@ Exit status 2 if a required source is missing, 1 on verification failure.
 """
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -99,9 +100,11 @@ def collect_sources(root):
         errors.append(f"missing required directory: {chron_dir}")
     else:
         for p in sorted(chron_dir.glob("*.md")):
-            stem_digits = "".join(ch for ch in p.stem if ch.isdigit())
-            if stem_digits:
-                chronicles[int(stem_digits[: len(stem_digits)])] = p
+            # the week is the LEADING number (0003-the-ash-crossing.md -> 3);
+            # joining every digit would read a rerun like 0003-x-2nd.md as 32
+            m = re.match(r"(\d+)", p.stem)
+            if m:
+                chronicles[int(m.group(1))] = p
     for week in REQUIRED_CHRONICLE_WEEKS:
         if week not in chronicles:
             errors.append(

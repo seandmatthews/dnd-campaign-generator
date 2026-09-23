@@ -315,6 +315,9 @@ def post_site(name: str, body: SiteBody):
         raise HTTPException(
             status_code=422,
             detail='name must not contain any of <>:"/\\|?*')
+    hostile = spine.windows_hostile_stem(site_name)
+    if hostile:
+        raise HTTPException(status_code=422, detail=hostile)
     if not spine.slugify(site_name):
         raise HTTPException(
             status_code=422,

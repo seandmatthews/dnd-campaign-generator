@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 STUDIO_DIR = Path(__file__).resolve().parent
@@ -128,11 +129,20 @@ def copy_file_atomic(src: Path, dst: Path) -> Path:
     """copy_file for files a reader may open mid-copy (campaign canon:
     simulation/state.yaml). tmp + os.replace in the destination's own
     directory, so a concurrent GET never sees a half-written state and a
-    crash mid-copy never truncates it."""
+    crash mid-copy never truncates it. The replace retries briefly: a
+    reader holding the destination open makes Windows raise
+    PermissionError for an instant, and the reader is the innocent party."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(dst.name + ".tmp")
     shutil.copy2(src, tmp)
-    os.replace(tmp, dst)
+    for attempt in range(3):
+        try:
+            os.replace(tmp, dst)
+            return dst
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(0.05 * (attempt + 1))
     return dst
 
 
