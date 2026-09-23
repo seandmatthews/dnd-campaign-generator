@@ -13,8 +13,7 @@ FMG_SEED=12345 node node_modules/vitest/vitest.mjs run src/generators/headless-e
 cd ../.. && python src/import_fmg.py worlds/raw/headless-12345.json
 
 # 2. Make a city for a burg from that world (~seconds):
-#    copy scripts/gen-ruravaqan.mjs, swap in the burg's record + road bearings
-#    (both derivable from the world JSON — see Tier 2), run it.
+node scripts/gen-city.mjs --world worlds/raw/<dump> --burg "<name>" --out worlds/<city>
 
 # 3. Make a battlemap scene:
 python src/battlemap.py extract                        # city-anchored (harbour quay)
@@ -66,6 +65,12 @@ FMG_SEED=12345 FMG_W=1280 FMG_H=720 \
 # → worlds/raw/headless-12345.json in ~1 second
 cd ../.. && python src/import_fmg.py worlds/raw/headless-12345.json
 ```
+
+**The runner is not vanilla FMG.** `headless-export.test.ts`, the
+`d3-quadtree` dependency patch, and two pnpm config files are local
+modifications inside the (ignored) FMG clone. The tracked copies live in
+[`vendor-patches/fmg/`](../vendor-patches/fmg/) — after a fresh clone, apply
+them per that directory's README before the incantation above works.
 
 How it works (so you can fix it when upstream changes): the runner bypasses
 `components/lifecycle.ts` — its imports drag in dialogs and UI tabs — and
@@ -145,12 +150,16 @@ Repo: `tools/settlemaker` (v3.0.1, GPL-3.0 — external tool; never import its
 code into `src/`). Built with `pnpm install` + `node
 node_modules/typescript/bin/tsc` → `dist/index.js`.
 
-`scripts/gen-ruravaqan.mjs` is the template: import `generateSettlement` from
+`scripts/gen-city.mjs` is the generator: import `generateSettlement` from
 the built dist, pass a burg record + seed, get `{svg, geojson, model, kind,
-degradedFlags}`. Ruravaqan's inputs all come from real data: FMG's own burg
-record (population, port/walls/plaza/temple), road bearings computed from
-neighboring burgs' coordinates, `oceanBearing` (assumed — the one
-non-provenance-backed input), seed derived from the world seed.
+degradedFlags}`. Every input comes from real data in the dump itself: FMG's
+own burg record (population, port/walls/plaza/temple), road bearings derived
+from actual route geometry to neighboring burgs, ocean bearing from cell
+arrays, `port -> harbourSize: 'large'`, seed derived from the world seed
+(mod 1e6). A fallback input that could not be read from the dump (e.g.
+ocean bearing) is flagged `assumed:` in the params.yaml, not silently
+invented. (The hand-typed `gen-ruravaqan.mjs` this replaced was removed
+2026-09-22 — it also wrote to a stale output path.)
 
 Knobs that matter:
 
@@ -172,7 +181,7 @@ render-scene-png.mjs`. Full chain for the pilot scene:
 ```bash
 python src/battlemap.py extract            # GeoJSON footprints -> scene.json
 python src/battlemap.py render             # scene.json -> scene.svg
-node scripts/render-scene-png.mjs harbour-quay   # scene.svg -> scene.png (sharp)
+node scripts/render-scene-png.mjs worlds/ruravaqan/scenes/harbour-quay   # scene.svg -> scene.png (sharp)
 python src/battlemap.py wrap               # scene.json + png -> .uvtt
 ```
 
@@ -234,18 +243,39 @@ worlds/
   candidates/               derived geography.yaml per world + index.md (chosen: Bonia)
   ruravaqan/                the city: ruravaqan.svg/.geojson, params.yaml, preview.png
     scenes/harbour-quay/    scene.json, scene.svg, scene.png, harbour-quay.uvtt
-  sites/                    generated sites (no city anchor): the-undercroft,
-                            marsh-gang-camp, the-silver-mine — same 4-file layout each
+  sites/                    generated scenes, slugged: the-undercroft, marsh-gang-camp,
+                            the-silver-mine, doves-rest, the-smoke-camp, the-ash-cellars
+                            (scene dirs are slugs — quoting a space in a CLI is a tax)
 tools/
-  Fantasy-Map-Generator/    FMG clone (tag 1.153.1) + our headless-export runner
+  Fantasy-Map-Generator/    FMG clone (tag 1.153.1) + our headless-export runner —
+                            NOT vanilla: the tracked copies live in vendor-patches/fmg/
   settlemaker/              settlemaker clone (v3.0.1)
 scripts/
-  gen-ruravaqan.mjs         Tier 2 generator
+  gen-city.mjs              Tier 2 generator (any burg, data-derived inputs)
   render-scene-png.mjs      Tier 3 rasterizer (sharp)
 src/
-  import_fmg.py             Tier 1 -> geography.yaml
+  import_fmg.py             Tier 1 -> geography.yaml (warns on unmatched sections)
   battlemap.py              Tier 3: extract/render/wrap + gen-dungeon/gen-cave/gen-camp
+tests/
+  test_import_fmg.py        importer suite (synthetic miniature .map fixtures)
 ```
+
+## What gets committed
+
+The repo is ~30 MB of git objects and there is no remote, so no LFS. The
+rule that keeps it sane:
+
+- **Tracked**: raw FMG dumps in `worlds/raw/` (they ARE the genesis record —
+  the only thing that regenerates everything else), final `geography.yaml`s,
+  the chosen city's SVG/GeoJSON/params, and final site artifact sets
+  (scene.svg/png/json + .uvtt).
+- **Not tracked**: review PNGs for rejected candidates, smoke-test output
+  (`out-gen-city-smoke/`), anything under `tools/`. A rejected world's 9 MB
+  save is a judgment, not a fact — record the seed in `index.md` and delete
+  the file.
+- Re-generating a tracked artifact rewrites a ~5 MB blob; don't churn tracked
+  derivatives casually — regenerate when the SOURCE changed, not to "see what
+  it looks like".
 
 ## History
 

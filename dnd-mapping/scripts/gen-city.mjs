@@ -44,7 +44,9 @@ const MAX_ROAD_BEARINGS = 4;
 const TOWN_CLASS_POP = 10;
 
 const usage = (code) => {
-  console.log(
+  // errors exit nonzero and print to stderr; --help prints to stdout
+  const emit = code === 0 ? console.log : console.error;
+  emit(
     [
       "Usage: node scripts/gen-city.mjs --world <FMG world dump> --burg <name|index> --out <outdir>",
       "",
@@ -235,7 +237,11 @@ function deriveRoadBearings(burg, burgs, routes, { includeSearoutes }) {
     }
   }
   return [...found.values()]
-    .sort((a, b) => a.bearing_deg - b.bearing_deg || a.route_id.localeCompare(b.route_id))
+    // codepoint compare, not localeCompare: collation follows the runtime's
+    // ICU/locale, so the same dump+seed could order ties (and cut different
+    // roads) on a different machine
+    .sort((a, b) => a.bearing_deg - b.bearing_deg
+      || (a.route_id < b.route_id ? -1 : a.route_id > b.route_id ? 1 : 0))
     .slice(0, MAX_ROAD_BEARINGS);
 }
 
@@ -331,7 +337,7 @@ const opt = {};
 for (let i = 0; i < args.length; i++) {
   const k = args[i];
   if (k === "--help" || k === "-h") usage(0);
-  if (!k.startsWith("--") || args[i + 1] === undefined) usage(2);
+  if (!k.startsWith("--") || args[i + 1] === undefined || args[i + 1].startsWith("--")) usage(2);
   opt[k.slice(2)] = args[++i];
 }
 for (const required of ["world", "burg", "out"]) {
@@ -384,8 +390,9 @@ const record = {
   ...(isPort ? { harbourSize: "large" } : {}), // REQUIRED for piers on ports
 };
 
-const seed = opt.seed !== undefined ? Number(opt.seed) : Number(world.seed) % 1e6;
-if (!Number.isFinite(seed)) {
+const rawSeed = String(opt.seed !== undefined ? opt.seed : world.seed ?? "").trim();
+const seed = opt.seed !== undefined ? Number(rawSeed) : (rawSeed === "" ? NaN : Number(rawSeed) % 1e6);
+if (rawSeed === "" || !Number.isFinite(seed)) {
   console.error(`cannot derive a seed from world seed ${JSON.stringify(world.seed)} — pass --seed`);
   process.exit(2);
 }

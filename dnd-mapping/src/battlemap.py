@@ -14,8 +14,8 @@ Usage:
   python src/battlemap.py render             # -> scene.svg
   python src/battlemap.py wrap               # -> harbour-quay.uvtt (needs PNG)
 
-The PNG is produced by opening scene.svg in a browser viewport sized to the
-image and screenshotting (see render output for the exact size to set).
+The PNG is rasterized from scene.svg with sharp
+(scripts/render-scene-png.mjs) at the exact dimensions render() prints.
 """
 
 import base64
@@ -43,6 +43,17 @@ def load_geojson():
 def u(m):
     """meters -> scene pixels"""
     return round(m * PX_PER_M, 2)
+
+
+def xt(text):
+    """XML-escape text bound for the SVG (& first, or the rest double-escapes).
+    Scene names reach <text> labels verbatim — 'Marsh & Fen' must not make
+    scene.svg unparseable for the rasterizer."""
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
 
 
 # ---------------------------------------------------------------- extract
@@ -227,6 +238,18 @@ def _floor_features(cells, cols, rows, floor_color="#6b6459", wall_color="#2e2b2
     return feats
 
 
+def _door_cell(acy, acx, bx, by, bw, bh, bcx, bcy):
+    """The cell + leaf angle for the door where the L corridor from room A
+    enters room B. Top/bottom walls are horizontal — the leaf runs along
+    them (angle 0); a same-center-row pair has no vertical leg, so the
+    corridor enters through a side wall (angle 90)."""
+    if bcy == acy:
+        return (bx if bcx > acx else bx + bw - 1), bcy, 90
+    edge_x = min(max(bcx, bx), bx + bw - 1)
+    edge_y = by if bcy > acy else by + bh - 1
+    return edge_x, edge_y, 0
+
+
 def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
     rng = random.Random(seed)
     cols, rows = 42, 28
@@ -243,6 +266,10 @@ def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
         rooms.append((x, y, w, h))
         if len(rooms) >= n_rooms:
             break
+    if len(rooms) < n_rooms:
+        # the alternative is shipping fewer rooms in silence
+        print(f"note: placed {len(rooms)} of {n_rooms} requested rooms "
+              f"(the grid could not fit more)")
     # connect room centers in sequence with L corridors (1 cell wide)
     def carve(x0, y0, x1, y1):
         for xx in range(min(x0, x1), max(x0, x1) + 1):
@@ -255,10 +282,9 @@ def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
         bcx, bcy = bx + bw // 2, by + bh // 2
         carve(acx, acy, bcx, bcy)
         # door where the corridor meets the destination room's edge
-        edge_x = min(max(bcx, bx), bx + bw - 1)
-        edge_y = by if bcy > acy else by + bh - 1
+        edge_x, edge_y, angle = _door_cell(acy, acx, bx, by, bw, bh, bcx, bcy)
         doors.append({"at": [(edge_x + 0.5) * METERS_PER_GRID, (edge_y + 0.5) * METERS_PER_GRID],
-                      "width_m": 1.8, "angle": 0 if bcy > acy else 90,
+                      "width_m": 1.8, "angle": angle,
                       "closed": bool(rng.random() < 0.5), "kind": "door", "label": "door"})
     feats = _floor_features(cells, cols, rows, floor_color="#6b6459", wall_color="#241f1d")
     # torch lights in room centers
@@ -418,7 +444,7 @@ def render():
     W = u(scene["grids"]["x"] * scene["meters_per_grid"])
     H = u(scene["grids"]["y"] * scene["meters_per_grid"])
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">']
-    parts.append(f'<rect width="{W}" height="{H}" fill="{scene.get("ambient_bg", COL["ground"])}"/>')
+    parts.append(f'<rect width="{W}" height="{H}" fill="{scene.get("ambient", COL["ground"])}"/>')
 
     def poly_pts(pts):
         return " ".join(f"{u(x)},{u(y)}" for x, y in pts)
@@ -467,7 +493,7 @@ def render():
     for lab in scene.get("labels", []):
         parts.append(f'<text x="{u(lab["at"][0])}" y="{u(lab["at"][1])}" font-family="Georgia, serif" '
                      f'font-size="{lab["size"]}" fill="#3b352c" text-anchor="middle" '
-                     f'letter-spacing="4">{lab["text"]}</text>')
+                     f'letter-spacing="4">{xt(lab["text"])}</text>')
     parts.append("</svg>")
     out = SCENE_DIR / "scene.svg"
     out.write_text("\n".join(parts), encoding="utf-8")
@@ -476,11 +502,22 @@ def render():
 
 # ---------------------------------------------------------------- wrap UVTT
 
+def _png_size(data: bytes):
+    """(width, height) from PNG bytes — the IHDR is always bytes 16-24."""
+    import struct
+    w, h = struct.unpack(">II", data[16:24])
+    return w, h
+
+
 def wrap(png_name="scene.png"):
     scene = json.loads(SCENE_FILE.read_text(encoding="utf-8"))
     png = (SCENE_DIR / png_name).read_bytes()
     W = u(scene["grids"]["x"] * scene["meters_per_grid"])
     H = u(scene["grids"]["y"] * scene["meters_per_grid"])
+    pw, ph = _png_size(png)
+    if (pw, ph) != (W, H):
+        sys.exit(f"error: {png_name} is {pw}x{ph} but the scene resolves to "
+                 f"{W}x{H} — re-render and re-rasterize before wrapping")
 
     def pt(p):
         return {"x": u(p[0]), "y": u(p[1])}
@@ -490,14 +527,24 @@ def wrap(png_name="scene.png"):
         for f in scene["features"]
         if f.get("walls") and f["kind"] in ("building", "wall")
     ]
+    # Universal VTT (dd2vtt) shapes: a portal is its two-point segment in
+    # "bounds" plus a "position" center; a light is a "position" + "range".
+    # The earlier single-object bounds / flat x,y lights imported as walls
+    # fine but silently dropped doors and lights in spec-conforming VTTs.
     portals = []
     for d in scene["doors"]:
-        w = u(d["width_m"])
+        cx, cy = u(d["at"][0]), u(d["at"][1])
+        half = u(d["width_m"]) / 2
+        ang = math.radians(d["angle"])
+        dx, dy = math.cos(ang) * half, math.sin(ang) * half
         portals.append({
-            "bounds": {"x": u(d["at"][0]) - w / 2, "y": u(d["at"][1]) - 5,
-                       "rotation": d["angle"], "w": w, "h": 10},
+            "bounds": [{"x": round(cx - dx, 2), "y": round(cy - dy, 2)},
+                       {"x": round(cx + dx, 2), "y": round(cy + dy, 2)}],
             "closed": d.get("closed", True),
-            "door": {"enabled": d.get("kind") == "door"},
+            "color": "#a25a3c",
+            "position": {"x": cx, "y": cy},
+            "rotation": 0,
+            "freely movable": False,
         })
     uvtt = {
         "format": 0.3,
@@ -507,7 +554,10 @@ def wrap(png_name="scene.png"):
         "portals": portals,
         "environment": {"ambient_light": scene.get("ambient", "#402828"), "sunlight_angle": 90},
         "lights": [
-            {"x": u(f["at"][0]), "y": u(f["at"][1]), "color": f["color"], "distance": u(f["r"])}
+            {"angle": 360, "brightness": 0.4, "color": f["color"], "contrast": 0,
+             "enabled": True, "intensity": 1,
+             "position": {"x": u(f["at"][0]), "y": u(f["at"][1])},
+             "range": u(f["r"]), "shadows": 0}
             for f in scene["features"] if f["kind"] == "light"
         ],
     }
@@ -523,7 +573,12 @@ if __name__ == "__main__":
     argv = sys.argv[2:]
 
     def arg(flag, default=None):
-        return argv[argv.index(flag) + 1] if flag in argv else default
+        if flag not in argv:
+            return default
+        i = argv.index(flag) + 1
+        if i >= len(argv):
+            sys.exit(f"error: {flag} needs a value")
+        return argv[i]
 
     if cmd == "extract":
         extract()
@@ -532,8 +587,11 @@ if __name__ == "__main__":
         SCENE_FILE = SCENE_DIR / "scene.json"
         render() if cmd == "render" else wrap(arg("--png", "scene.png"))
     elif cmd == "gen-dungeon":
-        gen_dungeon(arg("--seed", "1"), arg("--name", "dungeon"),
-                    int(arg("--rooms", "7")))
+        try:
+            rooms = int(arg("--rooms", "7"))
+        except ValueError:
+            sys.exit("error: --rooms must be an integer")
+        gen_dungeon(arg("--seed", "1"), arg("--name", "dungeon"), rooms)
     elif cmd == "gen-cave":
         gen_cave(arg("--seed", "1"), arg("--name", "cave"))
     elif cmd == "gen-camp":

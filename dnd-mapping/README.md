@@ -25,17 +25,32 @@ the command quickstart is [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
-- `worlds/candidates/` — five generated worlds, index.md review; **Bonia**
-  (seed 878636343) is the chosen one so far.
+- `worlds/candidates/` — generated worlds under review in `index.md`;
+  **Bonia** (seed 878636343) is the chosen one so far.
 - `worlds/ruravaqan/` — a 29,600-population port city generated from Bonia's
   own burg record, plus the harbour-quay battlemap scene.
-- `worlds/sites/` — three procedural scenes (dungeon, camp, mine), each with
-  a Foundry-importable `.uvtt` (walls, doors, lights).
+- `worlds/sites/` — procedural scenes (dungeon, cave, camp, mine, plus two
+  city-derived footprints), each with a Foundry-importable `.uvtt`
+  (walls, doors, lights). `tests/test_import_fmg.py` is the suite for the
+  importer; run it via `python run-tests.py` at the repo root.
+
+## City generation
+
+`scripts/gen-city.mjs` generates ANY burg from a world dump — it derives
+road bearings, ocean bearing, and port-ness from the dump itself:
+
+```bash
+node scripts/gen-city.mjs --world worlds/raw/candidate-01.map      --burg "Ruravaqan" --out worlds/ruravaqan --seed 636343
+```
+
+(The one-off `gen-ruravaqan.mjs` this replaces was removed; its output path
+was stale anyway.)
 
 ## Known limits (documented in map-pipeline.md)
 
 - Renders are schematic (flat fills + grid), not painted maps — good enough
   for VTT mechanics, plain to look at. A skin pass is a future layer.
-- Batch town generation (hundreds of burgs → hundreds of city maps) is
-  designed but not built; `scripts/gen-ruravaqan.mjs` is the single-city
-  pattern to scale.
+- The custom FMG headless runner is NOT vanilla FMG: tracked copies of the
+  files that make it work live in `vendor-patches/fmg/` (see its README).
+- The importer reports sections it could not match in a drifted `.map`
+  (`WARNING: sections not found`) instead of importing them as empty.

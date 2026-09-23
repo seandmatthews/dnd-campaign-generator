@@ -6,7 +6,9 @@ FMG sources accepted:
 
 Maps are derived artifacts: the raw FMG file stays untouched in
 worlds/raw/ and this script derives a terse geography.yaml beside the
-canonical state. Re-run any time; never hand-edit the output.
+canonical state. Re-run any time; never hand-edit the output. `imported_at`
+stamps the SOURCE FILE's mtime, so re-importing an unchanged file is
+byte-stable (no midnight diff noise).
 
 Usage:
   python src/import_fmg.py <path-to-.map-or-.json> [more paths...]
@@ -25,9 +27,23 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 RAW_DIR = ROOT / "worlds" / "raw"
 OUT_DIR = ROOT / "worlds" / "candidates"
 
+# Every signature import_fmg matches on, and what a miss costs: a drifted
+# file imports with that section EMPTY — silently wrong. load_fmg reports
+# the sections it found so main() can warn loudly instead.
+_SIGNATURES = {
+    "features": '"type":"ocean"',
+    "cultures": '"base":',
+    "states": '"salesTax"',
+    "burgs": '"port":',
+    "provinces": '"burg":',
+    "religions": '"No religion"',
+}
+
 
 def load_fmg(path):
-    """Return (info, settings, pack) from either supported format.
+    """Return (info, settings, pack, found_sections) from either supported
+    format. found_sections is the set of signature keys matched — .map files
+    only; full JSON exports carry every section by construction.
 
     .map files are line-oriented: header | settings JSON | nameBases | an
     embedded SVG snapshot | positional data sections. We extract by content
@@ -45,7 +61,7 @@ def load_fmg(path):
             if isinstance(v, list) else v
             for k, v in pack.items()
         }
-        return info, settings, pack
+        return info, settings, pack, set(_SIGNATURES)
 
     lines = text.split("\n")
     header = lines[0].split("|")
@@ -81,17 +97,13 @@ def load_fmg(path):
             return []
         return [el for el in section if isinstance(el, dict)]
 
-    pack = {
-        # signatures chosen to be unique to each section — states also carry
-        # "population" and "formName", so those can't be used for burgs/provinces
-        "features": objs(section_json('"type":"ocean"')),
-        "cultures": objs(section_json('"base":')),
-        "states": objs(section_json('"salesTax"')),
-        "burgs": objs(section_json('"port":')),
-        "provinces": objs(section_json('"burg":')),
-        "religions": objs(section_json('"No religion"')),
-    }
-    return info, settings, pack
+    pack, found = {}, set()
+    for key, signature in _SIGNATURES.items():
+        section = section_json(signature)
+        pack[key] = objs(section)
+        if section is not None:
+            found.add(key)
+    return info, settings, pack, found
 
 
 def slugify(name):
@@ -183,15 +195,24 @@ def summarize(info, pack):
 
 def import_file(path):
     path = pathlib.Path(path)
-    info, _settings, pack = load_fmg(path)
+    info, _settings, pack, found = load_fmg(path)
+    # full JSON exports report every section found, so `missing` is .map-only
+    missing = sorted(set(_SIGNATURES) - found)
     doc = summarize(info, pack)
-    slug = f"{slugify(info.get('mapName') or 'unnamed')}-{str(info.get('seed'))[-4:]}"
+    # `imported_at` is the SOURCE's mtime (UTC), not now(): re-importing an
+    # unchanged dump produces byte-identical output ("never hand-edit" only
+    # works if regeneration is diff-clean)
+    stamp = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    doc["meta"]["imported_at"] = stamp.strftime("%Y-%m-%d")
+    seed = info.get("seed")
+    suffix = str(seed)[-4:] if seed not in (None, "") else "noseed"
+    slug = f"{slugify(info.get('mapName') or 'unnamed')}-{suffix}"
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{slug}.yaml"
     with open(out, "w", encoding="utf-8") as f:
         yaml.safe_dump(doc, f, sort_keys=False, allow_unicode=True, width=100)
-    return out, doc
+    return out, doc, missing
 
 
 def main():
@@ -204,14 +225,28 @@ def main():
         if args == ["--all"]
         else [pathlib.Path(a) for a in args]
     )
+    failures = 0
     for p in paths:
-        out, doc = import_file(p)
+        try:
+            out, doc, missing = import_file(p)
+        except Exception as e:  # noqa: BLE001 — one bad file must not abort the batch
+            print(f"{p.name}: IMPORT FAILED: {type(e).__name__}: {e}", file=sys.stderr)
+            failures += 1
+            continue
         s = doc["summary"]
         print(
             f"{p.name} -> {out.name}: '{doc['meta']['map_name']}' "
             f"(seed {doc['meta']['seed']}): {s['nations']} nations, "
             f"{s['settlements']} settlements, {s['cultures']} cultures"
         )
+        if missing:
+            # a signature miss means the FMG version drifted and that section
+            # imported EMPTY — say so instead of shipping silently wrong data
+            print(f"  WARNING: sections not found (imported empty): "
+                  f"{', '.join(missing)} — the FMG format may have drifted",
+                  file=sys.stderr)
+    if failures:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

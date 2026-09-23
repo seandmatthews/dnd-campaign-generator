@@ -17,8 +17,9 @@ FMG_SEED=<pick a number> node node_modules/vitest/vitest.mjs run src/generators/
 cd ../.. && python src/import_fmg.py worlds/raw/headless-<seed>.json
 # → worlds/candidates/world-<seed>.yaml: nations, settlements, cultures
 
-# 2. Pick a burg from the yaml; a city map is scripts/gen-ruravaqan.mjs
-#    with that burg's record + road bearings (both derivable from the dump).
+# 2. Pick a burg from the yaml; its city map is one command (inputs are
+#    derived from the dump — bearings, ocean side, port piers):
+node scripts/gen-city.mjs --world worlds/raw/<dump> --burg "<name>" --out worlds/<city>
 
 # 3. Battlemap scenes wherever the story goes:
 python src/battlemap.py gen-camp --seed <n> --name <site-name>   # or gen-dungeon / gen-cave
@@ -59,7 +60,8 @@ python src/battlemap.py wrap --dir worlds/sites/<site-name>
 worlds/raw/               FMG originals: .map saves, full/headless JSON dumps
 worlds/candidates/        derived geography.yaml per world + index.md review
 worlds/ruravaqan/         the city: settlemaker SVG/GeoJSON + params provenance
-worlds/sites/             standalone scenes: the-undercroft, marsh-gang-camp, the-silver-mine
+worlds/sites/             standalone scenes (slugs): the-undercroft, marsh-gang-camp,
+                          the-silver-mine, doves-rest, the-smoke-camp, the-ash-cellars
 src/import_fmg.py         FMG exports -> geography.yaml
 src/battlemap.py          scenes: extract/render/wrap + gen-dungeon/gen-cave/gen-camp
 scripts/                  city generator, scene rasterizer
