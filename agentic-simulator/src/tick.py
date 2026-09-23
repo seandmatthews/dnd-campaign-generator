@@ -128,6 +128,12 @@ def apply_outcomes(state, outcomes, proposals):
 
 
 def run_live(state):
+    # fail before anything expensive: views.py and write_chronicle both read
+    # city.name — a city-less state would crash after proposals (spend) ran
+    if not (state.get("city") or {}).get("name"):
+        print("error: state has no city — set city.name in state.yaml "
+              "before running a week")
+        sys.exit(2)
     act = scheduler.activation(state)          # "last week" = the clock as-is
     held = scheduler.holds(state, act)
     week = state["meta"]["clock"]["week"] + 1

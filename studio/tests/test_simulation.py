@@ -30,6 +30,26 @@ def test_chronicle_read_and_unknown_week_404(client, spine_root):
         "/api/campaign/testvale/simulation/chronicle/99").status_code == 404
 
 
+def test_cp1252_chronicle_degrades_not_500s(client, tmp_spine_root):
+    """The regression: one Notepad-resaved (cp1252) chronicle raised
+    UnicodeDecodeError from the whole Simulation tab's GET."""
+    chron = tmp_spine_root / "testvale" / "simulation" / "chronicle"
+    (chron / "0004-resaved-by-notepad.md").write_bytes(
+        "TITLE: The Curly \u2018Quote\u2019 Week\n\nThe doge\u2019s ledger — cp1252."
+        .encode("cp1252"))
+    # the list degrades that file but keeps serving the good one
+    r = client.get("/api/campaign/testvale/simulation")
+    assert r.status_code == 200
+    entries = {c["week"]: c for c in r.json()["chronicles"]}
+    assert entries[3]["title"] == "The Ash Crossing"
+    assert entries[4]["title"] == "(unreadable — not UTF-8)"
+    # the read degrades to a lossless latin-1 decode instead of a 500
+    # (cp1252 smart quotes come back as control chars — readable prose wins)
+    r2 = client.get("/api/campaign/testvale/simulation/chronicle/4")
+    assert r2.status_code == 200
+    assert "The doge" in r2.json()["markdown"]
+
+
 def test_week_post_422_without_confirm_exactly_true(client, spine_root):
     base = "/api/campaign/testvale/simulation/week"
     for body in ({}, {"confirm": False}, {"confirm": "true"}):

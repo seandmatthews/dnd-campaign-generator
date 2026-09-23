@@ -52,6 +52,22 @@ def load_canon():
     return terms
 
 
+def read_text(path):
+    """UTF-8 with a degradation contract: one cp1252-resaved file (Windows
+    prose, a single curly quote) must cost a finding, never the run."""
+    try:
+        return pathlib.Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def encoding_finding(path):
+    return {"file": str(path), "line": 1, "rule": "prose/encoding",
+            "level": "warning", "quote": "",
+            "note": "file is not valid UTF-8 (a cp1252 resave? — resave it "
+                    "as UTF-8); structural checks skipped for this file"}
+
+
 def sentences(text):
     body = re.sub(r"\A---\n.*?\n---\n", "", text, flags=re.DOTALL)  # frontmatter out
     body = re.sub(r"^#.*$", "", body, flags=re.MULTILINE)      # headings out
@@ -308,20 +324,30 @@ def discriminate(state_text, canon_path, decoy_paths):
     is an error; low confidence is a warning (the canon passage may be slop)."""
     pf = PROMPTS_DIR / "discriminator.md"
     prompt = pf.read_text(encoding="utf-8")
-    passages = [canon_path] + list(decoy_paths)
     prompt = prompt.replace("{{STATE}}", state_text or "(none provided)")
-    for slot, p in zip(("TEXT_A", "TEXT_B", "TEXT_C"), passages):
-        prompt = prompt.replace("{{" + slot + "}}",
-                                pathlib.Path(p).read_text(encoding="utf-8"))
+    for slot, p in zip(("TEXT_A", "TEXT_B", "TEXT_C"), [canon_path] + list(decoy_paths)):
+        text = read_text(p)
+        if text is None:
+            return [encoding_finding(p)]
+        prompt = prompt.replace("{{" + slot + "}}", text)
     raw = _complete(prompt + "\n\nReturn the JSON ONLY.")
     m = re.search(r"\{.*\}", raw, re.DOTALL)
     if not m:
         return [{"file": str(canon_path), "line": 1, "rule": "prompts/discriminator",
                  "level": "suggestion", "quote": "", "note": "no JSON in response"}]
-    out = json.loads(m.group(0))
+    try:
+        out = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        return [{"file": str(canon_path), "line": 1, "rule": "prompts/discriminator",
+                 "level": "suggestion", "quote": "",
+                 "note": f"response was not valid JSON: {e}"}]
     choice = str(out.get("choice", "?")).upper()
-    confidence = out.get("confidence", 0)
-    cues = "; ".join(out.get("cues", []))[:200]
+    try:
+        confidence = float(out.get("confidence", 0))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    cues_raw = out.get("cues", [])
+    cues = "; ".join(cues_raw if isinstance(cues_raw, list) else [str(cues_raw)])[:200]
     findings = []
     if choice != "A":
         findings.append({"file": str(canon_path), "line": 1,
@@ -352,7 +378,12 @@ def main(argv=None):
                          "two generic decoys (paths relative to cwd)")
     args = ap.parse_args(argv)
 
-    state_text = pathlib.Path(args.state).read_text(encoding="utf-8") if args.state else None
+    state_text = None
+    if args.state:
+        state_text = read_text(args.state)
+        if state_text is None:
+            print(f"warning: {args.state} is not valid UTF-8 — the LLM passes "
+                  "run without it (canon-audit skipped)", file=sys.stderr)
     if args.state and not args.llm and not args.discriminate:
         print("note: --state only feeds the LLM passes; it is unused without --llm "
               "or --discriminate", file=sys.stderr)
@@ -375,14 +406,22 @@ def main(argv=None):
     files = [f for f in files if f.name not in ("findings.json", "queue.md")]
 
     findings = []
+    unreadable = set()
     for f in files:
-        findings.extend(structural_findings(f, f.read_text(encoding="utf-8")))
+        text = read_text(f)
+        if text is None:
+            findings.append(encoding_finding(f))
+            unreadable.add(f)
+            continue
+        findings.extend(structural_findings(f, text))
     vale, ran = vale_findings(files)
     findings.extend(vale)
 
     if args.llm:
         for f in files:
-            text = f.read_text(encoding="utf-8")
+            if f in unreadable:
+                continue  # the encoding finding already fired above
+            text = read_text(f)
             for pf in sorted(PROMPTS_DIR.glob("*.md")):
                 if pf.stem == "discriminator":
                     continue  # needs decoy passages: run via --discriminate

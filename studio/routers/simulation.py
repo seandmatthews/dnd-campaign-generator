@@ -80,6 +80,9 @@ class FactionBody(BaseModel):
 class CreateStateBody(BaseModel):
     premise: str
     season: str = "early spring"
+    # optional in the model so the 422 can name the problem in studio words;
+    # post_create_state refuses a sandbox without one — the engine's week
+    # chronicle and faction views read city.name and crash after the spend
     city: CityBody | None = None
     factions: list[FactionBody]
     force: StrictBool = False
@@ -185,20 +188,27 @@ def post_create_state(name: str, body: CreateStateBody):
     if len(season) > 40:
         raise HTTPException(status_code=422, detail="season: keep it short")
 
+    if body.city is None or not (body.city.name or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="the sandbox needs a city or place — weeks are chronicled "
+                   "there and faction views look at it (the engine crashes "
+                   "on a city-less state after the week's spend)")
+    city_name = body.city.name.strip()
+
     doc: dict = {
         "meta": {"premise": premise,
                  # week 0 = nothing has happened yet: tick.py increments
                  # BEFORE running, so the first live week is week 1
                  "clock": {"week": 0, "season": season}},
     }
-    if body.city is not None and (body.city.name or "").strip():
-        city = {"name": body.city.name.strip()}
-        if body.city.population is not None:
-            if body.city.population <= 0:
-                raise HTTPException(status_code=422,
-                                    detail="city population must be positive")
-            city["population"] = body.city.population
-        doc["city"] = city
+    city = {"name": city_name}
+    if body.city.population is not None:
+        if body.city.population <= 0:
+            raise HTTPException(status_code=422,
+                                detail="city population must be positive")
+        city["population"] = body.city.population
+    doc["city"] = city
     doc["factions"] = _validated_faction_doc(body.factions)
     doc["events"] = []
     doc["rumors"] = []

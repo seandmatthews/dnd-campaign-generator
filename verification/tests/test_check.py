@@ -109,6 +109,34 @@ bad_sev = check._decorate(dict(model_finding, severity="catastrophic"),
 ok("unknown severity folds to suggestion", bad_sev["level"] == "suggestion"
    and check.validate(bad_sev)[0])
 
+# --- encoding resilience ----------------------------------------------------
+# The regression: one cp1252-resaved file aborted the whole run — no
+# findings.json at all, even for the good files in the same batch.
+import tempfile as _tmp
+import json as _json
+with _tmp.TemporaryDirectory() as td:
+    tdir = pathlib.Path(td)
+    bad = tdir / "resaved.md"
+    bad.write_bytes("The doge\u2019s ledger — cp1252 bytes.".encode("cp1252"))
+    good = tdir / "clean.md"
+    good.write_text("Short. Also short. Fine.", encoding="utf-8")
+
+    ok("read_text degrades on non-UTF-8", check.read_text(bad) is None)
+    ok("read_text passes on UTF-8", check.read_text(good) is not None)
+
+    out = tdir / "findings"
+    rc = check.main([str(tdir), "--out", str(out)])
+    ok("one bad file no longer kills the run", rc == 0 and (out / "findings.json").is_file())
+    if (out / "findings.json").is_file():
+        all_findings = _json.loads((out / "findings.json").read_text(encoding="utf-8"))
+        enc = [x for x in all_findings if x["rule"] == "prose/encoding"
+               and "resaved.md" in x["file"]]
+        ok("encoding finding names the bad file", len(enc) == 1, str(all_findings)[:200])
+        ok("clean file still checked",
+           not any("clean.md" in x["file"] and x["rule"] == "prose/encoding"
+                   for x in all_findings))
+    ok("encoding finding passes validate", check.validate(check.encoding_finding(bad))[0])
+
 # --- the schema file is the contract ---------------------------------------
 ok("required keys loaded from findings.schema.json",
    check._schema_required() == {"file", "line", "rule", "level", "quote"},

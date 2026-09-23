@@ -22,6 +22,7 @@ def fresh_campaign(client, tmp_spine_root):
 def _body(**over):
     body = {
         "premise": "The toll bridge burned the night the wardens raised the toll.",
+        "city": {"name": "Provis"},
         "factions": [
             {"name": "The Bridge Wardens", "kind": "toll Brotherhood",
              "goal": "rebuild the bridge and the toll with it",
@@ -48,6 +49,7 @@ def test_create_state_happy_path_writes_valid_spine(client, tmp_spine_root,
         .read_text(encoding="utf-8"))
     assert doc["meta"]["clock"] == {"week": 0, "season": "early spring"}
     assert doc["meta"]["premise"].startswith("The toll bridge burned")
+    assert doc["city"] == {"name": "Provis"}
     (w, f) = doc["factions"]
     assert w["id"] == "the_bridge_wardens"
     assert w["resources"] == {"coin": "medium", "muscle": "low", "legitimacy": "high"}
@@ -93,6 +95,9 @@ def test_create_state_validation(client, tmp_spine_root, fresh_campaign):
     six = [{"name": f"Faction {i}", "goal": f"wants {i}"} for i in range(6)]
     cases = [
         (_body(premise="   "), "premise"),
+        (_body(city=None), "needs a city"),
+        (_body(city={"name": "   "}), "needs a city"),
+        (_body(city={"name": "Provis", "population": 0}), "positive"),
         (_body(factions=[]), "2-5 factions"),
         (_body(factions=[_body()["factions"][0]]), "2-5 factions"),
         (_body(factions=six), "2-5"),

@@ -172,6 +172,26 @@ def test_chronicle_survives_narrator_failure():
     print("  chronicle: narrator failure keeps the ledger  OK")
 
 
+def test_live_refuses_cityless_state_before_any_spend():
+    """The regression: a city-less sandbox (studio used to allow one) crashed
+    inside faction_view AFTER the scheduler ran — the guard now fails fast,
+    before any LLM call, so no credits are spent on a week that cannot land."""
+    s = state(0, [faction("a"), faction("b")])
+    del s["city"]
+
+    def boom(*a, **k):
+        raise AssertionError("llm.propose must not be reached")
+
+    tick.llm.propose = boom
+    try:
+        tick.run_live(s)
+    except SystemExit as e:
+        assert e.code == 2
+    else:
+        raise AssertionError("run_live must refuse a city-less state")
+    print("  live: a city-less state is refused before any spend  OK")
+
+
 def test_replay_same_seed_same_outcomes():
     """A recorded seed reproduces the week's dice — the rewind/retcon story."""
     proposals = [
@@ -202,6 +222,7 @@ if __name__ == "__main__":
         test_chronicle_without_title_gets_fallback_slug,
         test_chronicle_non_ascii_title_never_makes_an_empty_slug,
         test_chronicle_survives_narrator_failure,
+        test_live_refuses_cityless_state_before_any_spend,
         test_replay_same_seed_same_outcomes,
     ]:
         fn()

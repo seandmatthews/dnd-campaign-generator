@@ -342,7 +342,13 @@ def chronicles(name: str) -> list:
             continue
         week = int(m.group(1))
         title = m.group(2).replace("-", " ")
-        first = p.read_text(encoding="utf-8").splitlines()[:1]
+        # one cp1252-resaved file must degrade, not 500 the Simulation tab
+        try:
+            first = p.read_text(encoding="utf-8").splitlines()[:1]
+        except UnicodeDecodeError:
+            out.append({"week": week, "title": "(unreadable — not UTF-8)",
+                        "file": f"simulation/chronicle/{p.name}"})
+            continue
         if first:
             t = _TITLE_RE.match(first[0])
             if t:
@@ -357,7 +363,12 @@ def read_chronicle(name: str, week: int):
         if c["week"] == week:
             path = campaign_dir(name) / c["file"]
             c = dict(c)
-            c["markdown"] = path.read_text(encoding="utf-8")
+            try:
+                c["markdown"] = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                # same contract as chronicles(): latin-1 never fails, and
+                # replacement chars beat an opaque 500 on a resaved file
+                c["markdown"] = path.read_text(encoding="latin-1")
             return c
     return None
 

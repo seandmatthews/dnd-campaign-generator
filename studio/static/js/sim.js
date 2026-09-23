@@ -228,7 +228,7 @@
             '<textarea class="input sand-premise" rows="2" ' +
               'placeholder="e.g. The toll bridge burned the night the wardens raised the toll."></textarea></label>' +
           '<div class="inline-form">' +
-            '<label class="field"><span class="field-label">City or place (optional)</span>' +
+            '<label class="field"><span class="field-label">City or place</span>' +
               '<input type="text" class="input sand-city" placeholder="e.g. Provis"></label>' +
             '<label class="field field-narrow"><span class="field-label">Population (optional)</span>' +
               '<input type="number" class="input sand-pop" min="1" placeholder="12300"></label>' +
@@ -292,10 +292,12 @@
       };
       const city = panel.querySelector('.sand-city').value.trim();
       const pop = Number(panel.querySelector('.sand-pop').value);
-      if (city) {
-        body.city = { name: city };
-        if (pop > 0) body.city.population = pop;
+      if (!city) {
+        S.toast('The sandbox needs a city or place — weeks are chronicled there.', 'error');
+        return;
       }
+      body.city = { name: city };
+      if (pop > 0) body.city.population = pop;
       createBtn.disabled = true;
       errBox.innerHTML = '';
       try {
