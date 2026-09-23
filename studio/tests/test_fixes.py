@@ -175,6 +175,9 @@ def _http_error(code, body=b""):
     return urllib.error.HTTPError("url", code, "x", {}, io.BytesIO(body))
 
 
+_ZAI_URL = llm_client.API_BASE_DEFAULT + "/chat/completions"
+
+
 def test_llm_client_retries_transient_and_raises_readable_hard_errors(monkeypatch):
     calls = []
     def fake_urlopen(req, timeout=None):
@@ -190,7 +193,9 @@ def test_llm_client_retries_transient_and_raises_readable_hard_errors(monkeypatc
         return R()
     monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
     monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
-    monkeypatch.setattr(llm_client, "_find_key", lambda: "k")
+    monkeypatch.setattr(llm_client, "resolve_config",
+                        lambda env_file=None: {"key": "k", "url": _ZAI_URL,
+                                               "model": "m"})
     out = llm_client.complete("p")
     assert out == "ok"
     assert len(calls) == 3
@@ -200,18 +205,20 @@ def test_llm_client_401_carries_the_doctor_hint(monkeypatch):
     def fake_urlopen(req, timeout=None):
         raise _http_error(401, b"unauthorized")
     monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(llm_client, "_find_key", lambda: "k")
+    monkeypatch.setattr(llm_client, "resolve_config",
+                        lambda env_file=None: {"key": "k", "url": _ZAI_URL,
+                                               "model": "m"})
     with pytest.raises(RuntimeError) as e:
         llm_client.complete("p")
     assert "401" in str(e.value)
     assert "doctor" in str(e.value)
 
 
-def test_llm_client_silences_key_lookups_per_call(monkeypatch):
+def test_llm_client_silences_config_lookups_per_call(monkeypatch):
     count = {"n": 0}
-    def fake_find_key():
+    def fake_resolve(env_file=None):
         count["n"] += 1
-        return "k"
+        return {"key": "k", "url": _ZAI_URL, "model": "m"}
     def fake_urlopen(req, timeout=None):
         class R:
             def __enter__(self): return self
@@ -220,14 +227,14 @@ def test_llm_client_silences_key_lookups_per_call(monkeypatch):
                 {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
                  "usage": {"prompt_tokens": 1, "completion_tokens": 2}}).encode()
         return R()
-    monkeypatch.setattr(llm_client, "_find_key", fake_find_key)
+    monkeypatch.setattr(llm_client, "resolve_config", fake_resolve)
     monkeypatch.setattr(llm_client.urllib.request, "urlopen", fake_urlopen)
     logging.disable(logging.CRITICAL)
     try:
         llm_client.complete("p", max_tokens=8, max_budget=16)  # one budget retry
     finally:
         logging.disable(logging.NOTSET)
-    assert count["n"] == 1, "key must be looked up once per call, not per retry"
+    assert count["n"] == 1, "config must be resolved once per call, not per retry"
 
 
 # ------------------------------------------------------------------ spine

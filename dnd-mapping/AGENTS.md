@@ -48,11 +48,11 @@ python src/battlemap.py wrap --dir worlds/sites/<site-name>
    hand-edit generated outputs — fix the generator input and regenerate.
 2. Lazy evaluation: generate only what the campaign actually touches. A
    thousand towns are one burg record each until someone visits.
-3. Machine setup notes: no `npm`/`npx` (nodist shim broken — use `pnpm` or
-   invoke binaries with `node` directly); if a project directory is ever
-   moved, pnpm's absolute junctions break — run `CI=true pnpm install
-   --offline` in `tools/settlemaker` to relink. Dependencies: Python 3.10 +
-   PyYAML, Node 22.
+3. Machine setup notes: tool installs are plain `npm install` (setup-tools
+   automates them; FMG's adds `--ignore-scripts` because npm runs scripts
+   through cmd.exe, which cannot handle the `&` in this repo's default
+   path). Engines invoke binaries as `node node_modules/<pkg>/...` directly
+   — no global installs. Dependencies: Python 3.10 + PyYAML, Node 18+.
 
 ## Directory map
 

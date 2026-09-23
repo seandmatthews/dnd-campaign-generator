@@ -35,21 +35,34 @@ def _raise(e):
     return inner
 
 
-def _ok_probe(key):
+def _ok_probe(key, url=None, model=None):
     return True, "coding endpoint fine", None
 
 
-def test_run_all_checks_shapes_and_key_situation(monkeypatch):
-    monkeypatch.setattr(doctor, "find_key", lambda: "k")
+def _isolate_llm(monkeypatch, tmp_path):
+    """Pin the llm config world: no LLM_* env, no llm.env, no ZCode config
+    — tests then opt in to exactly the state they exercise."""
+    import llm_client
+    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "ZAI_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(llm_client, "ENV_FILE", tmp_path / "absent-llm.env")
+    monkeypatch.setattr(llm_client, "_CONFIG", tmp_path / "absent-cfg.json")
+
+
+def test_run_all_checks_shapes_and_key_situation(monkeypatch, tmp_path):
+    _isolate_llm(monkeypatch, tmp_path)
+    monkeypatch.setenv("ZAI_API_KEY", "k")
     checks = doctor.run_all_checks(probe=_ok_probe)
     assert all({"name", "ok", "detail", "fix"} <= set(c) for c in checks)
     by_name = {c["name"]: c for c in checks}
     assert by_name["llm key"]["ok"] is True
-    assert by_name["llm key"]["detail"] == "coding endpoint fine"
+    assert by_name["llm key"]["detail"].startswith("coding endpoint fine")
+    assert "[key: $ZAI_API_KEY]" in by_name["llm key"]["detail"]
     assert by_name["llm key"]["required"] is False
     assert by_name["vale"]["required"] is False
+    assert by_name["uv (optional)"]["required"] is False
     assert {c["name"] for c in checks} >= {
-        "python", "imports", "node", "pnpm", "vale", "campaigns",
+        "python", "imports", "node", "uv (optional)", "vale", "campaigns",
         "engine: dnd-mapping", "engine: agentic-simulator", "engine: verification"}
 
 
@@ -69,19 +82,20 @@ def test_python_check():
     assert "Python " in check["detail"]
 
 
-def test_find_key_from_env(monkeypatch):
+def test_find_key_from_env(monkeypatch, tmp_path):
+    _isolate_llm(monkeypatch, tmp_path)
     monkeypatch.setenv("ZAI_API_KEY", "env-key")
     assert doctor.find_key() == "env-key"
 
 
 def test_find_key_none_when_no_config(monkeypatch, tmp_path):
-    monkeypatch.delenv("ZAI_API_KEY", raising=False)
-    monkeypatch.setattr(doctor, "_CONFIG", tmp_path / "missing.json")
+    _isolate_llm(monkeypatch, tmp_path)
     assert doctor.find_key() is None
 
 
 def test_find_key_prefers_rule_one_and_skips_enc(tmp_path, monkeypatch):
-    monkeypatch.delenv("ZAI_API_KEY", raising=False)
+    _isolate_llm(monkeypatch, tmp_path)
+    import llm_client
     cfg = tmp_path / "provider_config.json"
     cfg.write_text(json.dumps({
         "config": {"providerConfigRules": {"providerRules": [
@@ -89,17 +103,26 @@ def test_find_key_prefers_rule_one_and_skips_enc(tmp_path, monkeypatch):
             {"config": {"access": {"apiKey": "enc:opaque"}}},
             {"config": {"access": {"apiKey": "rule-one"}}},
         ]}}}), encoding="utf-8")
-    monkeypatch.setattr(doctor, "_CONFIG", cfg)
+    monkeypatch.setattr(llm_client, "_CONFIG", cfg)
     assert doctor.find_key() == "rule-one"  # rule 1 first, enc: skipped
 
 
-def test_no_key_is_an_optional_finding(monkeypatch):
-    monkeypatch.setattr(doctor, "find_key", lambda: None)
+def test_find_key_reads_llm_env(monkeypatch, tmp_path):
+    _isolate_llm(monkeypatch, tmp_path)
+    import llm_client
+    env_file = tmp_path / "llm.env"
+    env_file.write_text("LLM_API_KEY=file-key\n", encoding="utf-8")
+    monkeypatch.setattr(llm_client, "ENV_FILE", env_file)
+    assert doctor.find_key() == "file-key"
+
+
+def test_no_key_is_an_optional_finding(monkeypatch, tmp_path):
+    _isolate_llm(monkeypatch, tmp_path)
     check = doctor.check_llm()
     assert check["ok"] is False
     assert check["required"] is False
     assert check["detail"] == "no key found"
-    assert "ZAI_API_KEY" in check["fix"]
+    assert "llm.env" in check["fix"]
 
 
 def test_probe_200_is_coding_endpoint_fine(monkeypatch):
@@ -142,8 +165,6 @@ def test_overall_ignores_optional_failures(monkeypatch):
                         lambda modules=None: doctor._mk("imports", True, "ok"))
     monkeypatch.setattr(doctor, "check_node",
                         lambda: doctor._mk("node", True, "ok"))
-    monkeypatch.setattr(doctor, "check_pnpm",
-                        lambda: doctor._mk("pnpm", True, "ok"))
     monkeypatch.setattr(doctor, "check_engines",
                         lambda: [doctor._mk("engine: x", True, "ok")])
     monkeypatch.setattr(doctor, "check_vale",
@@ -165,14 +186,13 @@ def test_overall_false_when_required_fails(monkeypatch):
                         lambda modules=None: doctor._mk("imports", True, "ok"))
     monkeypatch.setattr(doctor, "check_node",
                         lambda: doctor._mk("node", True, "ok"))
-    monkeypatch.setattr(doctor, "check_pnpm",
-                        lambda: doctor._mk("pnpm", True, "ok"))
     monkeypatch.setattr(doctor, "check_engines", lambda: [])
     monkeypatch.setattr(doctor, "check_vale",
                         lambda: doctor._mk("vale", True, "absent", required=False))
     monkeypatch.setattr(doctor, "check_campaigns",
                         lambda: doctor._mk("campaigns", True, "ok"))
-    monkeypatch.setattr(doctor, "find_key", lambda: None)
+    monkeypatch.setattr(doctor, "_llm_cfg",
+                        lambda: (None, "LLM_MODEL is required but not set"))
     rep = doctor.report()
     assert rep["ok"] is False
 
@@ -190,6 +210,51 @@ def test_cli_json_flag(monkeypatch, capsys):
                             {"name": "imports", "ok": False, "detail": "m",
                              "fix": "pip install", "required": True}]})
     assert doctor.main(["--json"]) == 1
+
+
+def test_check_llm_custom_base_without_model_is_a_finding(monkeypatch, tmp_path):
+    """A custom LLM_BASE_URL without LLM_MODEL is the one config error:
+    reported as the finding, in both the probing and the presence check."""
+    _isolate_llm(monkeypatch, tmp_path)
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    check = doctor.check_llm()
+    assert check["ok"] is False and "LLM_MODEL" in check["detail"]
+    check = doctor.check_llm_key()
+    assert check["ok"] is False and "LLM_MODEL" in check["detail"]
+
+
+def test_check_llm_key_names_its_source(monkeypatch, tmp_path):
+    _isolate_llm(monkeypatch, tmp_path)
+    monkeypatch.setenv("LLM_MODEL", "llama3.1")
+    monkeypatch.setenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("LLM_API_KEY", "env-key")
+    check = doctor.check_llm_key()
+    assert check["ok"] is True
+    assert "key found in $LLM_API_KEY" in check["detail"]
+
+
+def test_probe_llm_custom_endpoint_success_names_it(monkeypatch):
+    seen = {}
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        seen["model"] = json.loads(req.data.decode())["model"]
+        return _FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    ok, detail, fix = doctor.probe_llm(
+        "k", url="http://localhost:11434/v1/chat/completions",
+        model="llama3.1")
+    assert ok is True and "llama3.1" in detail and "11434" in detail
+    assert seen["url"] == "http://localhost:11434/v1/chat/completions"
+    assert seen["model"] == "llama3.1"
+
+
+def test_probe_llm_401_fix_mentions_llm_env(monkeypatch):
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        _raise(_http_error(401, {"error": {}})))
+    ok, detail, fix = doctor.probe_llm("k")
+    assert ok is False and "invalid" in detail and "llm.env" in fix
 
 
 def test_check_engines_skips_simulator_probe_while_week_busy(monkeypatch, tmp_path):

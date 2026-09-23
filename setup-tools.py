@@ -10,11 +10,18 @@ What it sets up (all under dnd-mapping/tools/, which is git-ignored):
   Fantasy-Map-Generator   upstream https://github.com/Azgaar/Fantasy-Map-Generator
                           at tag 1.153.1, plus OUR custom headless runner from
                           dnd-mapping/vendor-patches/fmg/ (the clone is not
-                          vanilla without those four files)
+                          vanilla without those files)
   settlemaker             upstream https://github.com/barrulus/settlemaker at
                           d5cf3590 (v3.0.1), sharp pinned to 0.33.5 (the
                           tracked pin: render-scene-png.mjs refuses other
                           versions), dist/ built with its bundled TypeScript
+
+Installs are plain `npm install` (npm ships with Node; both upstreams keep
+a package-lock.json, so installs are reproducible). No pnpm anywhere —
+pnpm's symlinked store was the source of the junction-breaks-when-moved
+fragility the doctor used to have to repair. Engines invoke binaries as
+`node node_modules/<pkg>/...` directly, so the package manager is needed
+only here and in doctor --fix.
 
 Stdlib only, list-form subprocess throughout (the parent path contains `&`),
 and .cmd/.bat shims are run through cmd /c on Windows — the same discipline
@@ -86,15 +93,29 @@ def fmg_apply(check):
     if not (d / ".git").is_dir():
         print(f"  cloning Fantasy-Map-Generator at tag {FMG_TAG} ...")
         _run(["git", "clone", "--depth", "1", "--branch", FMG_TAG, FMG_URL, str(d)])
-    print("  applying the vendor patches (headless runner) ...")
-    _run(["git", "apply", str(PATCHES / "package-json.patch")], cwd=d)
-    for name in ("npmrc", "pnpm-workspace.yaml"):
-        shutil.copy2(PATCHES / name, d / name)
+    _apply_headless_patch(d)
     (d / "src" / "generators").mkdir(parents=True, exist_ok=True)
     shutil.copy2(PATCHES / "headless-export.test.ts",
                  d / "src" / "generators" / "headless-export.test.ts")
-    print("  pnpm install (this can take a few minutes) ...")
-    _run(["pnpm", "install"], cwd=d, env_extra={"CI": "true"})
+    # --ignore-scripts: FMG's only install-time script is "prepare":
+    # simple-git-hooks (dev-only git hooks), and npm runs scripts through
+    # cmd.exe — which cannot handle the `&` in this repo's default path
+    # (Documents\D&D). Nothing the headless pipeline needs is scripted:
+    # esbuild/rollup ship platform binaries as optional deps.
+    print("  npm install (this can take a few minutes) ...")
+    _run(["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"],
+         cwd=d)
+
+
+def _apply_headless_patch(d):
+    """The one vendor patch (package.json: +d3-quadtree). Idempotent: the
+    content check, not `git apply`'s exit code, decides — --force re-runs
+    land here with the patch already applied."""
+    pkg = d / "package.json"
+    if "d3-quadtree" in pkg.read_text(encoding="utf-8"):
+        return
+    print("  applying the vendor patch (package.json: +d3-quadtree) ...")
+    _run(["git", "apply", str(PATCHES / "package-json.patch")], cwd=d)
 
 
 def settle_done():
@@ -120,8 +141,8 @@ def settle_apply(check):
         print(f"  pinning sharp to {SHARP_PIN} in settlemaker's package.json ...")
         deps["sharp"] = SHARP_PIN
         pkg.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    print("  pnpm install (this can take a few minutes) ...")
-    _run(["pnpm", "install"], cwd=d, env_extra={"CI": "true"})
+    print("  npm install (this can take a few minutes) ...")
+    _run(["npm", "install", "--no-audit", "--no-fund"], cwd=d)
     print("  building dist/ with the bundled TypeScript ...")
     _run(["node", "node_modules/typescript/bin/tsc"], cwd=d)
 
@@ -142,19 +163,17 @@ def main():
 
     print(f"setup-tools: tools live under {TOOLS}\n")
 
-    missing_prereqs = [n for n in ("git", "node", "pnpm") if not _have(n)]
+    missing_prereqs = [n for n in ("git", "node") if not _have(n)]
     if missing_prereqs:
         print("missing prerequisites: " + ", ".join(missing_prereqs))
         for n in missing_prereqs:
             if n == "node":
-                print("  fix: https://nodejs.org  (LTS)")
-            elif n == "pnpm":
-                print("  fix: winget install pnpm.pnpm   (or: npm install -g pnpm)")
+                print("  fix: https://nodejs.org  (LTS — npm comes with it)")
             elif n == "git":
                 print("  fix: https://git-scm.com/download")
         print("\nthe studio still runs without the tools — maps/world generation needs them.")
         return 1 if args.check else 1
-    print("prerequisites: git, node, pnpm all present")
+    print("prerequisites: git and node (with npm) present")
 
     incomplete = []
     for label, done, apply_step in STEPS:

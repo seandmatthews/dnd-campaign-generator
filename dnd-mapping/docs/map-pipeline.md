@@ -66,9 +66,9 @@ FMG_SEED=12345 FMG_W=1280 FMG_H=720 \
 cd ../.. && python src/import_fmg.py worlds/raw/headless-12345.json
 ```
 
-**The runner is not vanilla FMG.** `headless-export.test.ts`, the
-`d3-quadtree` dependency patch, and two pnpm config files are local
-modifications inside the (ignored) FMG clone. The tracked copies live in
+**The runner is not vanilla FMG.** `headless-export.test.ts` and the
+`d3-quadtree` dependency patch are local modifications inside the
+(ignored) FMG clone. The tracked copies live in
 [`vendor-patches/fmg/`](../vendor-patches/fmg/) — after a fresh clone, apply
 them per that directory's README before the incantation above works.
 
@@ -93,12 +93,13 @@ the things that break):
 | empty `grid` / `pack` / `mapName` globals | the pipeline assigns them wholesale |
 | import `@/generators` | side effects: every generator module attaches its global (`Grid`, `Burgs`, `States`, …) |
 
-Do NOT use `npx`/`npm` on this machine — the nodist shim is broken. Use
-`node node_modules/vitest/vitest.mjs …` and `pnpm`.
-
-If this directory is ever moved or renamed, every pnpm junction in
-`tools/*/node_modules` breaks (Windows junctions store absolute paths).
-Relink from the local store, per tool: `CI=true pnpm install --offline`.
+Engines never invoke package-manager shims: binaries run as
+`node node_modules/vitest/vitest.mjs …` directly. Installs are plain
+`npm install` (FMG's adds `--ignore-scripts` — npm runs install scripts
+through cmd.exe, which cannot parse the `&` in this repo's default path;
+nothing the pipeline needs is scripted). npm's flat node_modules has no
+junctions, so moving this directory breaks nothing — re-run the install
+if in doubt.
 
 ### Browser generation (only when you need the app)
 
@@ -108,9 +109,8 @@ does and the pipeline doesn't. **Build recipe** (once):
 ```bash
 cd tools/Fantasy-Map-Generator
 git fetch --depth 1 origin tag 1.153.1 && git checkout 1.153.1
-ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install
-echo "shamefully-hoist=true" > .npmrc && ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install
-pnpm add d3-quadtree                      # the tag imports it via npm hoisting; pnpm hides it
+npm install --ignore-scripts --no-audit --no-fund   # flat node_modules; scripts are dev-only
+git apply ../../vendor-patches/fmg/package-json.patch  # +d3-quadtree (or npm install again after)
 NETLIFY=true node node_modules/vite/bin/vite.js build   # NETLIFY=true => base "/" for localhost
 python -m http.server 8642 --directory dist
 ```
@@ -147,7 +147,7 @@ GeoJSON coordinates are **settlement units, not meters** —
 ## Tier 2 — settlements (settlemaker)
 
 Repo: `tools/settlemaker` (v3.0.1, GPL-3.0 — external tool; never import its
-code into `src/`). Built with `pnpm install` + `node
+code into `src/`). Built with `npm install` + `node
 node_modules/typescript/bin/tsc` → `dist/index.js`.
 
 `scripts/gen-city.mjs` is the generator: import `generateSettlement` from

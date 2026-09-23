@@ -24,3 +24,9 @@ agentic-simulator/chronicle/
 # restored from the campaign on every week run
 campaigns/
 agentic-simulator/world/
+
+# LLM provider config (copy llm.env.example; the real one carries a key)
+llm.env
+
+# uv
+.venv/

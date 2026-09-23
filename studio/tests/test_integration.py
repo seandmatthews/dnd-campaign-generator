@@ -201,7 +201,7 @@ def test_battlemap_chain_seam(tmp_path):
     chain runs in the engine home, per maps.py's own docstring, and the
     artifact set is mirrored into tmp). If sharp is broken this fails
     loudly — that is the point; the documented repair is
-    CI=true pnpm install --offline in tools/settlemaker."""
+    plain npm install in tools/settlemaker."""
     site = "smoke-cave"
     rel = f"worlds/sites/{site}"  # root-relative, exactly as the router passes
     engine_dir = DND_MAPPING / "worlds" / "sites" / site
@@ -219,7 +219,7 @@ def test_battlemap_chain_seam(tmp_path):
                 cwd=DND_MAPPING, timeout=180)
         assert r.returncode == 0, (
             "scene rasterization failed (sharp) — documented repair: "
-            "CI=true pnpm install --offline in dnd-mapping/tools/settlemaker: "
+            "npm install in dnd-mapping/tools/settlemaker: "
             + r.stdout + r.stderr)
         r = battlemap("wrap", "--dir", rel)
         assert r.returncode == 0, r.stdout + r.stderr

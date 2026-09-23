@@ -1,5 +1,5 @@
 """doctor --fix (H): repair planning and execution. Every probe and every
-subprocess is faked — the suite never runs real pnpm or pip, and never
+subprocess is faked — the suite never runs real npm or pip, and never
 touches the real tool trees."""
 
 import shutil
@@ -28,15 +28,15 @@ def _fake_report(imports_ok=True, campaigns_ok=True):
     ]}
 
 
-def _patch_all_probes(monkeypatch, settlemaker=True, fmg=True, pnpm=True):
+def _patch_all_probes(monkeypatch, settlemaker=True, fmg=True, npm=True):
     monkeypatch.setattr(doctor, "settlemaker_ok",
                         lambda root=None: (settlemaker, "probe"))
     monkeypatch.setattr(doctor, "fmg_ok",
                         lambda root=None: (fmg, "probe"))
-    if pnpm:
-        monkeypatch.setattr(doctor, "_pnpm_cmd", lambda args: ["pnpm", *args])
+    if npm:
+        monkeypatch.setattr(doctor, "_npm_cmd", lambda args: ["npm", *args])
     else:
-        monkeypatch.setattr(doctor, "_pnpm_cmd", lambda args: None)
+        monkeypatch.setattr(doctor, "_npm_cmd", lambda args: None)
 
 
 # ------------------------------------------------------------------ probes
@@ -97,32 +97,32 @@ def test_plan_fixes_import_failure_plans_pip(monkeypatch):
     assert "pip" in pip[0]["cmd"]
 
 
-def test_plan_fixes_broken_tool_trees_plan_pnpm_relink(monkeypatch):
+def test_plan_fixes_broken_tool_trees_plan_npm_install(monkeypatch):
     _patch_all_probes(monkeypatch, settlemaker=False, fmg=False)
     plans = doctor.plan_fixes(_fake_report())
-    relinks = [p for p in plans if p["name"].startswith("pnpm relink:")]
-    assert {p["name"] for p in relinks} == {
-        "pnpm relink: settlemaker", "pnpm relink: Fantasy-Map-Generator"}
-    for p in relinks:
+    repairs = [p for p in plans if p["name"].startswith("npm install:")]
+    assert {p["name"] for p in repairs} == {
+        "npm install: settlemaker", "npm install: Fantasy-Map-Generator"}
+    for p in repairs:
         assert p["do"] is True
-        assert "install" in p["cmd"] and "--offline" in p["cmd"]
-        assert p["env"] == {"CI": "true"}
+        assert "install" in p["cmd"] and "--no-fund" in p["cmd"]
+        assert p["env"] is None
         assert p["cwd"] in (doctor.SETTLEMAKER_DIR, doctor.FMG_DIR)
 
 
 def test_plan_fixes_healthy_tools_plan_nothing(monkeypatch):
     _patch_all_probes(monkeypatch)
     plans = doctor.plan_fixes(_fake_report())
-    assert not [p for p in plans if p["name"].startswith("pnpm relink:")]
+    assert not [p for p in plans if p["name"].startswith("npm install:")]
 
 
-def test_plan_fixes_without_pnpm_is_advice_only(monkeypatch):
-    _patch_all_probes(monkeypatch, settlemaker=False, pnpm=False)
+def test_plan_fixes_without_npm_is_advice_only(monkeypatch):
+    _patch_all_probes(monkeypatch, settlemaker=False, npm=False)
     plans = doctor.plan_fixes(_fake_report())
-    relinks = [p for p in plans if p["name"].startswith("pnpm relink:")]
-    assert relinks and all(p["do"] is False and p["cmd"] is None
-                           for p in relinks)
-    assert all("pnpm" in p["advice"].lower() for p in relinks)
+    repairs = [p for p in plans if p["name"].startswith("npm install:")]
+    assert repairs and all(p["do"] is False and p["cmd"] is None
+                           for p in repairs)
+    assert all("node" in p["advice"].lower() for p in repairs)
 
 
 def test_plan_fixes_missing_campaigns_is_advice_never_autorun(monkeypatch):
@@ -162,12 +162,12 @@ def test_apply_fixes_runs_only_do_plans(monkeypatch, capsys):
     plans = doctor.plan_fixes(_fake_report(campaigns_ok=False))
     ran = doctor.apply_fixes(plans)
 
-    assert ran == 1  # the relink; campaigns stays advice
+    assert ran == 1  # the tool repair; campaigns stays advice
     assert len(calls) == 1
     cmd, cwd, env = calls[0]
-    assert cmd == ["pnpm", "install", "--offline"]
+    assert cmd == ["npm", "install", "--no-audit", "--no-fund"]
     assert cwd == doctor.SETTLEMAKER_DIR
-    assert env == {"CI": "true"}
+    assert env is None
     out = capsys.readouterr().out
     assert "[fixing]" in out and "[advice]" in out
     assert "assemble.py" in out
@@ -227,7 +227,7 @@ def test_week_run_check_defaults_to_engine_home():
 
 def test_week_run_check_is_part_of_run_all_checks(monkeypatch):
     monkeypatch.setattr(doctor, "find_key", lambda: "k")
-    names = {c["name"] for c in doctor.run_all_checks(probe=lambda k: (
+    names = {c["name"] for c in doctor.run_all_checks(probe=lambda *a: (
         True, "coding endpoint fine", None))}
     assert "week run" in names
 
@@ -241,8 +241,8 @@ def test_main_fix_performs_and_rechecks(monkeypatch, capsys):
     _patch_all_probes(monkeypatch, settlemaker=False)
 
     def fake_run(cmd, cwd=None, env=None, timeout=600):
-        # pip for the imports plan, the relink for the broken tool tree
-        assert ("pip" in cmd) or ("install" in cmd and "--offline" in cmd)
+        # pip for the imports plan, npm install for the broken tool tree
+        assert ("pip" in cmd) or ("install" in cmd and "--no-fund" in cmd)
         return _FakeProc(0, "Successfully installed yaml-6.0.3\n")
 
     monkeypatch.setattr(doctor, "_run_repair", fake_run)

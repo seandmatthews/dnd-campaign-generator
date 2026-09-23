@@ -4,8 +4,16 @@ One job per call: hand an agent its fog-of-war view rendered through the
 faction prompt template, get back one structured proposal. The model never
 sees the world state, only its view, and never resolves anything.
 
-Key discovery order: $ZAI_API_KEY, then the key stored in
-~/.zcode/v2/provider_config.json (ZCode's Z.ai coding-plan key).
+Provider config (llm.env at the repo root — see llm.env.example):
+LLM_BASE_URL / LLM_API_KEY / LLM_MODEL, environment beating the file, with
+the Z.ai coding-plan defaults below when neither is set. This file
+duplicates studio/llm_client.py's small reader on purpose (D1: no imports
+across projects) — one llm.env governs both, and any OpenAI-compatible
+/chat/completions endpoint works.
+
+Key discovery order: LLM_API_KEY (env, then llm.env), then $ZAI_API_KEY,
+then the key stored in ~/.zcode/v2/provider_config.json (ZCode's Z.ai
+coding-plan key).
 """
 
 import json
@@ -19,10 +27,13 @@ import urllib.request
 
 import yaml
 
-API_URL = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+ENV_FILE = ROOT / "llm.env"
+
+API_BASE_DEFAULT = "https://api.z.ai/api/coding/paas/v4"
+API_URL = API_BASE_DEFAULT + "/chat/completions"
 MODEL = "glm-5.3-flash"
 
-_ROOT = pathlib.Path(__file__).resolve().parent.parent
 VALID_RESOURCES = ("coin", "muscle", "legitimacy")
 VALID_LEVELS = ("none", "low", "medium", "high")
 _LEVEL_INDEX = {lvl: i for i, lvl in enumerate(VALID_LEVELS)}
@@ -32,35 +43,84 @@ VALID_RISK = ("low", "medium", "high")
 _RETRYABLE = (429, 500, 502, 503, 504)
 
 
+def read_env_file(path=None):
+    """Same .env reader as studio/llm_client.read_env_file (kept identical
+    on purpose): '#' comments, KEY=VALUE, quotes stripped, BOM tolerated,
+    {} when absent."""
+    path = pathlib.Path(path or ENV_FILE)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
 def _find_key():
+    """$ZAI_API_KEY, then the key in ~/.zcode/v2/provider_config.json.
+    '' when nothing fits (resolve_config turns that into the readable
+    error at call time, so mere imports never raise)."""
     if os.environ.get("ZAI_API_KEY"):
         return os.environ["ZAI_API_KEY"]
     cfg = pathlib.Path.home() / ".zcode" / "v2" / "provider_config.json"
     if cfg.exists():
-        data = json.loads(cfg.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
         for rule in data.get("config", {}).get("providerConfigRules", {}).get("providerRules", []):
             key = rule.get("config", {}).get("access", {}).get("apiKey")
             if key and not key.startswith("enc:"):
                 return key
-    raise RuntimeError(
-        "no Z.ai API key found; set $ZAI_API_KEY or install one in "
-        "~/.zcode/v2/provider_config.json"
-    )
+    return ""
 
 
-def _post_json(body, timeout, attempts=3):
+def resolve_config(env_file=None):
+    """The effective LLM config {key, url, model} — llm.env (see
+    llm.env.example), environment first, Z.ai coding-plan defaults last.
+    A custom base without a model is a config error (readable, before any
+    spend)."""
+    f = read_env_file(env_file)
+
+    def pick(name):
+        return (os.environ.get(name) or f.get(name) or "").strip()
+
+    base = pick("LLM_BASE_URL").rstrip("/")
+    model = pick("LLM_MODEL")
+    if base and base != API_BASE_DEFAULT and not model:
+        raise RuntimeError(
+            f"LLM_BASE_URL is set to {base}, but LLM_MODEL is not — set "
+            "LLM_MODEL in the environment or llm.env (see llm.env.example); "
+            "the model name is provider-specific")
+    return {
+        "key": pick("LLM_API_KEY") or _find_key(),
+        "url": (base or API_BASE_DEFAULT) + "/chat/completions",
+        "model": model or MODEL,
+    }
+
+
+def _post_json(cfg, body, timeout, attempts=3):
     """POST and parse one completion response, retrying transient failures
-    with a short backoff. The key is looked up once per call, not per
+    with a short backoff. The config is resolved once per call, not per
     attempt. Hard HTTP errors raise RuntimeError carrying a body snippet —
     never a bare HTTPError."""
-    key = _find_key()
     last = None
     for attempt in range(attempts):
         if attempt:
             time.sleep(min(2 ** (attempt - 1), 4))
         req = urllib.request.Request(
-            API_URL, data=json.dumps(body).encode(),
-            headers={"Authorization": f"Bearer {key}",
+            cfg["url"], data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {cfg['key']}",
                      "Content-Type": "application/json"},
         )
         try:
@@ -82,23 +142,30 @@ def _post_json(body, timeout, attempts=3):
     raise last or RuntimeError("unreachable: retry loop exhausted")
 
 
-def complete(prompt, model=MODEL, temperature=0.8, timeout=300, max_tokens=6144,
+def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
-    """Ask the model, letting it think as long as it needs: glm-5.3-flash
-    reasons inside the token budget (the API has no unbounded setting), so a
+    """Ask the model, letting it think as long as it needs: reasoning models
+    burn the token budget on thought (the API has no unbounded setting), so a
     budget that runs out mid-thought returns an empty answer — or a
     mid-sentence one — with finish_reason "length". When that happens,
     double the budget and retry, keeping the longest answer seen. Token
     usage is printed to stderr per call so cost is never invisible."""
+    cfg = resolve_config()
+    if not cfg["key"]:
+        raise RuntimeError(
+            "no LLM API key found — set LLM_API_KEY in llm.env (copy "
+            "llm.env.example at the repo root) or in the environment; the "
+            "legacy $ZAI_API_KEY and ~/.zcode/v2/provider_config.json work "
+            "too")
     body = {
-        "model": model,
+        "model": model or cfg["model"],
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
     best = ""
     while True:
-        data = _post_json(body, timeout)
+        data = _post_json(cfg, body, timeout)
         usage = data.get("usage") or {}
         if usage:
             print(f"  [llm] tokens: prompt={usage.get('prompt_tokens', '?')} "

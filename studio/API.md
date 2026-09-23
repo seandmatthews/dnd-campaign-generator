@@ -126,7 +126,7 @@ shapes in this document true.
   scene stays a derived artifact). Result
   `{"slug","label","svg":url,"png":url,"uvtt":url,"scene":url}`.
   A sharp/junction failure fails the job with the documented repair line
-  (`CI=true pnpm install --offline` in dnd-mapping/tools/settlemaker) in
+  (plain `npm install` in dnd-mapping/tools/settlemaker) in
   the error text (D7).
 - Files: `GET /campaign-file/{name}/{path}` — StaticFiles mount on `campaigns/`,
   read-only intent, 404 outside the campaign tree.
@@ -305,7 +305,8 @@ shapes in this document true.
   (`agentic-simulator/world/.week-run-flag`); the `vault links` check counts
   dangling wiki-links and name/alias collisions across campaigns — advisory,
   never required. `doctor.py --fix` (CLI only, not an API) performs the safe
-  repairs: `CI=true pnpm install --offline` in a broken tool tree, and
+  repairs: `npm install` in a broken tool tree (FMG's adds
+  `--ignore-scripts` — see D7), and
   `pip install -r studio/requirements.txt`.
 - `GET /api/doctor?quick=1` → same shape, but the LLM key check is
   presence-only (no live probe, no tokens, no network wait) — what the

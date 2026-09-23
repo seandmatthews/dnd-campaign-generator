@@ -1,0 +1,25 @@
+[project]
+name = "campaign-studio"
+version = "0.1.0"
+description = "One localhost app over three D&D engines — maps, world building, agent simulation, one review queue. A campaign is a directory of files."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn>=0.53",
+    "pyyaml>=6.0.3",
+    "httpx>=0.28",
+]
+
+# No [build-system] on purpose: the studio is an application tree, not an
+# installable package (uv treats this as a deps-only "virtual" project and
+# never installs campaign-studio itself). Two boot paths:
+#   uv run python studio/run.py          — uv creates .venv + installs the
+#                                          lock (uv.lock) automatically
+#   pip install -r studio/requirements.txt
+#                                        — the plain-Python path; doctor
+#                                          --fix and start.bat use this
+# studio/requirements.txt stays the source of truth for the pinned versions
+# the maintainer tests against; keep the two in sync.
+
+[dependency-groups]
+dev = ["pytest>=8"]

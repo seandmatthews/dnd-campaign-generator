@@ -155,7 +155,7 @@ def test_sites_job_sharp_failure_carries_the_documented_repair(
     job = wait_for_job(client, r.json()["job_id"])
     assert job["status"] == "error"
     # D7: the repair recipe is in the error text, exactly as documented
-    assert "CI=true pnpm install --offline" in job["error"]
+    assert "npm install" in job["error"]
     assert "settlemaker" in job["error"]
     # nothing copied into the campaign on failure
     assert not (tmp_spine_root / "testvale" / "maps" / "sites" /

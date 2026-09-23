@@ -34,14 +34,18 @@ It runs entirely on your machine (`http://127.0.0.1:8765`, localhost only).
 | You need | For | Without it |
 |---|---|---|
 | Python 3.10+ | everything | nothing runs |
-| `pip install -r studio/requirements.txt` | everything | the app won't start |
-| Node 18+ and pnpm | *world, city and battlemap generation* | you can still create a campaign, write lore by hand, and run the simulation |
-| A Z.ai **coding-plan** API key | *backstory generation and live weeks* | everything else still works — browse, edit, approve |
+| `pip install -r studio/requirements.txt` — or, if you use [uv](https://docs.astral.sh/uv), nothing: `uv run` sets the packages up by itself | everything | the app won't start |
+| Node 18+ (npm comes with it) | *world, city and battlemap generation* | you can still create a campaign, write lore by hand, and run the simulation |
+| An **LLM API key** — any OpenAI-compatible provider works (Z.ai, OpenAI, OpenRouter, or a free local [Ollama](https://ollama.com)) | *backstory generation and live weeks* | everything else still works — browse, edit, approve |
 
-The key is found from `ZAI_API_KEY`, or from
-`~/.zcode/v2/provider_config.json` if you use the ZCode CLI. It must be a
-**coding-plan** key: the pay-as-you-go key reaches the wrong endpoint and
-fails with error `1113` even with balance available.
+**The key** lives in `llm.env` at the repo root: copy `llm.env.example` to
+`llm.env`, uncomment one provider block, and fill in the key. The file is
+git-ignored — the key never leaves your machine except to your chosen
+endpoint. Environment variables (`LLM_BASE_URL`, `LLM_API_KEY`,
+`LLM_MODEL`) override the file. With no llm.env at all, the studio falls
+back to its built-in Z.ai defaults: a **coding-plan** key from
+`ZAI_API_KEY` or `~/.zcode/v2/provider_config.json` (the pay-as-you-go
+endpoint fails with error `1113` even with balance available).
 
 Not sure what's missing on your machine? Run the doctor — it checks every
 prerequisite and tells you the exact fix:
@@ -56,6 +60,12 @@ From the repo root (the folder containing this file):
 
     pip install -r studio/requirements.txt
     python studio/run.py
+
+If you use [uv](https://docs.astral.sh/uv), the two lines collapse to one
+(`uv run` creates the environment and installs everything from `uv.lock`
+by itself):
+
+    uv run python studio/run.py
 
 You should see:
 
@@ -207,10 +217,10 @@ nothing in them is precious.
 | Symptom | What it means | Fix |
 |---|---|---|
 | Browser shows nothing / can't connect | The server window closed, or a different port | Restart `python studio/run.py`; the console prints the URL (`STUDIO_PORT` env overrides the port) |
-| "not importable: fastapi …" at boot | Python packages missing | `pip install -r studio/requirements.txt` (or `python studio/doctor.py --fix`) |
-| World generation fails; log mentions node / vitest / FMG | Node missing, or the map tool tree isn't set up | Install Node + pnpm; see `dnd-mapping/docs/map-pipeline.md` and `python studio/doctor.py --fix`. Everything else works meanwhile |
-| "no Z.ai API key found" | The key isn't visible to the app | Set `ZAI_API_KEY`, or put the key in `~/.zcode/v2/provider_config.json` |
-| Z.ai error `1113` "insufficient balance" | The key is not a **coding-plan** key | Use a coding-plan key (requests must hit the coding endpoint) |
+| "not importable: fastapi …" at boot | Python packages missing | `pip install -r studio/requirements.txt` (or `python studio/doctor.py --fix`); with uv: `uv sync` |
+| World generation fails; log mentions node / vitest / FMG | Node missing, or the map tool tree isn't set up | Install Node (npm comes with it); see `dnd-mapping/docs/map-pipeline.md` and `python studio/doctor.py --fix`. Everything else works meanwhile |
+| "no LLM API key found" | The key isn't visible to the app | Copy `llm.env.example` to `llm.env` and set `LLM_API_KEY` (any OpenAI-compatible provider, or a local Ollama); the legacy `ZAI_API_KEY` / `~/.zcode/v2/provider_config.json` also work |
+| Z.ai error `1113` "insufficient balance" | The key is not a **coding-plan** key | Use a coding-plan key (requests must hit the coding endpoint) — or switch providers in `llm.env` |
 | A 422 saying "fed or refused" | Generation needs ground data that doesn't exist yet | Do the named prerequisite first (usually: generate a world) — the app never generates from nothing |
 | "another job is already modifying this campaign" | A previous job is still running | Wait for it (its log streams in the panel); one mutation at a time per campaign |
 | A job failed and the log is raw engine output | The engine hit an error; the tail is shown on purpose | Read the last lines; `python run-tests.py` checks the wiring; engine docs are in each package's README |

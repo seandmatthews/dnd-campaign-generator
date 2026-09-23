@@ -467,10 +467,12 @@ def post_site(name: str, body: SiteBody):
                 joined_png = " ".join(png_lines)
                 if "sharp" in joined_png or "Cannot find module" in joined_png:
                     raise RuntimeError(
-                        "scene rasterization failed — sharp is unavailable (a "
-                        "moved project breaks pnpm's absolute junctions). "
-                        "Documented repair: run `CI=true pnpm install --offline` "
-                        "in dnd-mapping/tools/settlemaker, then try again")
+                        "scene rasterization failed — sharp is unavailable "
+                        "(the tool tree is broken or half-installed). "
+                        "Documented repair: run `npm install "
+                        "--no-audit --no-fund` in dnd-mapping/tools/"
+                        "settlemaker (or python studio/doctor.py --fix), "
+                        "then try again")
                 raise RuntimeError(f"render-scene-png.mjs failed (rc={rc}): "
                                    + " | ".join(png_lines[-8:]))
             stage(f"battlemap.py wrap --dir {rel}",

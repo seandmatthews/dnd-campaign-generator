@@ -123,15 +123,14 @@ def test_post_json_retries_transient_http_errors():
         if len(attempts) < 3:
             raise urllib.error.HTTPError("url", 429, "rate limited", {}, None)
         return FakeResp()
-    saved_urlopen, saved_sleep, saved_key = llm.urllib.request.urlopen, llm.time.sleep, llm._find_key
+    saved_urlopen, saved_sleep = llm.urllib.request.urlopen, llm.time.sleep
     llm.urllib.request.urlopen = fake_urlopen
     llm.time.sleep = lambda s: None
-    llm._find_key = lambda: "test-key"
     try:
         with contextlib.redirect_stderr(io.StringIO()):
-            data = llm._post_json({}, 5)
+            data = llm._post_json({"key": "test-key", "url": llm.API_URL}, {}, 5)
     finally:
-        llm.urllib.request.urlopen, llm.time.sleep, llm._find_key = saved_urlopen, saved_sleep, saved_key
+        llm.urllib.request.urlopen, llm.time.sleep = saved_urlopen, saved_sleep
     assert len(attempts) == 3 and data["choices"][0]["message"]["content"] == "ok"
     print("  post: transient 429 retried with backoff  OK")
 
@@ -139,17 +138,16 @@ def test_post_json_retries_transient_http_errors():
 def test_post_json_hard_errors_become_readable_runtimeerrors():
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
-    saved_urlopen, saved_key = llm.urllib.request.urlopen, llm._find_key
+    saved_urlopen = llm.urllib.request.urlopen
     llm.urllib.request.urlopen = fake_urlopen
-    llm._find_key = lambda: "test-key"
     try:
         try:
-            llm._post_json({}, 5)
+            llm._post_json({"key": "test-key", "url": llm.API_URL}, {}, 5)
             raise AssertionError("expected RuntimeError")
         except RuntimeError as e:
             assert "401" in str(e), f"readable error, got: {e}"
     finally:
-        llm.urllib.request.urlopen, llm._find_key = saved_urlopen, saved_key
+        llm.urllib.request.urlopen = saved_urlopen
     print("  post: hard HTTP errors raise readable RuntimeError  OK")
 
 
@@ -159,16 +157,18 @@ def test_complete_budget_doubling_keeps_longest():
         response("the full answer, finally"),
     ]
     seen_tokens = []
-    def fake_post(body, timeout):
+    def fake_post(cfg, body, timeout):
         seen_tokens.append(body["max_tokens"])
         return scripted.pop(0)
-    saved = llm._post_json
+    saved_post, saved_resolve = llm._post_json, llm.resolve_config
     llm._post_json = fake_post
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             out = llm.complete("prompt", max_tokens=16, max_budget=32)
     finally:
-        llm._post_json = saved
+        llm._post_json, llm.resolve_config = saved_post, saved_resolve
     assert out == "the full answer, finally", "the longest answer wins"
     assert seen_tokens == [16, 32], "budget doubled once, capped at max_budget"
     print("  complete: length-retry doubles budget, keeps longest  OK")
@@ -207,16 +207,58 @@ def test_find_key_env_wins_and_fallback_walks_rules():
     pathlib.Path.home = classmethod(lambda cls: empty)
     os.environ.pop("ZAI_API_KEY", None)
     try:
-        try:
-            llm._find_key()
-            raise AssertionError("expected RuntimeError")
-        except RuntimeError as e:
-            assert "no Z.ai API key" in str(e)
+        assert llm._find_key() == "", "no key: empty string, never a raise"
     finally:
         pathlib.Path.home = saved_home
         if saved is not None:
             os.environ["ZAI_API_KEY"] = saved
-    print("  key: env wins; config walk skips enc:; missing key explains itself  OK")
+    print("  key: env wins; config walk skips enc:; missing key is empty  OK")
+
+
+def test_resolve_config_precedence_and_custom_base_error():
+    import os
+    import tempfile
+    saved = {k: os.environ.pop(k, None) for k in
+             ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "ZAI_API_KEY")}
+    empty_env = pathlib.Path(tempfile.mkdtemp()) / "absent.env"
+    saved_home = pathlib.Path.home
+    pathlib.Path.home = classmethod(
+        lambda cls: pathlib.Path(tempfile.mkdtemp()))  # no ZCode config either
+    try:
+        cfg = llm.resolve_config(env_file=empty_env)
+        assert cfg["url"] == llm.API_URL and cfg["model"] == llm.MODEL, \
+            "defaults are the Z.ai coding endpoint"
+        assert cfg["key"] == "", "no key anywhere -> empty, complete() explains"
+
+        env_file = pathlib.Path(tempfile.mkdtemp()) / "llm.env"
+        env_file.write_text(
+            '# comment\nLLM_BASE_URL="http://localhost:11434/v1"\n'
+            "LLM_API_KEY=file-key\nLLM_MODEL=file-model\n\n", encoding="utf-8")
+        cfg = llm.resolve_config(env_file=env_file)
+        assert cfg["url"] == "http://localhost:11434/v1/chat/completions"
+        assert cfg["key"] == "file-key"
+
+        env_file.write_text(
+            'LLM_BASE_URL="http://localhost:11434/v1"\n'
+            "LLM_API_KEY=file-key\n", encoding="utf-8")
+        try:
+            llm.resolve_config(env_file=env_file)
+            raise AssertionError("expected RuntimeError")
+        except RuntimeError as e:
+            assert "LLM_MODEL" in str(e), "custom base without a model refuses"
+
+        os.environ["LLM_MODEL"] = "llama3.1"
+        os.environ["LLM_API_KEY"] = "env-key"
+        cfg = llm.resolve_config(env_file=env_file)
+        assert cfg["model"] == "llama3.1" and cfg["key"] == "env-key", \
+            "environment beats the file"
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    print("  config: env > llm.env > defaults; custom base demands a model  OK")
 
 
 if __name__ == "__main__":
@@ -231,6 +273,7 @@ if __name__ == "__main__":
         test_post_json_hard_errors_become_readable_runtimeerrors,
         test_complete_budget_doubling_keeps_longest,
         test_find_key_env_wins_and_fallback_walks_rules,
+        test_resolve_config_precedence_and_custom_base_error,
     ]:
         fn()
     print("all llm tests passed")

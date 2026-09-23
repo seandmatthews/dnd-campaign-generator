@@ -19,10 +19,14 @@ tested on its own; the studio is the only one that invokes the others.
 - **Just run the app:** `python studio/run.py` (or `studio/start.bat`) —
   if anything is missing, the doctor script (`python studio/doctor.py`)
   checks every prerequisite and tells you the exact command that fixes it.
+  With [uv](https://docs.astral.sh/uv) installed, `uv run python studio/run.py`
+  is the whole story: it sets up the environment and the locked packages
+  (`uv.lock`) by itself.
 - **Full setup (maps + world gen):** `python setup-tools.py` — clones the
   two third-party map tools into `dnd-mapping/tools/` (git-ignored), pins
-  and builds them, and applies our FMG headless-runner patches from
-  `dnd-mapping/vendor-patches/fmg/`. `--check` reports readiness only.
+  and installs them with plain npm, and applies our FMG headless-runner
+  patches from `dnd-mapping/vendor-patches/fmg/`. `--check` reports
+  readiness only.
   Read-only use (browsing lore, chronicles, the review queue) works
   without it.
 - **Run every test:** `python run-tests.py` (fast tier, seconds) or

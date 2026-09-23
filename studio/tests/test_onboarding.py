@@ -195,13 +195,18 @@ def test_doctor_quick_skips_live_probe(client, monkeypatch):
     assert real_report(live_llm=False)["ok"] in (True, False)  # accepts the kwarg
 
 
-def test_check_llm_key_is_presence_only(monkeypatch):
+def test_check_llm_key_is_presence_only(monkeypatch, tmp_path):
     import doctor
-    monkeypatch.setattr(doctor, "find_key", lambda: "k")
+    import llm_client
+    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "ZAI_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(llm_client, "ENV_FILE", tmp_path / "absent.env")
+    monkeypatch.setattr(llm_client, "_CONFIG", tmp_path / "absent.json")
+    monkeypatch.setenv("ZAI_API_KEY", "k")
     check = doctor.check_llm_key()
     assert check["ok"] is True
     assert "not probed" in check["detail"]
-    monkeypatch.setattr(doctor, "find_key", lambda: None)
+    monkeypatch.delenv("ZAI_API_KEY")
     check = doctor.check_llm_key()
     assert check["ok"] is False and check["required"] is False
     assert "everything else works without" in check["fix"]

@@ -137,16 +137,25 @@ second and streams the tail. No websockets. The expensive button carries a
 confirm: "This runs a real week — it spends API credits and advances the
 canon clock."
 
-**D6 — Localhost only.** Bind 127.0.0.1, no auth, no accounts. The LLM key
-is read exactly as the engines read it today (env `ZAI_API_KEY`, else
-`~/.zcode/v2/provider_config.json`), through the **coding endpoint**
+**D6 — Localhost only.** Bind 127.0.0.1, no auth, no accounts. The LLM
+provider is configured by `llm.env` at the repo root (see
+`llm.env.example`): `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`, any
+OpenAI-compatible `/chat/completions` endpoint, environment beating the
+file. Defaults preserve the original wiring: the Z.ai **coding endpoint**
 (`api/coding/paas/v4`) — the pay-as-you-go endpoint returns 1113
-"insufficient balance" even when the plan pool is fine.
+"insufficient balance" even when the plan pool is fine — plus the legacy
+key discovery (`ZAI_API_KEY`, else `~/.zcode/v2/provider_config.json`).
+Both LLM clients (studio and simulator) carry the same small reader, per
+D1: no imports across projects.
 
 **D7 — Windows machine realities, written down where we'll hit them.**
-Moving any pnpm project breaks every junction in its `node_modules` (sharp,
-vitest) — repair is `CI=true pnpm install --offline` per tool tree, already
-documented in the map doc. The FMG headless runner is invoked as a vitest
+The parent path contains `&` (`Documents/D&D`), and npm runs install
+scripts through cmd.exe, which cannot parse it — FMG's tool install uses
+`npm install --ignore-scripts` (its only install-time script is dev-only
+git hooks; the pipeline needs no scripts). Engines invoke binaries as
+`node node_modules/<pkg>/...` directly, so the package manager is needed
+only at setup/repair time, and there are no pnpm junctions left to break
+when a directory moves. The FMG headless runner is invoked as a vitest
 run from the FMG repo root with `FMG_SEED`/`FMG_OUT` env — the studio wraps
 exactly that incantation. `render-scene-png.mjs` imports sharp from
 settlemaker's tree by absolute path — it works, but it is the most fragile
@@ -316,7 +325,8 @@ one script, browser opens on the studio with a sample campaign ready. Plus
 the pretty pass: the page should look like something you'd show a friend.
 
 **Ships:** `start.bat` / `python studio/run.py` (uvicorn + webbrowser.open);
-a dependency doctor (checks python/node/pnpm/vale presence, repairs pnpm
+a dependency doctor (checks python/node/vale presence, repairs tool trees
+with npm install
 junctions with the documented incantation, reports the key situation
 distinctly: no key vs 1113-balance vs coding-endpoint-fine); a
 `campaigns/sample/` bootstrap that assembles a small fresh campaign on

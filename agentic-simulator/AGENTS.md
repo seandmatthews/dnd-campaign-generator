@@ -49,9 +49,11 @@ it has its own AGENTS.md). The relationship is one-directional and optional:
    propose; nothing in `src/` generates prose the state cannot back up.
 2. Smallest increment that runs. A mechanic must be explainable in one
    sentence before it is implemented.
-3. Machine setup notes: no `npm`/`npx` (nodist shim broken — use `pnpm` or
-   invoke binaries with `node` directly); dependencies: Python 3.10 + PyYAML,
-   Node 22.
+3. Machine setup notes: no Node tooling is needed to run this engine
+   (stdlib Python only); map-engine installs elsewhere in the parent are
+   plain `npm install`, engines invoking binaries with `node` directly.
+   Dependencies: Python 3.10 + PyYAML. The LLM endpoint/key/model come from
+   llm.env at the repo root (see llm.env.example).
 
 ## Directory map
 

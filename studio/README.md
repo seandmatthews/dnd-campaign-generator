@@ -22,17 +22,23 @@ point at them, not conjure them.
   `winget install Python.Python.3.12` or
   [python.org/downloads](https://www.python.org/downloads/)).
 - Python packages: `pip install -r studio/requirements.txt`
-  (fastapi, uvicorn, pyyaml, httpx).
-- Node + pnpm, for the map engines. Use pnpm, not npm/npx: every tool
-  recipe in `dnd-mapping` is written and tested with pnpm (npm was broken
-  in the original author's setup, so it never got covered). If you have
-  working npm, it will probably work — pnpm is the known-good path.
-- An API key, eventually. The app works read-only without one: browse maps,
-  lore, chronicles, factions, the review queue. Generating backstory or
-  running a live week needs a Z.ai **coding-plan** key — set `ZAI_API_KEY`
-  or put the key in `~/.zcode/v2/provider_config.json`. Requests go to the
-  coding endpoint (`api/coding/paas/v4`); the pay-as-you-go endpoint returns
-  error 1113 "insufficient balance" even when the plan pool is fine.
+  (fastapi, uvicorn, pyyaml, httpx). If you use
+  [uv](https://docs.astral.sh/uv), skip this: `uv run python studio/run.py`
+  creates the environment and installs the locked packages by itself.
+- Node 18+, for the map engines (npm comes with it; the tool install is
+  plain `npm install`, and engine invocations are `node <binary>` calls,
+  so no global packages are needed).
+- An LLM API key, eventually. The app works read-only without one: browse
+  maps, lore, chronicles, factions, the review queue. Generating backstory
+  or running a live week needs a key for **any OpenAI-compatible
+  provider**: copy `llm.env.example` (repo root) to `llm.env` and fill in
+  `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` — Z.ai, OpenAI, OpenRouter,
+  or a local Ollama all work. The file is git-ignored; environment
+  variables override it. With no llm.env, the built-in default is the Z.ai
+  coding endpoint plus the key from `ZAI_API_KEY` or
+  `~/.zcode/v2/provider_config.json` (the coding-plan key — the
+  pay-as-you-go endpoint returns error 1113 "insufficient balance" even
+  when the plan pool is fine).
   The page itself tells you when the key is missing: a dismissible setup
   strip under the header appears on boot whenever any doctor check fails
   (it polls `/api/doctor?quick=1`, presence-only — no tokens spent).
@@ -53,20 +59,19 @@ When anything fails, run:
 
     python studio/doctor.py
 
-It checks python, the imports, node, pnpm, the three engine CLIs, whether
-a week run is in progress, vale (optional), the campaigns folder, and the
-API key — and says precisely which prerequisite is missing and the command
-that fixes it. `--json` gives the same report the `/api/doctor` route
-serves. Plain doctor only advises; `--fix` performs the repairs that are
-safe to automate:
+It checks python, the imports, node, uv (optional), the three engine CLIs,
+whether a week run is in progress, vale (optional), the campaigns folder,
+the vault links, and the LLM key situation — and says precisely which
+prerequisite is missing and the command that fixes it. `--json` gives the
+same report the `/api/doctor` route serves. Plain doctor only advises;
+`--fix` performs the repairs that are safe to automate:
 
     python studio/doctor.py --fix
 
-That relinks a broken pnpm tool tree with `CI=true pnpm install --offline`
-in `dnd-mapping/tools/settlemaker` and/or
-`dnd-mapping/tools/Fantasy-Map-Generator` (detected by probing each tree's
-critical module: settlemaker's `dist/index.js` must load, FMG's
-`node_modules/vitest/vitest.mjs` must exist) and runs
+That repairs a broken tool tree with plain `npm install` (FMG's install
+adds `--ignore-scripts` — its only install-time script is dev-only git
+hooks, and npm runs scripts through cmd.exe, which cannot handle the `&`
+in this repo's default path) and runs
 `pip install -r studio/requirements.txt` when the imports fail. Everything
 else stays printed advice — in particular it never auto-runs
 `assemble.py`, because that writes canon.

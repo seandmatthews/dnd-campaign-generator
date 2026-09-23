@@ -1,9 +1,10 @@
 """Dependency doctor (M5) — the honest answer to "why won't it boot".
 
-Checks, in order: python version, the studio's imports, node, pnpm, the
-three engine roots with their key CLIs runnable, vale (optional),
-the campaigns tree, and the LLM key situation — no key vs 1113-balance vs
-coding-endpoint-fine, classified by ONE tiny live probe.
+Checks, in order: python version, the studio's imports, node, uv (optional),
+the three engine roots with their key CLIs runnable, vale (optional),
+the campaigns tree, the vault links, and the LLM key situation — no key vs
+wrong endpoint vs endpoint fine, classified by ONE tiny live probe against
+whatever llm.env / the legacy Z.ai discovery resolves.
 
 Stdlib only at module level: the doctor must run when fastapi/uvicorn/yaml
 are exactly the things missing. Output is {"ok": overall, "checks":[...]}
@@ -13,11 +14,11 @@ read-only without a key — generation does not).
 
 CLI:  python studio/doctor.py           human-readable
       python studio/doctor.py --json    the API shape
-      python studio/doctor.py --fix     PERFORM the safe repairs (relink
-                                        broken pnpm tool trees, run the pip
-                                        line); everything else stays advice —
-                                        assemble.py is never auto-run (it
-                                        writes canon)
+      python studio/doctor.py --fix     PERFORM the safe repairs (repair
+                                        broken tool trees with npm install,
+                                        run the pip line); everything else
+                                        stays advice — assemble.py is never
+                                        auto-run (it writes canon)
 Importable: doctor.report() — wired to GET /api/doctor (routers/system.py).
 """
 
@@ -43,18 +44,21 @@ PROBE_MODEL = "glm-5.3-flash"
 PROBE_TIMEOUT_S = 15
 ENGINE_PROBE_TIMEOUT_S = 30
 
-# the pnpm-linked tool trees with a documented repair (D7): present but
-# with their critical module un-loadable means a broken junction.
+# the tool trees with a documented repair (D7): present but with their
+# critical module un-loadable means a broken/incomplete node_modules.
 DND_MAPPING_TOOLS = PARENT / "dnd-mapping" / "tools"
 SETTLEMAKER_DIR = DND_MAPPING_TOOLS / "settlemaker"
 FMG_DIR = DND_MAPPING_TOOLS / "Fantasy-Map-Generator"
-PNPM_INSTALL_CMD = ["pnpm", "install", "--offline"]
+NPM_INSTALL_CMD = ["npm", "install", "--no-audit", "--no-fund"]
+# FMG adds --ignore-scripts: its only install-time script is "prepare":
+# simple-git-hooks (dev-only git hooks), and npm runs scripts through
+# cmd.exe, which cannot handle the `&` in this repo's default path
+# (Documents\D&D). Nothing the headless pipeline needs is scripted.
+NPM_INSTALL_FMG = NPM_INSTALL_CMD + ["--ignore-scripts"]
 
 # a live/interrupted week leaves this flag in the engine home (the engine
 # home is scratch; the campaign is canon — copy-back only happens on success)
 WEEK_RUN_FLAG = PARENT / "agentic-simulator" / "world" / ".week-run-flag"
-
-_CONFIG = Path.home() / ".zcode" / "v2" / "provider_config.json"
 
 ENGINES = [
     ("dnd-mapping", "src/import_fmg.py",
@@ -103,9 +107,9 @@ def check_imports(modules=None):
 def _version_of(cmd, cwd=None):
     """Run a --version-ish probe; (ran, version-or-error line).
 
-    Windows .cmd/.bat shims (nodist's pnpm) cannot be exec'd directly by
-    CreateProcess — they go through ["cmd", "/c", <full path>, ...]. Still
-    list-form args against a resolved PATH entry, never a shell string."""
+    Windows .cmd/.bat shims cannot be exec'd directly by CreateProcess —
+    they go through ["cmd", "/c", <full path>, ...]. Still list-form args
+    against a resolved PATH entry, never a shell string."""
     attempts = [cmd]
     where = shutil.which(cmd[0])
     if where and where.lower().endswith((".cmd", ".bat")):
@@ -138,16 +142,20 @@ def check_node():
                fix=None if ran else "node exists but would not run")
 
 
-def check_pnpm():
-    where = shutil.which("pnpm")
+def check_uv():
+    """uv, the optional one-tool path (`uv run python studio/run.py` sets up
+    Python + venv + packages by itself). Informational either way — the pip
+    path needs nothing but Python."""
+    where = shutil.which("uv")
     if not where:
-        return _mk("pnpm", False, "not on PATH",
-                   fix="install pnpm (e.g. `corepack enable` or "
-                       "https://pnpm.io/installation) — the map tool "
-                       "recipes use pnpm")
-    ran, line = _version_of(["pnpm", "--version"])
-    return _mk("pnpm", ran, f"on PATH at {where}" + (f" ({line})" if ran else f" ({line})"),
-               fix=None if ran else "pnpm exists but would not run")
+        return _mk("uv (optional)", True,
+                   "not installed — optional: `uv run` is the one-command boot "
+                   "(pip path works without it)",
+                   fix="pip install uv, or winget install astral-sh.uv",
+                   required=False)
+    ran, line = _version_of(["uv", "--version"])
+    return _mk("uv (optional)", True, f"on PATH at {where}"
+               + (f" ({line})" if ran else ""), required=False)
 
 
 def check_engines():
@@ -318,45 +326,61 @@ def check_vault():
 
 
 def find_key():
-    """$ZAI_API_KEY, else the key in ~/.zcode/v2/provider_config.json —
-    mirrors studio/llm_client.py: rule 1 (the coding-plan key) is preferred,
-    the rest scanned in order, enc: blobs skipped. None when nothing fits."""
+    """The resolved LLM key, or None — llm.env / $LLM_API_KEY first, then
+    the legacy Z.ai discovery in llm_client ($ZAI_API_KEY, then the ZCode
+    CLI's ~/.zcode/v2/provider_config.json). None when nothing fits."""
+    import llm_client
+    try:
+        return llm_client.resolve_config()["key"] or None
+    except Exception:  # noqa: BLE001 — a config error surfaces in check_llm
+        return None
+
+
+def _llm_cfg():
+    """The effective llm_client config, or a findings string on failure —
+    the single place check_llm/check_llm_key read provider config."""
+    import llm_client
+    try:
+        return llm_client.resolve_config(), None
+    except Exception as e:  # noqa: BLE001 — a bad llm.env is the finding
+        return None, str(e)
+
+
+def _key_source(cfg):
+    """Where the key came from, for the detail line (resolve_config does
+    not say; the source is checkable by construction)."""
+    import llm_client
+    if (os.environ.get("LLM_API_KEY") or "").strip():
+        return "$LLM_API_KEY"
+    if llm_client.read_env_file().get("LLM_API_KEY", "").strip():
+        return "llm.env"
     if os.environ.get("ZAI_API_KEY"):
-        return os.environ["ZAI_API_KEY"]
-    if _CONFIG.exists():
-        try:
-            rules = json.loads(_CONFIG.read_text(encoding="utf-8"))[
-                "config"]["providerConfigRules"]["providerRules"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return None
-        order = list(range(1, len(rules))) + [0]
-        for i in order:
-            try:
-                key = ((rules[i].get("config") or {}).get("access") or {}).get("apiKey")
-            except (AttributeError, IndexError, TypeError):
-                continue
-            if key and not key.startswith("enc:"):
-                return key
-    return None
+        return "$ZAI_API_KEY"
+    return "the ZCode CLI config (~/.zcode/v2/provider_config.json)"
 
 
-def probe_llm(key):
-    """ONE tiny live probe to the coding endpoint (max_tokens 16, 'Reply OK').
-    Returns (ok, detail, fix) with the situation classified:
-    200 fine / 1113 wrong-door / 401 invalid / anything else reported as-is."""
+def probe_llm(key, url=None, model=None):
+    """ONE tiny live probe to the resolved endpoint (max_tokens 16,
+    'Reply OK'). Returns (ok, detail, fix) with the situation classified:
+    200 fine / 1113 wrong-door / 401 invalid / anything else reported as-is.
+    The 1113 door-hint is Z.ai-specific, so it fires only for the Z.ai URL."""
+    url = url or API_URL
+    model = model or PROBE_MODEL
     body = json.dumps({
-        "model": PROBE_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": "Reply OK"}],
         "max_tokens": 16,
         "temperature": 0,
     }).encode()
     req = urllib.request.Request(
-        API_URL, data=body,
+        url, data=body,
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT_S) as resp:
             resp.read()
-        return True, "coding endpoint fine", None
+        if url == API_URL:
+            return True, "coding endpoint fine", None
+        return True, f"endpoint fine ({model} at {url})", None
     except urllib.error.HTTPError as e:
         raw = ""
         try:
@@ -378,40 +402,56 @@ def probe_llm(key):
                    "the configured key is probably not a coding-plan key"
         if e.code == 401:
             return False, "key invalid (HTTP 401)", \
-                   "check ZAI_API_KEY, or the apiKey in " \
-                   "~/.zcode/v2/provider_config.json"
+                   "check the key in llm.env / $LLM_API_KEY, or the legacy " \
+                   "ZAI_API_KEY / ~/.zcode/v2/provider_config.json"
         return False, f"endpoint returned HTTP {e.code}: {raw[:120] or e.reason}", \
-               "see the Z.ai error code, then retry"
+               f"check LLM_BASE_URL and LLM_MODEL in llm.env for {url}"
     except Exception as e:  # noqa: BLE001 — network errors are findings, not crashes
         return False, f"endpoint unreachable: {e}", "check the network, then retry"
 
 
 def check_llm(probe=None):
-    key = find_key()
-    if key is None:
+    cfg, err = _llm_cfg()
+    if err:
+        return _mk("llm key", False, err,
+                   fix="fix llm.env (see llm.env.example) — LLM_MODEL is "
+                       "required when LLM_BASE_URL is not the default",
+                   required=False)
+    if not cfg["key"]:
         return _mk("llm key", False, "no key found",
-                   fix="set ZAI_API_KEY, or put the Z.ai key in "
-                       "~/.zcode/v2/provider_config.json — generation and live "
-                       "weeks need it; everything else works without",
+                   fix="copy llm.env.example to llm.env and set LLM_API_KEY "
+                       "(any OpenAI-compatible provider; a local Ollama works "
+                       "too), or the legacy $ZAI_API_KEY / "
+                       "~/.zcode/v2/provider_config.json — generation and "
+                       "live weeks need a key; everything else works without",
                    required=False)
     try:
-        ok, detail, fix = (probe or probe_llm)(key)
+        ok, detail, fix = (probe or probe_llm)(cfg["key"], cfg["url"], cfg["model"])
     except Exception as e:  # noqa: BLE001 — a throwing probe is a finding
         ok, detail, fix = False, f"probe failed: {e}", None
-    return _mk("llm key", ok, detail, fix=fix, required=False)
+    return _mk("llm key", ok, f"{detail} [key: {_key_source(cfg)}]",
+               fix=fix, required=False)
 
 
 def check_llm_key():
     """Presence-only llm check (no network) — the health strip's quick mode:
     a page load must not spend tokens or wait on an API round-trip."""
-    key = find_key()
-    if key is None:
-        return _mk("llm key", False, "no key found",
-                   fix="set ZAI_API_KEY, or put the Z.ai key in "
-                       "~/.zcode/v2/provider_config.json — generation and live "
-                       "weeks need it; everything else works without",
+    cfg, err = _llm_cfg()
+    if err:
+        return _mk("llm key", False, err,
+                   fix="fix llm.env (see llm.env.example) — LLM_MODEL is "
+                       "required when LLM_BASE_URL is not the default",
                    required=False)
-    return _mk("llm key", True, "key found (presence check — not probed)",
+    if not cfg["key"]:
+        return _mk("llm key", False, "no key found",
+                   fix="copy llm.env.example to llm.env and set LLM_API_KEY "
+                       "(any OpenAI-compatible provider; a local Ollama works "
+                       "too), or the legacy $ZAI_API_KEY / "
+                       "~/.zcode/v2/provider_config.json — generation and "
+                       "live weeks need a key; everything else works without",
+                   required=False)
+    return _mk("llm key", True,
+               f"key found in {_key_source(cfg)} (presence check — not probed)",
                required=False)
 
 
@@ -419,7 +459,7 @@ def check_llm_key():
 
 
 def run_all_checks(probe=None, modules=None, live_llm=True):
-    checks = [check_python(), check_imports(modules), check_node(), check_pnpm()]
+    checks = [check_python(), check_imports(modules), check_node(), check_uv()]
     checks.extend(check_engines())
     checks.extend(check_tool_trees())
     checks.append(check_week_run())
@@ -440,9 +480,10 @@ def report(probe=None, modules=None, live_llm=True):
 
 
 def _node_import_ok(entry: Path, timeout: int = ENGINE_PROBE_TIMEOUT_S):
-    """(loads, why) — can node import this module at all? A broken pnpm
-    junction shows up as a resolution error here. Dynamic import works for
-    ESM and CJS alike. List-form args (the parent path contains `&`)."""
+    """(loads, why) — can node import this module at all? Broken or
+    half-installed node_modules shows up as a resolution error here.
+    Dynamic import works for ESM and CJS alike. List-form args (the parent
+    path contains `&`)."""
     probe = ("import(require('url').pathToFileURL(process.argv[1]).href)"
              ".then(function () {}, function (e) {"
              "console.error(String(e)); process.exit(3); })")
@@ -464,8 +505,8 @@ def _node_import_ok(entry: Path, timeout: int = ENGINE_PROBE_TIMEOUT_S):
 
 def settlemaker_ok(root=None):
     """Probe (a): the tree exists but dist/index.js won't import → the
-    documented pnpm relink applies. A missing tree is NOT a junction
-    problem (the engine check already reports that)."""
+    documented npm repair applies. A missing tree is NOT a breakage
+    (the engine check already reports that)."""
     root = root or SETTLEMAKER_DIR
     if not root.is_dir():
         return True, "not installed"
@@ -477,36 +518,36 @@ def settlemaker_ok(root=None):
 
 def fmg_ok(root=None):
     """Probe (b): the tree exists but node_modules/vitest/vitest.mjs is
-    missing → the headless FMG pipeline cannot run → relink."""
+    missing → the headless FMG pipeline cannot run → repair."""
     root = root or FMG_DIR
     if not root.is_dir():
         return True, "not installed"
     if not (root / "node_modules" / "vitest" / "vitest.mjs").is_file():
-        return False, "node_modules/vitest/vitest.mjs missing — junction broken"
+        return False, "node_modules/vitest/vitest.mjs missing — install broken or incomplete"
     return True, "node_modules/vitest/vitest.mjs present"
 
 
-def _pnpm_cmd(args):
-    """[pnpm, *args] — or through its .cmd/.bat shim, which CreateProcess
-    cannot exec directly (same story as _version_of above). None when pnpm
+def _npm_cmd(args):
+    """[npm, *args] — or through its .cmd/.bat shim, which CreateProcess
+    cannot exec directly (same story as _version_of above). None when npm
     is not on PATH at all."""
-    where = shutil.which("pnpm")
+    where = shutil.which("npm")
     if not where:
         return None
     if where.lower().endswith((".cmd", ".bat")):
         return ["cmd", "/c", where, *args]
-    return ["pnpm", *args]
+    return ["npm", *args]
 
 
-MISSING_PNPM_ADVICE = (
-    "install pnpm first (corepack enable or https://pnpm.io/installation), "
-    "then re-run python studio/doctor.py --fix")
+MISSING_NPM_ADVICE = (
+    "install Node (https://nodejs.org — npm comes with it), then re-run "
+    "python studio/doctor.py --fix")
 
 
 def plan_fixes(rep=None):
     """What --fix would do: a list of plans
     {name, why, cmd, cwd, env, do, advice} — do=True plans are safe to run
-    (pnpm relink, the pip line); do=False plans are advice only, because
+    (the npm repair, the pip line); do=False plans are advice only, because
     they write canon (assemble.py) or need something the doctor cannot
     install (a missing python/node itself, an LLM key)."""
     rep = rep or report()
@@ -527,15 +568,17 @@ def plan_fixes(rep=None):
                                ("Fantasy-Map-Generator", FMG_DIR, fmg_ok)):
         ok, why = probe(root)
         if not ok:
-            cmd = _pnpm_cmd(PNPM_INSTALL_CMD[1:])
+            base = NPM_INSTALL_FMG if label == "Fantasy-Map-Generator" \
+                else NPM_INSTALL_CMD
+            cmd = _npm_cmd(base[1:])
             plans.append({
-                "name": f"pnpm relink: {label}",
+                "name": f"npm install: {label}",
                 "why": why,
                 "cmd": cmd,
                 "cwd": root,
-                "env": {"CI": "true"},
+                "env": None,
                 "do": cmd is not None,
-                "advice": None if cmd is not None else MISSING_PNPM_ADVICE,
+                "advice": None if cmd is not None else MISSING_NPM_ADVICE,
             })
 
     campaigns = by_name.get("campaigns")
@@ -629,8 +672,8 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true",
                     help="print the API shape instead of the human report")
     ap.add_argument("--fix", action="store_true",
-                    help="perform the safe repairs (relink broken pnpm tool "
-                         "trees, pip install -r studio/requirements.txt); "
+                    help="perform the safe repairs (npm install in broken "
+                         "tool trees, pip install -r studio/requirements.txt); "
                          "everything else is printed as advice — assemble.py "
                          "is never auto-run")
     args = ap.parse_args(argv)
