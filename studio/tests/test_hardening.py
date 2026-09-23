@@ -280,54 +280,54 @@ def _git(repo, *args):
         proc.stderr.decode("utf-8", "replace")
 
 
-def _temp_repo(tmp_path):
-    repo = tmp_path / "repo"
-    (repo / "campaigns" / "testvale" / "lore").mkdir(parents=True)
-    assert _git(repo, "init")[0] == 0
-    _git(repo, "config", "user.name", "studio-test")
-    _git(repo, "config", "user.email", "studio@test.invalid")
-    (repo / "campaigns" / "testvale" / "lore" / "timeline.yaml").write_text(
+def _campaigns_root(tmp_path):
+    """A temp campaigns root with a seeded campaign and NO git repo yet —
+    canon must init it on demand (the workspace is its own nested repo)."""
+    root = tmp_path / "campaigns"
+    (root / "testvale" / "lore").mkdir(parents=True)
+    (root / "testvale" / "lore" / "timeline.yaml").write_text(
         "entries: []\n", encoding="utf-8")
-    _git(repo, "add", "-A")
-    assert _git(repo, "commit", "-m", "seed")[0] == 0
-    return repo
+    return root
 
 
-def test_canon_snapshot_commits_campaign_in_temp_repo(tmp_path, monkeypatch):
-    repo = _temp_repo(tmp_path)
-    monkeypatch.setattr(canon, "REPO_ROOT", repo)
+def test_canon_snapshots_into_a_campaigns_repo_it_creates(tmp_path, monkeypatch):
+    root = _campaigns_root(tmp_path)
     monkeypatch.setattr(canon, "AVAILABLE", True)
-    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", repo / "campaigns")
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", root)
+    assert not (root / ".git").exists(), "test starts without the nested repo"
 
-    timeline = repo / "campaigns" / "testvale" / "lore" / "timeline.yaml"
+    timeline = root / "testvale" / "lore" / "timeline.yaml"
     timeline.write_text("entries:\n  - id: t0001\n", encoding="utf-8")
     sha = canon.snapshot("testvale", "campaign/testvale: approve 1 pending entries")
     assert sha
-    rc, out, _ = _git(repo, "log", "-1", "--format=%s")
+    rc, out, _ = _git(root, "log", "-1", "--format=%s")
     assert out.strip() == "campaign/testvale: approve 1 pending entries"
-    rc, out, _ = _git(repo, "log", "-1", "--format=%h")
+    rc, out, _ = _git(root, "log", "-1", "--format=%h")
     assert out.strip() == sha
 
-    # only the campaign path is committed: a stray sibling change is not swept in
-    (repo / "stray.txt").write_text("not canon", encoding="utf-8")
+    # only the campaign path is committed: a stray sibling is not swept in
+    (root / "stray.txt").write_text("not canon", encoding="utf-8")
     timeline.write_text("entries:\n  - id: t0002\n", encoding="utf-8")
     canon.snapshot("testvale", "campaign/testvale: week 7 — the gate")
-    rc, out, _ = _git(repo, "status", "--porcelain")
+    rc, out, _ = _git(root, "status", "--porcelain")
     assert "?? stray.txt" in out  # still untracked -> was never committed
 
     # nothing to commit: a logged no-op, never an error
     assert canon.snapshot("testvale", "campaign/testvale: no-op") is None
 
+    # an identity exists (set locally by canon if git had none configured)
+    rc, out, _ = _git(root, "config", "--get", "user.email")
+    assert out.strip()
+
 
 def test_canon_message_truncated_to_72(tmp_path, monkeypatch):
-    repo = _temp_repo(tmp_path)
-    monkeypatch.setattr(canon, "REPO_ROOT", repo)
+    root = _campaigns_root(tmp_path)
     monkeypatch.setattr(canon, "AVAILABLE", True)
-    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", repo / "campaigns")
-    (repo / "campaigns" / "testvale" / "lore" / "timeline.yaml").write_text(
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", root)
+    (root / "testvale" / "lore" / "timeline.yaml").write_text(
         "entries:\n  - id: t0009\n", encoding="utf-8")
     canon.snapshot("testvale", "campaign/testvale: " + "x" * 200)
-    rc, out, _ = _git(repo, "log", "-1", "--format=%s")
+    rc, out, _ = _git(root, "log", "-1", "--format=%s")
     assert len(out.strip()) <= 72
 
 
@@ -336,12 +336,19 @@ def test_canon_noop_when_git_unavailable(monkeypatch):
     assert canon.snapshot("testvale", "campaign/testvale: whatever") is None
 
 
-def test_canon_skips_campaign_outside_the_repo(tmp_spine_root, monkeypatch):
-    """A relocated campaigns root (tests, portable set-ups) must never
-    commit to the real Documents/D&D repo."""
+def test_canon_works_wherever_the_campaigns_root_lives(tmp_spine_root, monkeypatch):
+    """A relocated campaigns root (tests, portable set-ups) snapshots into
+    ITS OWN nested repo — never into this (the real) parent repo."""
     monkeypatch.setattr(canon, "AVAILABLE", True)
-    assert canon.snapshot("testvale", "campaign/testvale: should not happen") \
-        is None
+    before = subprocess.run(
+        ["git", "-C", str(spine.STUDIO_DIR.parent), "rev-parse", "HEAD"],
+        capture_output=True, text=True).stdout
+    sha = canon.snapshot("testvale", "campaign/testvale: relocated root")
+    assert sha, "snapshot must work from a temp campaigns root"
+    after = subprocess.run(
+        ["git", "-C", str(spine.STUDIO_DIR.parent), "rev-parse", "HEAD"],
+        capture_output=True, text=True).stdout
+    assert before == after, "the parent repo must not move"
 
 
 # --------------------------------------------------------- rotating log
@@ -357,13 +364,26 @@ def test_log_file_created_with_rotating_handler():
     assert handlers[0].backupCount == 5
 
 
-def test_job_log_lines_mirror_into_the_file(client):
-    log_path = server.STUDIO_DIR / "logs" / "studio.log"
+def test_job_log_lines_mirror_into_the_log(client):
+    """Job lines must reach the studio logger (which carries the rotating
+    file handler). Asserting on our own handler instead of the shared
+    studio.log file: a concurrently running studio server holds that file
+    open, and its rotation then fails under the test (found 2026-09-23)."""
     marker = f"hardening-mirror-{time.monotonic_ns()}"
+    captured = []
 
-    def announce(log):
-        log(f"mirror check {marker}")
+    class Capture(logging.Handler):
+        def emit(self, record):
+            captured.append(record.getMessage())
 
-    job_id = jobs.submit("fake", announce)
-    assert wait_for_job(client, job_id)["status"] == "done"
-    assert marker in log_path.read_text(encoding="utf-8")
+    handler = Capture()
+    logging.getLogger("studio.jobs").addHandler(handler)
+    try:
+        def announce(log):
+            log(f"mirror check {marker}")
+
+        job_id = jobs.submit("fake", announce)
+        assert wait_for_job(client, job_id)["status"] == "done"
+    finally:
+        logging.getLogger("studio.jobs").removeHandler(handler)
+    assert any(marker in m for m in captured), captured[-5:]

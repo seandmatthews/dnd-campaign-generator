@@ -82,13 +82,17 @@ actual minutes. If run-tests.py is green, the change is shippable.
 
 ## Snapshots — history is your undo
 
-The parent folder is a git repository, and the studio leans on it: every
-approval, every finished week, and every generation auto-commits the
-campaign it just changed (`campaigns/<name>`). Canon is therefore never
-more than one commit away from a known-good state — there is no undo
-button because the history *is* the undo. `git log -- campaigns/<name>`
-shows the trail; a bad approval or a bad week is one checkout away from
-gone.
+The `campaigns/` workspace is its **own nested git repository** (created
+automatically the first time a snapshot lands), deliberately separate from
+the parent repo: the parent holds the engines and the studio and is safe
+to push to a public remote, while campaign data — your premises, factions,
+chronicles — never leaves the machine unless you push the campaigns repo
+somewhere private. Every approval, finished week, and generation
+auto-commits just the campaign it changed. Canon is therefore never more
+than one commit away from a known-good state — there is no undo button
+because the history *is* the undo. `git -C campaigns log -- <name>` shows
+the trail; a bad approval or a bad week is one checkout away from gone.
+Zipping `campaigns/` carries the undo history with it.
 
 ## The engine homes are scratch
 

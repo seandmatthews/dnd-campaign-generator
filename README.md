@@ -9,7 +9,7 @@ tested on its own; the studio is the only one that invokes the others.
 | [`agentic-simulator/`](agentic-simulator/) | LLM faction sandbox on dice: proposals, resolution, rumors, chronicle | [`AGENTS.md`](agentic-simulator/AGENTS.md) |
 | [`verification/`](verification/) | lint + adversarial-review kit for generated prose (findings, never verdicts) | [`README.md`](verification/README.md) |
 | [`studio/`](studio/) | Campaign Studio: one localhost app over the three engines — maps, world building, agent simulation, one review queue | [`README.md`](studio/README.md) |
-| [`campaigns/`](campaigns/) | the campaign workspace — one directory per campaign, files only, no database | — |
+| [`campaigns/`](campaigns/) | the campaign workspace — one directory per campaign, files only, no database; **its own nested git repo, git-ignored here: campaign data never reaches the parent repo's remotes** | — |
 
 ## Start here
 
@@ -19,6 +19,12 @@ tested on its own; the studio is the only one that invokes the others.
 - **Just run the app:** `python studio/run.py` (or `studio/start.bat`) —
   if anything is missing, the doctor script (`python studio/doctor.py`)
   checks every prerequisite and tells you the exact command that fixes it.
+- **Full setup (maps + world gen):** `python setup-tools.py` — clones the
+  two third-party map tools into `dnd-mapping/tools/` (git-ignored), pins
+  and builds them, and applies our FMG headless-runner patches from
+  `dnd-mapping/vendor-patches/fmg/`. `--check` reports readiness only.
+  Read-only use (browsing lore, chronicles, the review queue) works
+  without it.
 - **Run every test:** `python run-tests.py` (fast tier, seconds) or
   `python run-tests.py --all` (adds the real-engine integration tier).
   CI runs the fast tier on push (`.github/workflows/ci.yml`).

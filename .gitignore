@@ -18,3 +18,9 @@ dnd-mapping/out-gen-city-smoke/
 # output dir — restored from the campaign on every week run
 .zcode/
 agentic-simulator/chronicle/
+
+# the campaign workspace is its own nested git repository (canon snapshots
+# live there, never in this parent repo) and the engine home is scratch
+# restored from the campaign on every week run
+campaigns/
+agentic-simulator/world/

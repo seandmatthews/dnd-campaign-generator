@@ -1,5 +1,10 @@
 # FMG vendor patches
 
+**Automated:** `python setup-tools.py` (from the repo root) performs the
+fresh-clone steps below for you. The manual equivalent:
+
+
+
 The `tools/` tree is git-ignored (re-obtainable per `docs/map-pipeline.md`),
 but the Tier-1 headless pipeline depends on **custom files that exist only as
 local modifications inside the FMG clone**. This directory is the tracked

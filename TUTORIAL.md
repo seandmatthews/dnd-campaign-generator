@@ -177,8 +177,8 @@ players never see the machinery; you harvest maps, lore and rumors from it.
       maps/                  # cities/<slug>/, sites/<slug>/ (incl. Foundry .uvtt)
 
 Every generation, approval and week auto-commits just that campaign folder
-to git — `git log -- campaigns/<name>` is the audit trail, and a bad
-outcome is one checkout away from gone.
+to the campaigns workspace's own git repo — `git -C campaigns log -- <name>`
+is the audit trail, and a bad outcome is one checkout away from gone.
 
 Starting another campaign is Step 1 again. The two example campaigns
 shipped in `campaigns/` (`sample`, `ruravaqan`) are yours to poke at —

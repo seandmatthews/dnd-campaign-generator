@@ -178,6 +178,26 @@ def check_engines():
     return out
 
 
+def check_tool_trees():
+    """The two third-party tool trees (git-ignored on purpose — setup-tools.py
+    clones, patches, pins and builds them; optional: read-only studio use and
+    the fast test tier never need them)."""
+    out = []
+    for label, root, marker in (
+        ("Fantasy-Map-Generator", FMG_DIR, Path("node_modules") / "vitest" / "vitest.mjs"),
+        ("settlemaker", SETTLEMAKER_DIR, Path("dist") / "index.js"),
+    ):
+        present = (root / marker).is_file()
+        out.append(_mk(f"tool: {label}", present,
+                       "ready" if present else
+                       f"missing — {label}/ is not under dnd-mapping/tools/",
+                       fix=None if present else
+                       "python setup-tools.py  (clones, patches, pins and "
+                       "builds both trees; needs network once)",
+                       required=False))
+    return out
+
+
 def check_week_run(path=None):
     """NEW: is a week run in progress (or left over from a crash)?
 
@@ -340,6 +360,7 @@ def check_llm_key():
 def run_all_checks(probe=None, modules=None, live_llm=True):
     checks = [check_python(), check_imports(modules), check_node(), check_pnpm()]
     checks.extend(check_engines())
+    checks.extend(check_tool_trees())
     checks.append(check_week_run())
     checks.append(check_vale())
     checks.append(check_campaigns())
