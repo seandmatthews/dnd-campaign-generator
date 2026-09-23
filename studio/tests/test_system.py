@@ -1,13 +1,38 @@
 """System routes: health, doctor stub, and the error body convention."""
 
+import pytest
+
 from conftest import wait_for_job
 
 
-def test_health_ok(client):
+@pytest.fixture()
+def isolated_week_flag(monkeypatch, tmp_path):
+    """Point the week-run flag at an empty tmp home. The health endpoint
+    reads the REAL flag path by design (it is a runtime signal), so without
+    this a live week anywhere on the same checkout fails the fast tier
+    (found 2026-09-23: 'works in CI, fails on my machine')."""
+    import engines
+    fake = tmp_path / "agentic-simulator"
+    fake.mkdir()
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", fake)
+    return fake
+
+
+def test_health_ok(client, isolated_week_flag):
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json() == {"ok": True, "version": "0.1.0",
                         "week_run_in_progress": False}
+
+
+def test_health_reads_the_real_flag(client, isolated_week_flag):
+    """The flag is a live signal: present means a week is in flight (or was
+    interrupted)."""
+    (isolated_week_flag / "world").mkdir()
+    (isolated_week_flag / "world" / ".week-run-flag").write_text("x",
+                                                                 encoding="utf-8")
+    r = client.get("/api/health")
+    assert r.json()["week_run_in_progress"] is True
 
 
 def test_doctor_endpoint_wired(client, monkeypatch):

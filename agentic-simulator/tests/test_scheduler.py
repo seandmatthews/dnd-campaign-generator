@@ -124,14 +124,30 @@ def test_founding_week_activates_everyone():
     angry_one = faction("crew", "The Crew", disposition={"bank": "hostile"},
                         resources={"coin": "none", "muscle": "low", "legitimacy": "low"})
     bystander = faction("bank", "The Bank")
-    st = state(1, [quiet_one, angry_one, bystander], [])
+    st = state(0, [quiet_one, angry_one, bystander], [])
     a = activation(st)
     assert all(a[f]["act"] for f in ("guild", "crew", "bank")), a
     assert all("founding week" in r["reasons"] for r in a.values())
     assert a["guild"]["score"] == 2, "founding +2 alone for the quiet and funded"
     assert a["crew"]["score"] == 4, "founding + hostility + pressure"
     assert holds(st, a) == []
-    print("  founding week: everyone acts  OK")
+    print("  founding week (clock 0): everyone acts  OK")
+
+
+def test_week_one_is_a_normal_week_not_a_second_founding():
+    """The regression: `week <= 1` fired the founding bonus twice in the
+    studio flow (clock 0 -> week 1, clock 1 -> week 2), deadening the
+    targeted/idle mechanics for the second week. From clock 1 on, the
+    normal contract rules: a quiet, funded, unhostile faction holds."""
+    guild = faction("guild", "The Guild",
+                    resources={"coin": "high", "muscle": "high", "legitimacy": "high"})
+    crew = faction("crew", "The Crew", disposition={"guild": "neutral"})
+    st = state(1, [guild, crew], [])  # week-1 sim: founding week-0 events absent
+    a = activation(st)
+    assert a["guild"]["act"] is False, a["guild"]
+    assert "founding week" not in a["guild"]["reasons"]
+    assert a["guild"]["reasons"] == ["quiet for 1 week(s)"], a["guild"]
+    print("  week 1: normal mechanics, quiet faction holds  OK")
 
 
 def test_week_zero_studio_sandbox_activates_everyone():
@@ -280,6 +296,7 @@ if __name__ == "__main__":
         test_quiet_faction_holds_and_decays,
         test_idle_counter_needs_full_absence,
         test_founding_week_activates_everyone,
+        test_week_one_is_a_normal_week_not_a_second_founding,
         test_week_zero_studio_sandbox_activates_everyone,
         test_act_boundary_is_exactly_two,
         test_holds_returns_exactly_the_holders,

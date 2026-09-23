@@ -157,14 +157,27 @@ def check_engines():
     and exits 1, tick.py prints the faction views and exits 0, check.py
     prints argparse usage and exits 2 — any of those means "runnable".
     List-form args, cwd=engine root, never shell=True (the parent path
-    contains `&`)."""
+    contains `&`).
+
+    While a week run is in flight the simulator probe is skipped: tick.py's
+    parting save_state replaces state.yaml, and a concurrent reader can make
+    that os.replace fail on Windows (sharing violation) — losing the whole
+    week after the spend. The other engines' homes are untouched by a week,
+    so they still probe."""
     import engines
     out = []
+    week_busy = engines.week_flag_path().is_file()
     for dirname, script, fix in ENGINES:
         name = f"engine: {dirname}"
         root = PARENT / dirname
         if not root.is_dir():
             out.append(_mk(name, False, f"{root} not found", fix=fix))
+            continue
+        if week_busy and root == engines.AGENTIC_SIMULATOR:
+            out.append(_mk(name, True,
+                           "skipped — a week run is in progress; the probe "
+                           "would race the engine's state save",
+                           required=False))
             continue
         try:
             rc, lines = engines.run_py(root, script, timeout=ENGINE_PROBE_TIMEOUT_S)
@@ -206,7 +219,8 @@ def check_week_run(path=None):
     scratch and is re-copied from the campaign on the next week/boot — a
     crashed run never corrupts a campaign, because copy-back only happens
     on success."""
-    flag = path or WEEK_RUN_FLAG
+    import engines
+    flag = path or engines.week_flag_path()  # call-time seam: tests relocate it
     if flag.exists():
         return _mk("week run", False, f"in progress or interrupted ({flag})",
                   fix="let it finish if it is still running; otherwise just "

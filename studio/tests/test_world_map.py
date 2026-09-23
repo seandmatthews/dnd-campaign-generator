@@ -42,6 +42,31 @@ def test_world_map_renders_schematic_from_json_dump(client, tmp_spine_root):
     # sample-campaign flow — the mount binds the real campaigns root at boot)
 
 
+def test_world_map_hostile_nation_names_stay_valid_xml(tmp_path):
+    """The regression: nation names reach <text> verbatim from the FMG dump,
+    and 'KNIGHTS & <ROOKS>' made map.svg unparseable (same class as the
+    '&' scene-name bug fixed in battlemap.py)."""
+    import xml.etree.ElementTree as ET
+
+    import worldmap
+
+    dump = tiny_fmg_dump("42")
+    dump["pack"]["states"][1]["name"] = 'Knights & <Rooks> "Test"'
+    # the label threshold (_MIN_STATE_CELLS_FOR_LABEL) counts the state
+    # column; pad the three columnar arrays consistently so the hostile
+    # label actually renders
+    pad = worldmap._MIN_STATE_CELLS_FOR_LABEL
+    dump["pack"]["cells"]["v"] += [[0, 4, 6]] * pad
+    dump["pack"]["cells"]["f"] += [2] * pad
+    dump["pack"]["cells"]["state"] += [1] * pad
+    out = tmp_path / "map.svg"
+    worldmap.render_dump_svg(dump, out)
+
+    svg = out.read_text(encoding="utf-8")
+    ET.fromstring(svg)  # raises if the label broke the XML
+    assert "KNIGHTS &amp; &lt;ROOKS&gt;" in svg
+
+
 def test_world_map_extracts_embedded_svg_from_map_save(client, tmp_spine_root):
     camp = tmp_spine_root / "testvale" / "world"
     camp.mkdir(parents=True, exist_ok=True)

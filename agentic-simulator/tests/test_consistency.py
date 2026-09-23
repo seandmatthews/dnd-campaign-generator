@@ -132,6 +132,22 @@ def test_last_week_resolves_to_completed_week():
     print("  last week: resolves to meta.clock.week  OK")
 
 
+def test_last_week_explicit_overrides_the_bumped_clock():
+    """The regression: tick.py checks proposals AFTER advancing the clock, so
+    'last week' resolved to the week being simulated and every legitimate
+    reference to the just-completed week warned. The caller passes the
+    pre-bump clock explicitly."""
+    action = "With the harbor strike held last week, we keep our coin in the vault."
+    # tick mid-week-4: the clock is bumped to 4; week 3 (which recorded the
+    # harbor strike) is the just-completed one the proposal refers to
+    state = _mini_state(clock_week=4)
+    assert check(_prop(action), state, "longshoremen", last_week=3) == []
+    # without the override, the bumped clock's empty week-4 bucket warns
+    # (documented default for callers that have not advanced yet)
+    assert check(_prop(action), state, "longshoremen") != []
+    print("  last week: explicit pre-bump week wins over the bumped clock  OK")
+
+
 def test_foreign_secret_warns():
     state = _mini_state()
     action = ("Spread word that the Doge was buried the day he died and the "
@@ -171,6 +187,7 @@ if __name__ == "__main__":
         test_known_rumor_is_silent,
         test_paraphrase_of_recorded_event_is_silent,
         test_last_week_resolves_to_completed_week,
+        test_last_week_explicit_overrides_the_bumped_clock,
         test_foreign_secret_warns,
         test_own_secret_is_silent,
         test_warnings_sorted,

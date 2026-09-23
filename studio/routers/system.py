@@ -7,6 +7,7 @@ folder of files, so grep-shaped behavior is the honest shape.
 """
 
 import re
+import time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -32,6 +33,13 @@ def health():
             "week_run_in_progress": engines.week_flag_path().is_file()}
 
 
+# the full doctor fans out to subprocess probes (engine CLIs, an LLM probe)
+# — minutes of work on a request thread — so its result is cached briefly.
+# quick stays uncached: cheap, and the week-run flag should read live.
+_DOCTOR_CACHE_S = 60.0
+_doctor_cache: dict = {"at": None, "report": None}
+
+
 @router.get("/api/doctor")
 def get_doctor(quick: bool = False):
     # doctor.py is stdlib-only and runs its probes (engine CLIs + one tiny
@@ -40,7 +48,13 @@ def get_doctor(quick: bool = False):
     # load can poll it without spending tokens or waiting on the API.
     if quick:
         return doctor.report(live_llm=False)
-    return doctor.report()
+    now = time.monotonic()
+    if _doctor_cache["at"] is not None and now - _doctor_cache["at"] < _DOCTOR_CACHE_S:
+        return _doctor_cache["report"]
+    rep = doctor.report()
+    _doctor_cache["at"] = now
+    _doctor_cache["report"] = rep
+    return rep
 
 
 @router.get("/api/jobs/{job_id}")

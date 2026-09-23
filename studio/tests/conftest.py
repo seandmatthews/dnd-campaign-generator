@@ -40,6 +40,9 @@ def tmp_spine_root(spine_root, monkeypatch, tmp_path):
 
 @pytest.fixture()
 def client():
+    from routers import system
+    system._doctor_cache["at"] = None
+    system._doctor_cache["report"] = None
     return TestClient(server.app)
 
 

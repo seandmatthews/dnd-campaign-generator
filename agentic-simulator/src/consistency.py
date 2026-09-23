@@ -156,11 +156,15 @@ _OUTCOME_VERBS = {"succeeded", "failed", "went", "won", "lost", "given",
                   "awarded", "attached", "collapsed", "held", "broke"}
 
 
-def _unwitnessed_events(proposal, state, faction):
+def _unwitnessed_events(proposal, state, faction, last_week=None):
     """A sentence citing a week plus an outcome verb asserts a past event; it
     must overlap some recorded event of that week (the ledger is public
-    chronicle) or some knows entry (self-knowledge counts)."""
+    chronicle) or some knows entry (self-knowledge counts). "last week" in
+    the prose means the just-completed week — the pre-bump clock (tick.py
+    passes it explicitly, because it checks proposals after advancing)."""
     clock = state.get("meta", {}).get("clock", {}).get("week", 0)
+    if last_week is not None:
+        clock = last_week
     by_week = {}
     for e in state.get("events", []):
         by_week.setdefault(e.get("week"), []).append(e.get("text", ""))
@@ -210,9 +214,13 @@ def _foreign_secrets(proposal, state, faction):
 # --- entry point --------------------------------------------------------------
 
 
-def check(proposal, state, faction_id):
+def check(proposal, state, faction_id, last_week=None):
     """Warn (never reject) about facts a proposal asserts without a knowledge
     path: unknown actors, unwitnessed past events, leaked foreign secrets.
+
+    last_week: the just-completed week, when the caller has already advanced
+    the clock (tick.py's order); defaults to meta.clock.week per the module
+    contract ("call before advancing").
 
     Warnings are advisory — printed for the DM; nothing is auto-rejected.
     Returns [{kind, detail}] sorted by kind then detail; [] means clean.
@@ -223,7 +231,7 @@ def check(proposal, state, faction_id):
     faction = factions[faction_id]
     warns = (
         _unknown_actors(proposal, state)
-        + _unwitnessed_events(proposal, state, faction)
+        + _unwitnessed_events(proposal, state, faction, last_week)
         + _foreign_secrets(proposal, state, faction)
     )
     return sorted(warns, key=lambda w: (w["kind"], w["detail"]))

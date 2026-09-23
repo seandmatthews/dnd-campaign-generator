@@ -190,3 +190,52 @@ def test_cli_json_flag(monkeypatch, capsys):
                             {"name": "imports", "ok": False, "detail": "m",
                              "fix": "pip install", "required": True}]})
     assert doctor.main(["--json"]) == 1
+
+
+def test_check_engines_skips_simulator_probe_while_week_busy(monkeypatch, tmp_path):
+    """The probe-vs-save_state race: tick.py's parting save_state replaces
+    state.yaml, and a concurrent reader (this probe) can make the os.replace
+    fail on Windows — losing the week after the spend. While the flag is up
+    the simulator check reports a skip, and no engine subprocess runs."""
+    import engines
+    fake_home = tmp_path / "agentic-simulator"
+    fake_home.mkdir()
+    (engines.week_flag_path()).touch()
+    try:
+        probed = []
+
+        def spy_probe(root, script, *args, **kwargs):
+            probed.append(script)
+            return 2, ["usage"]
+
+        monkeypatch.setattr(engines, "run_py", spy_probe)
+        checks = doctor.check_engines()
+    finally:
+        (engines.week_flag_path()).unlink()
+    by_name = {c["name"]: c for c in checks}
+    sim = by_name["engine: agentic-simulator"]
+    assert sim["ok"] is True and sim["required"] is False
+    assert "skipped" in sim["detail"]
+    # the untouched engines still probe for real
+    assert "src/tick.py" not in probed, probed
+    assert "check.py" in probed, probed
+
+
+def test_doctor_route_caches_the_full_run(client, monkeypatch):
+    from routers import system
+    calls = {"n": 0}
+
+    def counting_report(*args, **kwargs):
+        if kwargs.get("live_llm", True) is False:
+            return {"ok": True, "checks": []}  # quick: cheap presence check
+        calls["n"] += 1
+        return {"ok": True, "checks": [], "call": calls["n"]}
+
+    monkeypatch.setattr(doctor, "report", counting_report)
+    first = client.get("/api/doctor").json()
+    second = client.get("/api/doctor").json()
+    assert calls["n"] == 1, "the full doctor must run once per cache window"
+    assert first == second
+    # quick stays uncached and never spends the full path
+    assert client.get("/api/doctor?quick=1").status_code == 200
+    assert calls["n"] == 1

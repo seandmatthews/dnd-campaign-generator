@@ -20,6 +20,7 @@ The live week (D4 copy-in/copy-out, D5 confirm):
      (submit_campaign_job: 409 while another mutating job is in flight)
 """
 
+import contextlib
 import datetime
 import json
 import logging
@@ -38,6 +39,23 @@ from routers.common import require_campaign, submit_campaign_job
 router = APIRouter()
 
 _log = logging.getLogger("studio.simulation")
+
+
+@contextlib.contextmanager
+def _engine_lock_bounded(timeout: float = 1.0):
+    """views/why wait briefly for the shared engine home; a running week may
+    hold it for many minutes, and a sync request thread parked that long
+    (several open tabs' worth) drains the threadpool everything else needs.
+    Refuse quickly instead — the UI renders the 409 in the error panel."""
+    if not engines.ENGINE_LOCK.acquire(timeout=timeout):
+        raise HTTPException(
+            status_code=409,
+            detail="the engine home is busy — a week run is in progress; "
+                   "views and why reopen when it finishes")
+    try:
+        yield
+    finally:
+        engines.ENGINE_LOCK.release()
 
 _STATE_BACKUP = "state.yaml.bak"
 _HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
@@ -261,7 +279,7 @@ def get_view(name: str, faction_id: str):
     # the engine home is one shared scratch file: copy-in + run + read is a
     # critical section (engines.ENGINE_LOCK), or a views call for campaign B
     # clobbers campaign A's live week mid-run
-    with engines.ENGINE_LOCK:
+    with _engine_lock_bounded():
         _copy_state_in(name)
         try:
             rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/views.py",
@@ -298,6 +316,15 @@ def post_week(name: str, body: WeekBody):
             status_code=404,
             detail="no simulation/state.yaml in this campaign — create the "
                    "sandbox first ('Create a simulation' on this tab)")
+    # fast-fail courtesy: the engine home is shared across campaigns, and the
+    # job's blocking acquire would otherwise queue a second week behind a
+    # half-hour run from a different campaign with no signal at all
+    if not engines.ENGINE_LOCK.acquire(timeout=1.0):
+        raise HTTPException(
+            status_code=409,
+            detail="the engine home is busy — a week run is already in "
+                   "flight (one engine home, one week at a time)")
+    engines.ENGINE_LOCK.release()
 
     def job(log):
         sim_dir = d / "simulation"
@@ -532,7 +559,7 @@ def post_why(name: str, body: WhyBody):
     if body.faction not in ids:
         raise HTTPException(status_code=404,
                             detail=f"unknown faction: {body.faction}")
-    with engines.ENGINE_LOCK:  # copy-in + run is the shared-home critical section
+    with _engine_lock_bounded():  # copy-in + run is the shared-home critical section
         _copy_state_in(name)
         try:
             rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/why.py",

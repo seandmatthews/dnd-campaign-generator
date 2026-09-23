@@ -37,6 +37,17 @@ PORT_STROKE = "#1d5a8a"
 _MIN_STATE_CELLS_FOR_LABEL = 20
 
 
+def _xt(text):
+    """XML-escape text bound for the SVG (& first) — nation names come from
+    the FMG dump verbatim, and 'Sea & Sky' must not make map.svg unparseable
+    (same contract as dnd-mapping battlemap.py's xt())."""
+    return (str(text)
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
 def extract_embedded_svg(text: str):
     """The verbatim FMG art embedded in a .map save (raw markup between
     <svg and </svg>), or None. Same content-signature spirit as
@@ -172,7 +183,7 @@ def render_dump_svg(data: dict, out: Path) -> dict:
             f'<text x="{pole[0]:.1f}" y="{pole[1]:.1f}" '
             f'font-family="Georgia, serif" font-size="{size:.1f}" '
             f'fill="{INK}" fill-opacity="0.75" text-anchor="middle" '
-            f'letter-spacing="2">{st["name"].upper()}</text>'
+            f'letter-spacing="2">{_xt(st["name"].upper())}</text>'
         )
 
     parts.append("</svg>")

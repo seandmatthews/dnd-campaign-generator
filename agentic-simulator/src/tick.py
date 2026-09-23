@@ -136,7 +136,10 @@ def run_live(state):
         sys.exit(2)
     act = scheduler.activation(state)          # "last week" = the clock as-is
     held = scheduler.holds(state, act)
-    week = state["meta"]["clock"]["week"] + 1
+    # the just-completed week, for consistency's "last week" contract — the
+    # bump below makes clock.week the week being simulated, not the past one
+    prev_week = state["meta"]["clock"]["week"]
+    week = prev_week + 1
     state["meta"]["clock"]["week"] = week
     template = TEMPLATE_FILE.read_text(encoding="utf-8")
 
@@ -160,7 +163,7 @@ def run_live(state):
         except Exception as e:  # noqa: BLE001 — one dead agent must not lose the week
             print(f"  {faction['id']:<14} HOLDS (proposal failed: {e})")
             continue
-        for w in consistency.check(p, state, faction["id"]):
+        for w in consistency.check(p, state, faction["id"], last_week=prev_week):
             print(f"  [consistency] {faction['id']}: {w['kind']} — {w['detail']}")
         proposals.append(p)
         print(f"  {faction['id']:<14} target={p['target']:<14} risk={p['risk_acceptance']:<6} {p['action']}")

@@ -39,9 +39,9 @@ ENGINE_LOCK = threading.Lock()
 
 def run_py(engine_root: Path, script: str, *args, timeout: int = 600,
            on_line=None, env: dict = None):
-    """[sys.executable, -X utf8, script, *args] with cwd=engine_root.
-    Returns (rc, lines)."""
-    cmd = [sys.executable, "-X", "utf8", script, *args]
+    # -u: tick.py's per-faction progress lines are the week UI's log tail —
+    # block-buffered through a pipe they arrive only when the process exits
+    cmd = [sys.executable, "-X", "utf8", "-u", script, *args]
     return _run(cmd, engine_root, timeout, on_line, env)
 
 
@@ -86,7 +86,14 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
 
     def _kill():
         timed_out.set()
-        proc.kill()
+        # kill the whole tree: vitest/node children inherit the stdout pipe,
+        # and an orphaned worker holding it never lets the reader loop reach
+        # EOF — the thread (and with it ENGINE_LOCK) hangs until restart
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True)
+        else:
+            proc.kill()
 
     watchdog = threading.Timer(timeout, _kill)
     watchdog.start()
@@ -98,7 +105,7 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
                 on_line(line)
         rc = proc.wait()
     except BaseException:
-        proc.kill()      # a callback exception must not leak the child
+        _kill()
         proc.wait()
         raise
     finally:

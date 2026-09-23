@@ -30,6 +30,7 @@ mutating job runs) and commits a canon snapshot on success
 import re
 import shutil
 import tempfile
+import threading
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,14 @@ import worldmap
 from routers.common import require_campaign, submit_campaign_job
 
 router = APIRouter()
+
+# dnd-mapping's engine home is SHARED across campaigns (worlds/sites/<name>,
+# worlds/candidates), unlike the simulator it has no ENGINE_LOCK — the
+# per-campaign locks cannot see each other. This process-wide lock serializes
+# the staging sections: two campaigns generating same-named sites would
+# otherwise interleave artifacts (and wrap's *.uvtt glob could pick the other
+# run's file), and a concurrent import would blur the candidates diff.
+MAPPING_LOCK = threading.Lock()
 
 _SEED_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SITE_KINDS = ("dungeon", "cave", "camp")
@@ -206,31 +215,32 @@ def post_world(name: str, body: WorldBody):
             log("genesis record copied -> world/source.json")
 
             candidates = engines.DND_MAPPING / "worlds" / "candidates"
-            before = ({p.name for p in candidates.glob("*.yaml")}
-                      if candidates.is_dir() else set())
-            log("importing geography via src/import_fmg.py")
-            rc, lines = engines.run_py(
-                engines.DND_MAPPING, "src/import_fmg.py", str(dump),
-                timeout=300, on_line=log)
-            if rc != 0:
-                raise RuntimeError("import_fmg.py failed (rc=%s): %s"
-                                   % (rc, " | ".join(lines[-8:])))
-            produced = None
-            for ln in lines:  # the summary line: "<dump> -> <out>.yaml: ..."
-                m = re.search(r"-> (\S+\.yaml):", ln)
-                if m:
-                    produced = m.group(1)
-                    break
-            if produced is None:  # fall back to a candidates-dir diff
-                new = ({p.name for p in candidates.glob("*.yaml")} - before) \
-                    if candidates.is_dir() else set()
-                produced = sorted(new)[0] if new else None
-            cand = candidates / produced if produced else None
-            if not cand or not cand.is_file():
-                raise RuntimeError(
-                    "import_fmg.py wrote no candidate yaml — cannot stage "
-                    "world/geography.yaml")
-            engines.copy_file(cand, world / "geography.yaml")
+            with MAPPING_LOCK:  # the candidates dir is the shared engine home
+                before = ({p.name for p in candidates.glob("*.yaml")}
+                          if candidates.is_dir() else set())
+                log("importing geography via src/import_fmg.py")
+                rc, lines = engines.run_py(
+                    engines.DND_MAPPING, "src/import_fmg.py", str(dump),
+                    timeout=300, on_line=log)
+                if rc != 0:
+                    raise RuntimeError("import_fmg.py failed (rc=%s): %s"
+                                       % (rc, " | ".join(lines[-8:])))
+                produced = None
+                for ln in lines:  # the summary line: "<dump> -> <out>.yaml: ..."
+                    m = re.search(r"-> (\S+\.yaml):", ln)
+                    if m:
+                        produced = m.group(1)
+                        break
+                if produced is None:  # fall back to a candidates-dir diff
+                    new = ({p.name for p in candidates.glob("*.yaml")} - before) \
+                        if candidates.is_dir() else set()
+                    produced = sorted(new)[0] if new else None
+                cand = candidates / produced if produced else None
+                if not cand or not cand.is_file():
+                    raise RuntimeError(
+                        "import_fmg.py wrote no candidate yaml — cannot stage "
+                        "world/geography.yaml")
+                engines.copy_file(cand, world / "geography.yaml")
             log(f"candidate {cand.name} copied -> world/geography.yaml")
 
             geo = yaml.safe_load(
@@ -316,58 +326,63 @@ def post_site(name: str, body: SiteBody):
     def job(log):
         rel = f"worlds/sites/{site_name}"
         root = engines.DND_MAPPING
+        # worlds/sites/<name> is the shared engine home: two campaigns here
+        # at once interleave artifacts (wrap globs *.uvtt), so the whole
+        # staging chain holds MAPPING_LOCK (minutes of subprocess — fine,
+        # site generation is rare and serial for a single DM anyway)
+        with MAPPING_LOCK:
 
-        def stage(label, call, what):
-            log(label)
-            rc, lines = call()
+            def stage(label, call, what):
+                log(label)
+                rc, lines = call()
+                if rc != 0:
+                    raise RuntimeError(f"{what} failed (rc={rc}): "
+                                       + " | ".join(lines[-8:]))
+                return lines
+
+            stage(f"battlemap.py gen-{kind} --seed {seed} --name \"{site_name}\"",
+                  lambda: engines.run_py(root, "src/battlemap.py", f"gen-{kind}",
+                                         "--seed", seed, "--name", site_name,
+                                         timeout=300, on_line=log),
+                  f"battlemap.py gen-{kind}")
+            stage(f"battlemap.py render --dir {rel}",
+                  lambda: engines.run_py(root, "src/battlemap.py", "render",
+                                         "--dir", rel, timeout=300, on_line=log),
+                  "battlemap.py render")
+            log(f"render-scene-png.mjs {rel} (sharp)")
+            rc, png_lines = engines.run_node(
+                root, "scripts/render-scene-png.mjs", rel, timeout=300, on_line=log)
             if rc != 0:
-                raise RuntimeError(f"{what} failed (rc={rc}): "
-                                   + " | ".join(lines[-8:]))
-            return lines
+                joined_png = " ".join(png_lines)
+                if "sharp" in joined_png or "Cannot find module" in joined_png:
+                    raise RuntimeError(
+                        "scene rasterization failed — sharp is unavailable (a "
+                        "moved project breaks pnpm's absolute junctions). "
+                        "Documented repair: run `CI=true pnpm install --offline` "
+                        "in dnd-mapping/tools/settlemaker, then try again")
+                raise RuntimeError(f"render-scene-png.mjs failed (rc={rc}): "
+                                   + " | ".join(png_lines[-8:]))
+            stage(f"battlemap.py wrap --dir {rel}",
+                  lambda: engines.run_py(root, "src/battlemap.py", "wrap",
+                                         "--dir", rel, timeout=300, on_line=log),
+                  "battlemap.py wrap")
 
-        stage(f"battlemap.py gen-{kind} --seed {seed} --name \"{site_name}\"",
-              lambda: engines.run_py(root, "src/battlemap.py", f"gen-{kind}",
-                                     "--seed", seed, "--name", site_name,
-                                     timeout=300, on_line=log),
-              f"battlemap.py gen-{kind}")
-        stage(f"battlemap.py render --dir {rel}",
-              lambda: engines.run_py(root, "src/battlemap.py", "render",
-                                     "--dir", rel, timeout=300, on_line=log),
-              "battlemap.py render")
-        log(f"render-scene-png.mjs {rel} (sharp)")
-        rc, png_lines = engines.run_node(
-            root, "scripts/render-scene-png.mjs", rel, timeout=300, on_line=log)
-        if rc != 0:
-            joined_png = " ".join(png_lines)
-            if "sharp" in joined_png or "Cannot find module" in joined_png:
+            engine_dir = root / "worlds" / "sites" / site_name
+            scene = engine_dir / "scene.json"
+            svg = engine_dir / "scene.svg"
+            png = engine_dir / "scene.png"
+            uvtt = next(iter(sorted(engine_dir.glob("*.uvtt"))), None)
+            missing = [p.name for p in (scene, svg, png) if not p.is_file()]
+            if uvtt is None or not uvtt.is_file():
+                missing.append("<slug>.uvtt")
+            if missing:
                 raise RuntimeError(
-                    "scene rasterization failed — sharp is unavailable (a "
-                    "moved project breaks pnpm's absolute junctions). "
-                    "Documented repair: run `CI=true pnpm install --offline` "
-                    "in dnd-mapping/tools/settlemaker, then try again")
-            raise RuntimeError(f"render-scene-png.mjs failed (rc={rc}): "
-                               + " | ".join(png_lines[-8:]))
-        stage(f"battlemap.py wrap --dir {rel}",
-              lambda: engines.run_py(root, "src/battlemap.py", "wrap",
-                                     "--dir", rel, timeout=300, on_line=log),
-              "battlemap.py wrap")
+                    "scene pipeline did not produce: " + ", ".join(missing))
 
-        engine_dir = root / "worlds" / "sites" / site_name
-        scene = engine_dir / "scene.json"
-        svg = engine_dir / "scene.svg"
-        png = engine_dir / "scene.png"
-        uvtt = next(iter(sorted(engine_dir.glob("*.uvtt"))), None)
-        missing = [p.name for p in (scene, svg, png) if not p.is_file()]
-        if uvtt is None or not uvtt.is_file():
-            missing.append("<slug>.uvtt")
-        if missing:
-            raise RuntimeError(
-                "scene pipeline did not produce: " + ", ".join(missing))
-
-        dest = d / "maps" / "sites" / slug
-        for p in (scene, svg, png, uvtt):
-            engines.copy_file(p, dest / p.name)
-            log(f"copied {p.name} -> maps/sites/{slug}/")
+            dest = d / "maps" / "sites" / slug
+            for p in (scene, svg, png, uvtt):
+                engines.copy_file(p, dest / p.name)
+                log(f"copied {p.name} -> maps/sites/{slug}/")
         # provenance beside the artifact set, as cities do
         (dest / "params.yaml").write_text(yaml.safe_dump(
             {"name": site_name, "kind": kind, "seed": seed,

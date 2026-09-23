@@ -78,9 +78,9 @@ def activation(state):
     components, each logged once: +2 targeted last week; +1 hostility
     (outgoing or incoming); +1 pressure (any resource "none"); -1 per
     consecutive week absent from all events, up to 3. Founding week
-    (clock week 0 or 1 — 0 is the studio's fresh-sandbox start, 1 a
-    hand-authored state's first playable week): no history yet, so
-    hostility/pressure plus +2 "founding week". act at score >= 2.
+    (clock week 0 — the studio's fresh-sandbox start: no history at all)
+    gets hostility/pressure plus +2 "founding week"; from clock week 1 on
+    the normal targeted/idle mechanics take over. act at score >= 2.
     """
     week = state["meta"]["clock"]["week"]
     factions = state["factions"]
@@ -95,7 +95,7 @@ def activation(state):
     for f in factions:
         fid = f["id"]
         score, reasons = 0, []
-        if week <= 1:
+        if week == 0:
             score += 2
             reasons.append("founding week")
         elif _touched(last_week, fid, tokens[fid]):
@@ -111,7 +111,7 @@ def activation(state):
         if "none" in f.get("resources", {}).values():
             score += 1
             reasons.append("pressure")
-        if week > 1:
+        if week > 0:
             quiet, w = 0, week
             while (
                 quiet < _IDLE_CAP
