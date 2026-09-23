@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  fast-tier:
+    # The fast test tier: engine suites with mocked subprocesses, the
+    # verification ladder, the FMG importer (synthetic fixtures), the studio
+    # API suite, and the JS escape harness. The integration tier needs the
+    # ignored tools/ tree (FMG + settlemaker builds) and stays local.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml pytest fastapi "uvicorn[standard]" pydantic httpx
+
+      - name: Fast tier
+        run: python run-tests.py

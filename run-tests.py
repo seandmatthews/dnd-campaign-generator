@@ -13,6 +13,7 @@ shell. Output streams live; each suite gets a summary line and the final
 table; the run exits nonzero if any suite failed.
 """
 
+import shutil
 import subprocess
 import sys
 import time
@@ -22,13 +23,25 @@ ROOT = Path(__file__).resolve().parent
 
 # The fast tier. verification/tests is a zero-dependency direct-run script
 # (no test_ functions for pytest to collect), so it runs via its documented
-# runner: python verification/tests/test_check.py.
+# runner: python verification/tests/test_check.py. The JS suite is skipped
+# (with a note) when node is not installed.
 FAST_SUITES = [
     ("agentic-simulator",
      [sys.executable, "-m", "pytest", "agentic-simulator/tests", "-q"]),
     ("verification", [sys.executable, "verification/tests/test_check.py"]),
+    ("dnd-mapping", [sys.executable, "dnd-mapping/tests/test_import_fmg.py"]),
+    ("dnd-mapping-battlemap", [sys.executable, "dnd-mapping/tests/test_battlemap.py"]),
     ("studio", [sys.executable, "-m", "pytest", "studio/tests", "-q"]),
 ]
+
+_node = shutil.which("node")
+if _node:
+    FAST_SUITES.append(
+        ("studio-js", [_node, "studio/tests/js/test_esc.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-logtail", [_node, "studio/tests/js/test_logtail.cjs"]))
+else:
+    print("note: node not found — skipping the studio-js (esc/logtail) suites")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").
