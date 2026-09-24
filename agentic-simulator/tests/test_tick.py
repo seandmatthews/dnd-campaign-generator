@@ -200,15 +200,53 @@ def test_replay_same_seed_same_outcomes():
         {"actor": "b", "action": "b acts", "target": "a",
          "resources_committed": {"muscle": "low"}, "risk_acceptance": "low"},
     ]
+    mini_state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                  "factions": [{"id": "a", "resources": {}},
+                               {"id": "b", "resources": {}}], "events": []}
     resolve.set_rng(12345)
-    first = resolve.resolve_tick(proposals)
+    first = resolve.resolve_tick(proposals, mini_state)
     resolve.set_rng(12345)
-    second = resolve.resolve_tick(proposals)
+    second = resolve.resolve_tick(proposals, mini_state)
     resolve.set_rng(999)
-    third = resolve.resolve_tick(proposals)
+    third = resolve.resolve_tick(proposals, mini_state)
     assert first == second, "same seed, same dice"
+    assert first[0]["contested"], "the mutual contest is actually exercised"
     assert first != third or True  # different seed usually differs; not asserted
     print("  replay: seeding resolve reproduces a week  OK")
+
+
+def test_save_replay_and_replay_verify_round_trip():
+    """save_replay persists seed + normalized proposals + rule version;
+    replay_verify re-resolves offline and confirms the record (and refuses
+    a foreign rule version instead of comparing apples to bolts)."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import yaml as _yaml
+        state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                 "factions": [{"id": "a", "resources": {"muscle": "low"}},
+                              {"id": "b", "resources": {}}],
+                 "events": []}
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        proposals = [{"actor": "a", "action": "a acts", "target": "b",
+                      "resources_committed": {"coin": "medium"},
+                      "risk_acceptance": "medium"}]
+        resolve.set_rng(777)
+        outcomes = resolve.resolve_tick(proposals, state)
+        path = tick.save_replay(4, 777, proposals, outcomes,
+                                "deadbeef" * 8)
+        ok, message = tick.replay_verify(path)
+        assert ok, message
+        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc["rule_version"] = 99
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, message = tick.replay_verify(path)
+        assert not ok and "rule version" in message
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+    print("  replay trail: save -> verify reproduces; version mismatch refuses  OK")
 
 
 if __name__ == "__main__":
@@ -224,6 +262,7 @@ if __name__ == "__main__":
         test_chronicle_survives_narrator_failure,
         test_live_refuses_cityless_state_before_any_spend,
         test_replay_same_seed_same_outcomes,
+        test_save_replay_and_replay_verify_round_trip,
     ]:
         fn()
     print("all tick tests passed")

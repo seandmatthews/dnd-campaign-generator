@@ -199,19 +199,37 @@ def _extract_yaml(text):
 def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=()):
     if not isinstance(p, dict) or not isinstance(p.get("action"), str) or not p["action"].strip():
         raise ValueError("missing or empty 'action'")
-    # target: accept id/name/district in any case; canonicalize exact
-    # case-insensitive matches so the resolver sees real ids
+    # target identity (typed): 'self' when empty, else one of the known
+    # faction ids (case-insensitive match canonicalized), the city's
+    # districts, or 'world'. Anything else is REFUSED — an unknown target
+    # must be corrected, never rewarded with an uncontested roll.
     target = str(p.get("target") or "self").strip()
     low = target.lower()
-    for fid in known_ids:
-        if low == str(fid).lower():
-            target = str(fid)
-            break
+    if low == "self":
+        target = "self"
     else:
-        for dname in districts:
-            if low == str(dname).lower():
-                target = str(dname)
+        for fid in known_ids:
+            if low == str(fid).lower():
+                target = str(fid)
                 break
+        else:
+            for dname in districts:
+                if low == str(dname).lower():
+                    target = str(dname)
+                    break
+            else:
+                raise ValueError(
+                    f"unknown target {target!r} — name a faction, one of "
+                    f"the city's districts ({', '.join(districts) or 'none'}), "
+                    f"'world', or 'self'")
+    if low == "self" or target == actor_id:
+        p["target_kind"] = "self"
+    elif target in districts:
+        p["target_kind"] = "district"
+    elif target == "world":
+        p["target_kind"] = "world"
+    else:
+        p["target_kind"] = "faction"
     p["target"] = target
     rc = p.get("resources_committed") or {}
     if not isinstance(rc, dict):
@@ -229,6 +247,8 @@ def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=()):
         if level != "none":
             clamped[k] = level
     p["resources_committed"] = clamped
+    # descriptive only — the difficulty is the resolver's fixed default DC;
+    # a model must not choose its own DC by declaring low risk
     if p.get("risk_acceptance") not in VALID_RISK:
         p["risk_acceptance"] = "medium"
     p["actor"] = actor_id
@@ -236,9 +256,11 @@ def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=()):
 
 
 def propose(view, template_text, actor_id):
-    """Ask the model for this faction's weekly proposal; validate; one retry.
-    A target matching no faction id or district warns (it will resolve
-    uncontested) instead of silently degrading."""
+    """Ask the model for this faction's weekly proposal; validate; one retry
+    with a correction note when validation fails (including an unknown
+    target — the retry names the accepted target kinds). A proposal that
+    fails twice raises: the faction HOLDS this week rather than resolving
+    against a typo'd target."""
     prompt = render_prompt(template_text, view)
     actual = view["you"]["resources"]
     known_ids = [o.get("id") for o in view.get("others", [])] + [actor_id, "world"]
@@ -248,13 +270,9 @@ def propose(view, template_text, actor_id):
         try:
             raw = complete(prompt + ("\n\nReply with the YAML block ONLY." if attempt else ""))
             p = _validate(_extract_yaml(raw), actor_id, actual, known_ids, districts)
-            if p["target"] not in known_ids and p["target"] not in districts \
-                    and p["target"] != "self":
-                print(f"  [llm] {actor_id}: target {p['target']!r} matches no "
-                      f"faction id or district — it will resolve uncontested",
-                      file=sys.stderr)
             return p
-        except Exception as e:  # noqa: BLE001 — network and parse failures both retry once
+        except Exception as e:  # noqa: BLE001 — network, parse, and validation
+            # failures all retry once
             last_error = e
             print(f"  [llm] {actor_id} attempt {attempt + 1} failed: {e}", file=sys.stderr)
     raise RuntimeError(f"proposal for {actor_id} failed twice: {last_error}")

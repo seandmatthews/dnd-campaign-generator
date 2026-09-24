@@ -7,6 +7,9 @@ Modes:
                                 # rumor spread, chronicle. Advances the clock —
                                 # review the diff it leaves in world/state.yaml.
   python src/tick.py --why W F  # causality: why faction F's week-W event happened
+  python src/tick.py --replay F # re-resolve a saved week (world/replay/week-N.yaml)
+                                # from its stored seed + proposals, no network:
+                                # exit 0 when the resolver reproduces the record
 
 Stages in --live (one sentence each):
   scheduler   — you act if the world touched you last week or you are at
@@ -35,6 +38,7 @@ per-week seeded RNG recorded in meta.rng_seeds — a week is replayable by
 seeding resolve with that number.
 """
 
+import hashlib
 import pathlib
 import random
 import re
@@ -114,10 +118,16 @@ def apply_mechanical(state, faction_id, outcome):
 def apply_outcomes(state, outcomes, proposals):
     """One proposal, one consequence: an actor caught in several contests
     gets a single event and at most one resource step, judged by their worst
-    margin (ties: the outcome recorded first)."""
+    margin (ties: the outcome recorded first). Defensive outcomes — an
+    inactive faction pulled into a contest by rule version 2 — apply
+    nothing: the defender proposed nothing, committed nothing, and a
+    defense is not an action (the attacker's own outcome carries the
+    contest's consequences)."""
     by_actor = {p["actor"]: p for p in proposals}
     worst = {}
     for o in outcomes:
+        if o.get("defensive"):
+            continue
         cur = worst.get(o["actor"])
         if cur is None or o["margin"] < cur["margin"]:
             worst[o["actor"]] = o
@@ -142,6 +152,11 @@ def run_live(state):
     week = prev_week + 1
     state["meta"]["clock"]["week"] = week
     template = TEMPLATE_FILE.read_text(encoding="utf-8")
+
+    # replay identity: the state the week was built on, hashed before any
+    # mutation (clock bump, rumor spread, resolution)
+    base_state_sha = hashlib.sha256(
+        pathlib.Path(STATE_FILE).read_bytes()).hexdigest()
 
     seed = random.SystemRandom().getrandbits(31)
     resolve.set_rng(seed)
@@ -169,9 +184,10 @@ def run_live(state):
         print(f"  {faction['id']:<14} target={p['target']:<14} risk={p['risk_acceptance']:<6} {p['action']}")
 
     print("resolution:")
-    outcomes = resolve_tick(proposals)
+    outcomes = resolve_tick(proposals, state)
     for o in outcomes:
-        kind = "CONTESTED WIN" if o["contested"] and o["success"] else \
+        kind = "defensive" if o.get("defensive") else \
+               "CONTESTED WIN" if o["contested"] and o["success"] else \
                "CONTESTED LOSS" if o["contested"] else \
                "success" if o["success"] else "fail"
         print(f"  {o['actor']:<14} {kind:<14} margin {o['margin']:+d}")
@@ -181,7 +197,52 @@ def run_live(state):
 
     chronicle = write_chronicle(state, week, outcomes, held)
     save_state(state)
+    save_replay(week, seed, proposals, outcomes, base_state_sha)
     print(f"week {week} written (rng seed {seed}); chronicle: {chronicle.name}")
+
+
+# ------------------------------------------------------------- replay trail
+
+def save_replay(week, seed, proposals, outcomes, base_state_sha):
+    """Persist everything the resolver consumed — normalized proposals,
+    base-state identity, rule version, seed, and the outcomes it produced —
+    so the week can be re-resolved offline (`--replay`) with no network
+    and verified to produce the same result."""
+    replay_dir = ROOT / "world" / "replay"
+    replay_dir.mkdir(parents=True, exist_ok=True)
+    doc = {
+        "schema_version": 1,
+        "rule_version": resolve.RULE_VERSION,
+        "week": week,
+        "seed": seed,
+        "base_state_sha256": base_state_sha,
+        "proposals": proposals,
+        "outcomes": outcomes,
+    }
+    path = replay_dir / f"week-{week}.yaml"
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(doc, f, sort_keys=False, allow_unicode=True, width=100)
+    return path
+
+
+def replay_verify(path):
+    """Re-resolve a saved week from its replay file — fixed seed, stored
+    proposals, no model — and compare against the recorded outcomes.
+    Returns (ok, message). A rule_version mismatch refuses the comparison:
+    the rules changed, so sameness would be meaningless."""
+    doc = yaml.safe_load(open(path, encoding="utf-8"))
+    if doc.get("rule_version") != resolve.RULE_VERSION:
+        return False, (f"replay file is rule version {doc.get('rule_version')}, "
+                       f"resolver is {resolve.RULE_VERSION} — not comparable")
+    state = load_state(STATE_FILE)
+    resolve.set_rng(doc["seed"])
+    recomputed = resolve_tick(doc["proposals"], state)
+    if recomputed == doc["outcomes"]:
+        return True, f"week {doc.get('week')} replays identically"
+    diffs = [f"{a}:{r['margin']:+d}" for a, r in
+             zip([o["actor"] for o in doc["outcomes"]],
+                 [o for o in recomputed if o not in doc["outcomes"]][:5])]
+    return False, f"week {doc.get('week')} diverged ({diffs})"
 
 
 def _free_chronicle_path(week, slug):
@@ -237,6 +298,15 @@ def write_chronicle(state, week, outcomes, held=()):
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
+    if "--replay" in argv:
+        i = argv.index("--replay")
+        if i + 1 >= len(argv):
+            print("usage: python src/tick.py --replay <world/replay/week-N.yaml>",
+                  file=sys.stderr)
+            return 2
+        ok, message = replay_verify(argv[i + 1])
+        print(message)
+        return 0 if ok else 1
     state = load_state()
     if "--live" in argv:
         run_live(state)

@@ -472,12 +472,26 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
                 "every faction call failed or held — reporting generation "
                 f"failure rather than staging an empty week ({tail})")
 
+        # the resolver's replay trail (normalized proposals + seed + rule
+        # version) rides with the proposal when the engine wrote one
+        replay_path = engines.AGENTIC_SIMULATOR / "world" / "replay" / \
+            f"week-{proposed_week}.yaml"
+        replay_text = replay_path.read_text(encoding="utf-8") \
+            if replay_path.is_file() else None
+        try:
+            replay_doc = yaml.safe_load(replay_text) \
+                if replay_text else None
+        except yaml.YAMLError:
+            replay_doc = None
+
         # the engine's RNG seed for the proposed week (replay identity; the
         # LLM responses themselves are nondeterministic and are NOT replayed)
         run_record = {
             "engine": "agentic-simulator/src/tick.py --live",
             "seed": ((after_doc.get("meta") or {}).get("rng_seeds") or {})
             .get(str(proposed_week)),
+            "rule_version": replay_doc.get("rule_version")
+            if isinstance(replay_doc, dict) else None,
             "model": None, "base_url": None,
         }
         try:
@@ -496,7 +510,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             base_revisions=base_revisions,
             input_set_revisions=input_set_revisions,
             artifacts={"state": new_state_text, "chronicles": chronicles,
-                       "entries": entries},
+                       "entries": entries, "replay": replay_text},
             run_record=run_record, before_state=base_doc)
         log(f"proposed week {proposed_week} staged ({pid}) — nothing in the "
             "campaign has changed; review it, then accept or discard")

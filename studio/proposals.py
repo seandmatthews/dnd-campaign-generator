@@ -112,6 +112,11 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
                        width=100), encoding="utf-8")
     manifest["artifacts"]["timeline_entries"] = \
         "artifacts/timeline-entries.yaml"
+    replay_text = artifacts.get("replay")
+    if replay_text:
+        (bdir / "artifacts" / "replay.yaml").write_text(
+            replay_text, encoding="utf-8")
+        manifest["artifacts"]["replay"] = "artifacts/replay.yaml"
     diff = diff_states(before_state,
                        yaml.safe_load(state_text) or {},
                        entries)
