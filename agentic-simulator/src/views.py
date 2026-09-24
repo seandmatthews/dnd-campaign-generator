@@ -33,6 +33,30 @@ _OUTSIDER_STRENGTH = {
 }
 
 
+def facts_for(state, faction_id):
+    """The approved facts this faction may see: `public` facts (public in
+    the world — still not automatically what the PARTY knows) and facts
+    explicitly addressed to this faction (`known_to`). Everything else —
+    dm_only, superseded, or addressed to a rival — is invisible here. The
+    studio compiles this list into state.yaml's `knowledge` section
+    (already excluding superseded facts — filtered again here so a
+    hand-edited state cannot resurrect one); a campaign with no knowledge
+    section simply has no facts."""
+    out = []
+    for fact in state.get("knowledge") or []:
+        if not isinstance(fact, dict):
+            continue
+        if fact.get("status") not in (None, "current"):
+            continue
+        text = str(fact.get("text") or "").strip()
+        if not text:
+            continue
+        known_to = fact.get("known_to") or []
+        if fact.get("visibility") == "public" or faction_id in known_to:
+            out.append({"id": fact.get("id"), "text": text})
+    return out
+
+
 def faction_view(state, faction_id):
     """Return the slice of `state` that `faction_id` can act on."""
     factions = {f["id"]: f for f in state["factions"]}
@@ -67,6 +91,9 @@ def faction_view(state, faction_id):
     heard = rumors.heard(state, faction_id)
     if heard:
         view["rumors_you_have_heard"] = heard
+    facts = facts_for(state, faction_id)
+    if facts:
+        view["facts_you_know"] = facts
     return view
 
 

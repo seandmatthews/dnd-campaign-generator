@@ -348,6 +348,30 @@ shapes in this document true.
   `discard` abandons the transaction and keeps the live bytes. 409 while
   the transaction is not conflict-parked.
 
+### Knowledge (Phase 4 — approved facts with faction visibility)
+- Facts live in `simulation/knowledge.yaml` (schema_version 1); the visible
+  slice compiles into `simulation/state.yaml`'s `knowledge` section, which
+  the engine's `views.py` reads (`facts_you_know` in the faction view — and
+  the faction prompt embeds the view). Visibility is EXPLICIT: `dm_only`
+  (the default for anything unclassified — no automatic mass publication
+  of lore, ever), `public` (any faction; public in the world is still not
+  automatically what the party has discovered), or a list of faction ids.
+- `GET /api/campaign/{name}/knowledge` → `{"facts":[{id,text,visibility,
+  status,source_file,source_revision,subjects,stale,...}]}` — `stale` is
+  true when the source file's current bytes no longer match the approved
+  revision. The compiled state always carries the APPROVED text; a changed
+  source never silently substitutes new wording.
+- `POST /api/campaign/{name}/knowledge` `{text, visibility, source_file?,
+  subjects?, id?}` → upsert + compile (transactional, revision-checked).
+  422 on unknown faction ids in the visibility list (a typo must not hide
+  or leak a fact). 409 while a publication conflict is parked.
+- `POST .../knowledge/{id}/supersede` same body → approves the corrected
+  fact and flips the old one to `superseded` (provenance kept, never
+  compiled again) + compile.
+- `POST .../knowledge/{id}/reconcile` → the DM re-approves a changed
+  source file after reading it: the recorded revision catches up, the
+  approved text is unchanged.
+
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive
   substring grep over the campaign's text files: `lore/*.yaml`,

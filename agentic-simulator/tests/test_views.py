@@ -56,6 +56,40 @@ def mini_state():
     }
 
 
+def test_facts_visibility_public_restricted_and_dm_only():
+    """Phase 4: views carry only the facts a faction may see — public facts
+    and facts addressed to THIS faction; dm_only, rival-addressed, and
+    superseded facts never appear (the view is what the prompt embeds)."""
+    state = mini_state()
+    state["knowledge"] = [
+        {"id": "fact-1", "text": "The bridge burned.",
+         "visibility": "public", "known_to": []},
+        {"id": "fact-2", "text": "Mint secret: the debt is forged.",
+         "visibility": "restricted", "known_to": ["mint"]},
+        {"id": "fact-3", "text": "Reliquary plan: audit the marsh ledgers.",
+         "visibility": "restricted", "known_to": ["reliquary"]},
+        {"id": "fact-4", "text": "Old wording of the bridge fact.",
+         "visibility": "public", "known_to": [], "status": "superseded"},
+        {"id": "fact-5", "text": "DM only note.", "visibility": "dm_only",
+         "known_to": []},
+    ]
+    mine = views.faction_view(state, "mint")
+    texts = " ".join(f["text"] for f in mine.get("facts_you_know", []))
+    assert "The bridge burned." in texts            # public reaches everyone
+    assert "the debt is forged" in texts            # addressed to mint
+    assert "audit the marsh ledgers" not in texts   # a rival's restricted fact
+    assert "Old wording" not in texts               # superseded facts are out
+    assert "DM only note" not in texts              # dm_only stays with the DM
+
+    theirs = views.faction_view(state, "reliquary")
+    theirs_text = " ".join(f["text"] for f in theirs.get("facts_you_know", []))
+    assert "The bridge burned." in theirs_text
+    assert "the debt is forged" not in theirs_text  # mint's secret does not leak
+
+    bare = mini_state()  # a campaign with no knowledge section still works
+    assert "facts_you_know" not in views.faction_view(bare, "mint")
+
+
 def temp_state_file(state, directory):
     path = pathlib.Path(directory) / "state.yaml"
     with open(path, "w", encoding="utf-8") as f:
@@ -138,6 +172,7 @@ if __name__ == "__main__":
         test_cli_default_path_reads_project_state,
         test_cli_usage_and_missing_state_errors,
         test_state_default_points_at_project_root,
+        test_facts_visibility_public_restricted_and_dm_only,
     ]:
         fn()
     print("all views tests passed")
