@@ -35,6 +35,16 @@ events:
     actor: ferrymen
     text: burned the toll bridge (contested vs wardens) — succeeded, margin +6
 rumors:
-  - claim: the bridge was insured twice over
+  # full engine shape (rumors.heard reads id/heard_by/transmissions)
+  - id: rumor_0001
+    claim: the bridge was insured twice over
+    truth: true
     fidelity: hearsay
     born_week: 2
+    origin: ferrymen
+    heard_by: [wardens]
+    transmissions:
+      - from: ferrymen
+        to: wardens
+        week: 3
+        fidelity_after: hearsay

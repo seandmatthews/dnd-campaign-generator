@@ -28,6 +28,11 @@ principles). Read it before changing anything.
   chain behind any recorded event.
 - **Fold in a real session**: `python src/ingest.py notes.md` → edit the
   pending file it names → `python src/ingest.py --apply world/pending-week-N.yml`.
+  History bullets have NO mechanical effect: add structured `effects:`
+  entries (typed, allowlisted, dedup by stable id — see `src/effects.py`)
+  to the pending file for real state changes, or drive the studio's
+  session form. Validate without writing:
+  `python src/effects.py --check session.yaml [--state PATH]`.
 - **Run tests**: `python tests/test_<module>.py` (all zero-dependency).
 - **Review**: read `chronicle/` — one file per week, prose + full roll table.
 
@@ -70,6 +75,7 @@ src/consistency.py       pre-resolution fact-check (advisory warnings)
 src/rumors.py            rumors: one fidelity grade lost per retelling
 src/why.py               causality inspector
 src/ingest.py            session notes -> pending events -> canon
+src/effects.py           typed session effects: validate/apply/dedup (CLI)
 tests/                   zero-dep: python tests/test_<module>.py
 ```
 

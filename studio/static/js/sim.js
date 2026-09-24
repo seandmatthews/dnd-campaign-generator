@@ -364,20 +364,31 @@
       const rums = diff.rumors_added || [];
       const chron = (data.chronicles && data.chronicles.length)
         ? data.chronicles[data.chronicles.length - 1] : null;
-      const held = (p.run_record && p.run_record.held) || [];
+      const isSession = p.kind === 'session_effects';
+      const title = isSession
+        ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
+        : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
+      const subtitle = isSession
+        ? '<strong>The world has not changed yet.</strong> These are the recorded ' +
+          'session facts and the reviewed effects they justify. Accepting applies ' +
+          'them exactly once; discarding changes nothing.'
+        : '<strong>The world has not advanced.</strong> ' +
+          'This is a proposal generated from the current state (' +
+          'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
+          'the whole week exactly once; discarding changes nothing.';
 
       panel.innerHTML = '';
       panel.appendChild(S.el(
-        '<h3 class="panel-title">Proposed week ' + S.esc(String(p.proposed_week)) +
-          ' &mdash; not canon yet</h3>' +
-        '<p class="panel-note"><strong>The world has not advanced.</strong> ' +
-          'This is a proposal generated from the current state (' +
-          'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
-          'the whole week exactly once; discarding changes nothing.</p>' +
+        '<h3 class="panel-title">' + title + '</h3>' +
+        '<p class="panel-note">' + subtitle + '</p>' +
         '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
         (evs.length
-          ? '<details class="proposal-events"><summary>Proposed events (' + evs.length + ')</summary><ul class="event-list">' +
-              evs.map((e) => '<li><span class="event-text">' + S.esc(e.text || '') + '</span></li>').join('') +
+          ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
+              (isSession ? 'Recorded history &amp; effects (' : 'Proposed events (') + evs.length + ')</summary><ul class="event-list">' +
+              evs.map((e) => '<li><span class="event-text">' + S.esc(e.text || '') + '</span>' +
+                (e.effect ? ' <span class="pill pill-when">effect</span>' : '') +
+                (e.effect == null && e.source ? ' <span class="pill pill-when">history only</span>' : '') +
+                '</li>').join('') +
             '</ul></details>'
           : '') +
         (rums.length
@@ -389,10 +400,11 @@
           ? '<div class="proposal-chronicle"><h5 class="findings-title">Chronicle (proposed)</h5><article class="chronicle"></article></div>'
           : '') +
         '<div class="inline-form proposal-actions">' +
-          '<button type="button" class="btn btn-primary proposal-accept">Accept week ' +
-            S.esc(String(p.proposed_week)) + ' — publish everything</button>' +
+          '<button type="button" class="btn btn-primary proposal-accept">' +
+            (isSession ? 'Accept session changes — apply exactly once'
+                       : 'Accept week ' + S.esc(String(p.proposed_week)) + ' — publish everything') + '</button>' +
           '<button type="button" class="btn btn-danger proposal-discard">Discard</button>' +
-          '<span class="muted form-note">Accept publishes the state, chronicle and timeline entries as one step; discard keeps the audit receipt only.</span>' +
+          '<span class="muted form-note">Accept publishes as one step; discard keeps the audit receipt only.</span>' +
         '</div>' +
         '<div class="proposal-error"></div>'
       ));
@@ -405,8 +417,11 @@
       acceptBtn.addEventListener('click', async () => {
         if (acceptBtn.disabled) return;
         const ok = await S.confirmRun(
-          'Accepting publishes the whole proposed week into the campaign — ' +
-          'clock, resources, chronicle, timeline — exactly once.'
+          isSession
+            ? 'Accepting applies the recorded session history and its reviewed ' +
+              'effects to the live state — exactly once.'
+            : 'Accepting publishes the whole proposed week into the campaign — ' +
+              'clock, resources, chronicle, timeline — exactly once.'
         );
         if (!ok) return;
         acceptBtn.disabled = true; discardBtn.disabled = true;
@@ -414,8 +429,10 @@
         try {
           const r = await S.api(S.campUrl('/simulation/proposal/' +
             encodeURIComponent(p.proposal_id) + '/accept'), { method: 'POST' });
-          S.toast('Week ' + (r.week != null ? r.week : p.proposed_week) +
-            ' is canon — accepted exactly once.', 'ok');
+          S.toast(isSession
+            ? 'Session changes are canon — applied exactly once.'
+            : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
+              ' is canon — accepted exactly once.', 'ok');
           if (r.snapshot && (r.snapshot.state === 'failed' ||
               r.snapshot.state === 'unavailable')) {
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
@@ -450,6 +467,147 @@
         }
       });
     }).catch(() => { panel.remove(); });
+  }
+
+  /* ----- record-a-session form (Phase 3: history + structured effects) ----- */
+
+  function effectRow(factions) {
+    const opts = factions.map((f) =>
+      '<option value="' + S.esc(String(f.id)) + '">' + S.esc(f.name || f.id) + '</option>').join('');
+    return S.el(
+      '<div class="sand-faction session-effect">' +
+        '<div class="inline-form">' +
+          '<label class="field field-narrow"><span class="field-label">Faction</span>' +
+            '<select class="input e-faction">' + opts + '</select></label>' +
+          '<label class="field field-narrow"><span class="field-label">Kind of change</span>' +
+            '<select class="input e-type"><option value="set_resource">resource</option>' +
+              '<option value="set_field">fact (goal/kind/secret)</option></select></label>' +
+          '<label class="field field-narrow e-res-wrap"><span class="field-label">Resource</span>' +
+            '<select class="input e-res"><option>coin</option><option>muscle</option><option>legitimacy</option></select></label>' +
+          '<label class="field field-narrow hidden e-field-wrap"><span class="field-label">Field</span>' +
+            '<select class="input e-field"><option>goal</option><option>kind</option><option>secret</option></select></label>' +
+          '<label class="field field-narrow"><span class="field-label">Was (optional)</span>' +
+            '<input type="text" class="input e-was" placeholder="e.g. high"></label>' +
+          '<label class="field field-narrow"><span class="field-label">Now</span>' +
+            '<select class="input e-after"></select></label>' +
+          '<button type="button" class="btn e-remove" title="Remove this effect">&times;</button>' +
+        '</div>' +
+        '<div class="inline-form">' +
+          '<label class="field grow"><span class="field-label">Reason — what happened at the table</span>' +
+            '<input type="text" class="input e-reason" placeholder="e.g. The party destroyed the treasury."></label>' +
+        '</div>' +
+      '</div>'
+    );
+  }
+
+  function sessionPanel(root, factions) {
+    const panel = S.el(
+      '<section class="panel session-panel">' +
+        '<h3 class="panel-title">Record a session</h3>' +
+        '<p class="panel-note">Fold what happened at the table into the world. ' +
+          'History lines are <strong>recorded as-is with no mechanical effect</strong> — ' +
+          'a treasury destroyed in prose changes nothing until you add a resource ' +
+          'effect. Everything stages as a proposal above; accept applies it once.</p>' +
+        '<div class="form-block">' +
+          '<div class="inline-form">' +
+            '<label class="field"><span class="field-label">Source</span>' +
+              '<input type="text" class="input s-source" placeholder="e.g. session:session-08"></label>' +
+            '<label class="field field-narrow"><span class="field-label">In-world week (optional)</span>' +
+              '<input type="number" class="input s-week" min="0" placeholder="current"></label>' +
+          '</div>' +
+          '<label class="field"><span class="field-label">What happened — one event per line, ' +
+            '"actor: text" (actor defaults to world)</span>' +
+            '<textarea class="input s-events" rows="3" ' +
+              'placeholder="wardens: The party bullied the toll collector into silence.&#10;The new magistrate doubled the bridge guard."></textarea></label>' +
+          '<div class="s-effects"></div>' +
+          '<div class="inline-form">' +
+            '<button type="button" class="btn s-add-effect">+ Add a resource/fact effect</button>' +
+            '<button type="button" class="btn btn-primary s-submit">Stage session changes for review</button>' +
+          '</div>' +
+          '<div class="form-error"></div>' +
+        '</div>' +
+      '</section>'
+    );
+    const host = panel.querySelector('.s-effects');
+    const errBox = panel.querySelector('.form-error');
+
+    function addRow() {
+      const row = effectRow(factions);
+      row.querySelector('.e-remove').addEventListener('click', () => row.remove());
+      const typeSel = row.querySelector('.e-type');
+      const resWrap = row.querySelector('.e-res-wrap');
+      const fieldWrap = row.querySelector('.e-field-wrap');
+      const LEVELS = ['none', 'low', 'medium', 'high'];
+      function sync() {
+        const isField = typeSel.value === 'set_field';
+        resWrap.classList.toggle('hidden', isField);
+        fieldWrap.classList.toggle('hidden', !isField);
+        const afterEl = row.querySelector('.e-after');
+        if (isField && afterEl.tagName === 'SELECT') {
+          const input = document.createElement('input');
+          input.type = 'text'; input.className = 'input e-after';
+          input.placeholder = 'the new value';
+          afterEl.replaceWith(input);
+        } else if (!isField && afterEl.tagName === 'INPUT') {
+          const sel = document.createElement('select');
+          sel.className = 'input e-after';
+          sel.innerHTML = LEVELS.map((l) => '<option>' + l + '</option>').join('');
+          afterEl.replaceWith(sel);
+        }
+      }
+      typeSel.addEventListener('change', sync);
+      sync();
+      host.appendChild(row);
+    }
+    panel.querySelector('.s-add-effect').addEventListener('click', addRow);
+
+    panel.querySelector('.s-submit').addEventListener('click', async () => {
+      const btn = panel.querySelector('.s-submit');
+      if (btn.disabled) return;
+      const source = panel.querySelector('.s-source').value.trim();
+      const weekRaw = panel.querySelector('.s-week').value.trim();
+      const events = panel.querySelector('.s-events').value.split('\n')
+        .map((ln) => ln.trim()).filter(Boolean)
+        .map((ln) => {
+          const m = ln.match(/^([A-Za-z0-9_]+)\s*:\s*(.+)$/);
+          return m ? { actor: m[1], text: m[2].trim() } : { actor: 'world', text: ln };
+        });
+      const effects = Array.from(host.querySelectorAll('.session-effect')).map((row) => {
+        const isField = row.querySelector('.e-type').value === 'set_field';
+        const base = {
+          type: isField ? 'set_field' : 'set_resource',
+          faction_id: row.querySelector('.e-faction').value,
+          after: isField ? row.querySelector('.e-after').value
+                         : row.querySelector('.e-after').value,
+          reason: row.querySelector('.e-reason').value.trim()
+        };
+        if (isField) base.field = row.querySelector('.e-field').value;
+        else base.resource = row.querySelector('.e-res').value;
+        const was = row.querySelector('.e-was').value.trim();
+        if (was) base.expected_before = was;
+        return base;
+      });
+      if (!source) { S.toast('Name the source — e.g. session:session-08.', 'error'); return; }
+      if (!events.length && !effects.length) {
+        S.toast('Nothing to record: add history lines or an effect.', 'error');
+        return;
+      }
+      const body = { source: source, events: events, effects: effects };
+      if (weekRaw !== '') body.week = Number(weekRaw);
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/simulation/session'), { method: 'POST', body: body });
+        S.toast('Session staged — review the proposal above, then accept.', 'ok');
+        S.showTab('sim');
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        btn.disabled = false;
+      }
+    });
+
+    root.appendChild(panel);
   }
 
   S.tabs.sim = async function (container) {
@@ -762,5 +920,8 @@
       });
     });
     root.appendChild(runPanel);
+
+    /* record-a-session: history + reviewed structured effects (Phase 3) */
+    if (factions.length) sessionPanel(root, factions);
   };
 }());

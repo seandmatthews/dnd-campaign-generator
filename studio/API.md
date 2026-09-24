@@ -271,6 +271,21 @@ shapes in this document true.
   bundle's status to `discarded`; live files were never touched. The bundle
   stays on disk as an audit receipt; rejected content is never fed into
   future prompts.
+- `POST /api/campaign/{name}/simulation/session` `{"source":str,
+  "week"?:int, "events"?:[{"actor":"world"|faction,"text":str}],
+  "effects"?:[{"type":"set_resource","faction_id","resource":
+  "coin|muscle|legitimacy","after":"none|low|medium|high","reason":str,
+  "expected_before"?:str,"id"?:str} | {"type":"set_field","faction_id",
+  "field":"goal|kind|secret","after":str,"reason":str,...}]}` → 202,
+  stages a `session_effects` proposal. Events are HISTORY ONLY (recorded
+  verbatim, no mechanical effect); effects are the reviewed state changes,
+  validated by the engine's own code via CLI (`src/effects.py --check`,
+  list-form args) — 422 with the engine's refusal list when invalid.
+  Effect ids are content-derived when omitted, so re-submitting the same
+  session cannot mint a second identity. The after-image is produced by
+  applying to a throwaway copy of the state; the campaign is untouched
+  until the accept route publishes it. Accept dispatches on the bundle's
+  `kind`: a session_effects publish writes `simulation/state.yaml` only.
 - Legacy `simulation/pending-week-*.yaml` files (pre-proposal
   implementations) remain reviewable as **timeline-only** reviews: the
   weeks they describe were already committed by the old flow — approving

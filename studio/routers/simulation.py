@@ -107,6 +107,36 @@ class FactionBody(BaseModel):
     resources: dict[str, str] = {}
 
 
+class SessionEffectBody(BaseModel):
+    """One structured consequence of play (Phase 3): typed, reviewed,
+    deduplicated by stable id. `resource`/`field` choose the set_field vs
+    set_resource shape; expected_before is the precondition the DM saw."""
+    type: str
+    faction_id: str
+    after: str
+    reason: str
+    id: str | None = None
+    resource: str | None = None
+    field: str | None = None
+    expected_before: str | None = None
+    week: int | None = None
+
+
+class SessionEventBody(BaseModel):
+    actor: str = "world"
+    text: str
+
+
+class SessionBody(BaseModel):
+    """Manual session ingestion — works without any API key (LLM extraction
+    stays optional and outside this path). Events are HISTORY ONLY (no
+    mechanical effect); effects are the reviewed state changes."""
+    source: str
+    week: int | None = None
+    events: list[SessionEventBody] = []
+    effects: list[SessionEffectBody] = []
+
+
 class CreateStateBody(BaseModel):
     premise: str
     season: str = "early spring"
@@ -612,9 +642,9 @@ def build_week_entries(week: int, events: list) -> list:
 
 @router.get("/api/campaign/{name}/simulation/proposal")
 def get_proposal(name: str):
-    """The pending proposed week, everything the DM needs to decide, or
-    {"proposal": null}. Reads the bundle from disk, so review works after a
-    server restart."""
+    """The pending proposal (week or session effects), everything the DM
+    needs to decide, or {"proposal": null}. Reads the bundle from disk, so
+    review works after a server restart."""
     require_campaign(name)
     pending = proposals.find_pending(name)
     if not pending:
@@ -624,6 +654,7 @@ def get_proposal(name: str):
     return {
         "proposal": {
             "proposal_id": pid,
+            "kind": pending.get("kind") or "simulated_week",
             "status": pending.get("status"),
             "base_week": pending.get("base_week"),
             "proposed_week": pending.get("proposed_week"),
@@ -643,11 +674,13 @@ def get_proposal(name: str):
 
 @router.post("/api/campaign/{name}/simulation/proposal/{pid}/accept")
 def accept_proposal(name: str, pid: str):
-    """Publish the WHOLE proposed week: state, chronicles, and timeline
-    entries are one transactional publication (publication.py), validated
-    against the base revisions recorded at generation time. Idempotent:
-    repeating the accept returns the recorded result. World advancement
-    happens exactly here, exactly once."""
+    """Publish the WHOLE pending proposal. For a simulated_week that is
+    state + chronicles + timeline entries; for session_effects, the new
+    state (history events + validated resource/fact changes). One
+    transactional publication (publication.py), validated against the base
+    revisions recorded when the proposal was created — an external edit
+    between then and now is a 409, never a silent overwrite. Idempotent:
+    repeating the accept returns the recorded result."""
     require_campaign(name)
     # a stable key for this exact accept: a repeat (double click, retry,
     # restart) returns the recorded result instead of applying twice
@@ -670,58 +703,65 @@ def accept_proposal(name: str, pid: str):
                        "not pending — refresh and check its state")
         d = spine.campaign_dir(name)
 
-        entries = bundle["entries"]
-        new_timeline = _append_approved(d, entries)  # 409 on duplicates
+        base = dict(manifest.get("base_revisions") or {})
         writes = [{
             "path": "simulation/state.yaml",
             "text": bundle["state_text"],
-        }, {
-            "path": "lore/timeline.yaml",
-            "text": yaml.safe_dump(new_timeline, sort_keys=False,
-                                   allow_unicode=True, width=100),
         }]
-        base = dict(manifest.get("base_revisions") or {})
-        for fn in bundle["chronicles"]:
-            rel = f"simulation/chronicle/{fn}"
-            writes.append({"path": rel, "text": bundle["chronicles"][fn]})
-            base[rel] = publication.ABSENT  # create-only: a file that
-            # appeared in the meantime is an external edit -> conflict
+        if manifest.get("kind") == "session_effects":
+            chron = None
+        else:
+            entries = bundle["entries"]
+            new_timeline = _append_approved(d, entries)  # 409 on duplicates
+            writes.append({
+                "path": "lore/timeline.yaml",
+                "text": yaml.safe_dump(new_timeline, sort_keys=False,
+                                       allow_unicode=True, width=100),
+            })
+            for fn in bundle["chronicles"]:
+                rel = f"simulation/chronicle/{fn}"
+                writes.append({"path": rel, "text": bundle["chronicles"][fn]})
+                base[rel] = publication.ABSENT  # create-only: a file that
+                # appeared in the meantime is an external edit -> conflict
+            chron = _chronicle_meta(sorted(bundle["chronicles"]))
         try:
             pub = publication.publish(
-                name, writes, operation=f"accept week "
-                f"{manifest.get('proposed_week')} proposal",
+                name, writes, operation=_accept_operation(manifest),
                 base_revisions=base, idempotency_key=key)
         except publication.RevisionConflict as e:
             raise HTTPException(
                 status_code=409,
                 detail=f"stale proposal: {e} — the campaign changed since "
-                       f"this week was generated. Discard it and generate a "
-                       f"fresh one from the new base. Nothing was written.")
+                       f"this was generated. Discard it and prepare a fresh "
+                       f"one from the new base. Nothing was written.")
         except publication.PublicationConflictError as e:
             raise HTTPException(status_code=409, detail=str(e))
         except Exception as e:  # noqa: BLE001 — mid-flight failure
             raise HTTPException(
                 status_code=500,
-                detail=f"the week could not be published ({e}) — the staged "
-                       f"transaction is kept and will be recovered "
+                detail=f"the proposal could not be published ({e}) — the "
+                       f"staged transaction is kept and will be recovered "
                        f"automatically when the studio restarts")
 
         week = manifest.get("proposed_week")
         result = {
             "accepted": pid, "week": week,
+            "kind": manifest.get("kind") or "simulated_week",
             "transaction": pub["transaction"],
-            "chronicles": sorted(bundle["chronicles"]),
-            "timeline_entries": len(entries),
         }
+        if manifest.get("kind") == "session_effects":
+            diff = bundle["diff"]
+            result["events_added"] = len(diff.get("events_added") or [])
+            result["resources_changed"] = len(diff.get("resources") or {})
+        else:
+            result["chronicles"] = sorted(bundle["chronicles"])
+            result["timeline_entries"] = len(bundle["entries"])
         if pub["state"] == "noop":
             result["noop"] = True
         publication.record_receipt(name, key, result)
         proposals.set_status(name, pid, "accepted",
                              decided_note="published; see the receipt")
-        chron = _chronicle_meta(sorted(bundle["chronicles"]))
-        msg = f"campaign/{name}: week {week}"
-        if chron and chron.get("title"):
-            msg += f" — {chron['title']}"
+        msg = _accept_message(name, manifest, chron)
         # vault stage 4 advisory decoration after publication, as before
         for fn in bundle["chronicles"]:
             try:
@@ -733,6 +773,22 @@ def accept_proposal(name: str, pid: str):
         publication.after_snapshot(name, pub["transaction"], snap)
         result["snapshot"] = snap
         return result
+
+
+def _accept_operation(manifest: dict) -> str:
+    if manifest.get("kind") == "session_effects":
+        return f"accept session effects ({manifest.get('run_record', {}) .get('source') or 'session'})"
+    return f"accept week {manifest.get('proposed_week')} proposal"
+
+
+def _accept_message(name: str, manifest: dict, chron) -> str:
+    if manifest.get("kind") == "session_effects":
+        source = (manifest.get("run_record") or {}).get("source") or "session"
+        return f"campaign/{name}: session effects applied ({source})"
+    msg = f"campaign/{name}: week {manifest.get('proposed_week')}"
+    if chron and chron.get("title"):
+        msg += f" — {chron['title']}"
+    return msg
 
 
 @router.post("/api/campaign/{name}/simulation/proposal/{pid}/discard")
@@ -750,6 +806,123 @@ def discard_proposal(name: str, pid: str):
         except proposals.ProposalError as e:
             raise HTTPException(status_code=409, detail=str(e))
         return {"discarded": pid}
+
+
+# ------------------------------------------------------- session ingestion
+
+
+def _effect_id(effect: dict) -> str:
+    """Stable effect id: content-derived when the DM did not supply one, so
+    re-submitting the same session cannot mint a second identity."""
+    if effect.get("id"):
+        return str(effect["id"])
+    payload = json.dumps(effect, sort_keys=True, ensure_ascii=False)
+    return "eff-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+@router.post("/api/campaign/{name}/simulation/session", status_code=202)
+def post_session(name: str, body: SessionBody):
+    """Record what happened at the table: history bullets + structured
+    effects, validated by the ENGINE's own code (CLI subprocess — no
+    imports across projects) and staged as a pending proposal. Nothing in
+    the campaign changes until the proposal is accepted."""
+    d = require_campaign(name)
+    if not (d / "simulation" / "state.yaml").is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="no simulation/state.yaml in this campaign — create the "
+                   "sandbox first")
+    pending = proposals.find_pending(name)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a proposal is awaiting review "
+                   f"({pending.get('proposal_id')}) — accept or discard it "
+                   f"before recording a session")
+    ensure_publishable_409(name)
+    source = (body.source or "").strip()
+    if not source:
+        raise HTTPException(status_code=422,
+                            detail="source is required (e.g. "
+                                   "session:session-08)")
+    if not body.events and not body.effects:
+        raise HTTPException(
+            status_code=422,
+            detail="nothing to record — add history events, structured "
+                   "effects, or both")
+    record = {
+        "source": source,
+        "events": [e.model_dump() for e in body.events],
+        "effects": [],
+    }
+    if body.week is not None:
+        record["week"] = body.week
+    for e in body.effects:
+        eff = {k: v for k, v in e.model_dump().items() if v is not None}
+        eff["id"] = _effect_id(eff)
+        eff["source"] = source
+        record["effects"].append(eff)
+
+    # the engine's own validator decides — same code the standalone CLI
+    # path uses (list-form args; the parent path contains `&`)
+    import tempfile
+    import shutil as _shutil
+    tmp_dir = Path(tempfile.mkdtemp(prefix="studio-session-"))
+    try:
+        record_path = tmp_dir / "session.yaml"
+        record_path.write_text(
+            yaml.safe_dump(record, sort_keys=False, allow_unicode=True,
+                           width=100), encoding="utf-8")
+        state_path = d / "simulation" / "state.yaml"
+        rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/effects.py",
+                                   "--check", str(record_path),
+                                   "--state", str(state_path), timeout=60)
+        if rc != 0:
+            detail = " | ".join(lines[-5:]) or "no output"
+            raise HTTPException(
+                status_code=422,
+                detail=f"the engine refused this session record: {detail}")
+
+        # produce the after-image by applying to a THROWAWAY COPY of the
+        # state — the campaign is never touched here
+        copy_path = tmp_dir / "state-copy.yaml"
+        _shutil.copy2(state_path, copy_path)
+        rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/effects.py",
+                                   "--apply", str(record_path),
+                                   "--state", str(copy_path), timeout=60)
+        if rc != 0:
+            detail = " | ".join(lines[-5:]) or "no output"
+            raise HTTPException(
+                status_code=422,
+                detail=f"the engine could not apply this session record: "
+                       f"{detail}")
+        after_text = copy_path.read_text(encoding="utf-8")
+    finally:
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    after_doc = yaml.safe_load(after_text) or {}
+    base_doc = spine.load_state(name)
+    base_revisions = {
+        "simulation/state.yaml": publication.file_revision(
+            d / "simulation" / "state.yaml"),
+    }
+    with spine.campaign_lock(name):
+        pid = proposals.create(
+            name, kind="session_effects",
+            base_week=_clock_week(base_doc), proposed_week=_clock_week(base_doc),
+            base_revisions=base_revisions, input_set_revisions={},
+            artifacts={"state": after_text, "chronicles": {}, "entries": []},
+            run_record={"kind": "session", "source": source,
+                        "engine": "agentic-simulator/src/effects.py --apply"},
+            before_state=base_doc)
+    diff = proposals.diff_states(base_doc, after_doc, [])
+    return {
+        "proposal_id": pid, "status": "pending", "kind": "session_effects",
+        "events_added": len(diff.get("events_added") or []),
+        "resources_changed": len(diff.get("resources") or {}),
+        "diff": diff,
+    }
 
 
 @router.get("/api/campaign/{name}/simulation/chronicle/{week}")

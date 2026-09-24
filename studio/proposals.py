@@ -72,10 +72,11 @@ def time_id() -> str:
 
 def create(name: str, *, base_week, proposed_week, base_revisions: dict,
            input_set_revisions: dict, artifacts: dict, run_record: dict,
-           before_state: dict) -> str:
+           before_state: dict, kind: str = "simulated_week") -> str:
     """Stage a new pending bundle from in-memory artifact texts. artifacts:
     {"state": text, "chronicles": {filename: text}, "entries": [dicts]}.
-    Returns the proposal id. Caller holds the campaign lock."""
+    kind: "simulated_week" or "session_effects". Returns the proposal id.
+    Caller holds the campaign lock."""
     d = spine.campaign_dir(name)
     pid = new_id()
     bdir = _root(d) / pid
@@ -83,7 +84,7 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "proposal_id": pid,
-        "kind": "simulated_week",
+        "kind": kind,
         "status": "pending",
         "base_week": base_week,
         "proposed_week": proposed_week,
@@ -233,14 +234,16 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
         if changed:
             diff["resources"][fid] = changed
     ev_b = before or {}
-    before_events = {(e.get("week"), e.get("text"))
+    before_events = {(e.get("week"), e.get("actor"), e.get("text"))
                      for e in (ev_b.get("events") or [])
                      if isinstance(e, dict)}
     for e in ((after or {}).get("events") or []):
-        if isinstance(e, dict) and (e.get("week"), e.get("text")) \
-                not in before_events:
+        if isinstance(e, dict) and (e.get("week"), e.get("actor"),
+                                    e.get("text")) not in before_events:
             diff["events_added"].append(
-                {"week": e.get("week"), "text": str(e.get("text") or "")})
+                {"week": e.get("week"), "actor": e.get("actor"),
+                 "text": str(e.get("text") or ""),
+                 "source": e.get("source"), "effect": e.get("effect")})
     before_rumors = {r.get("claim") for r in (ev_b.get("rumors") or [])
                      if isinstance(r, dict)}
     for r in ((after or {}).get("rumors") or []):

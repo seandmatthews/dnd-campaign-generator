@@ -11,8 +11,13 @@ Either mode takes --state PATH to read/apply against that state file
 instead of the default world/state.yaml.
 
 Proposals are dated the clock's current week + 1 — the next week to be
-simulated. apply() appends events and touches nothing else: the clock is
-advanced by tick.py --live or the DM, never here.
+simulated — unless the DM supplies an explicit week in the pending file.
+apply() appends events and applies any structured `effects:` entries
+through effects.py (the shared validator: typed, allowlisted, dedup by
+stable effect id); the clock is advanced by tick.py --live or the DM,
+never here. History bullets carry NO mechanical effect — a treasury
+destroyed in prose changes nothing until the DM adds a set_resource
+effect.
 """
 
 import pathlib
@@ -22,6 +27,7 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import effects
 from store import ROOT, STATE_FILE
 from store import load_state as _store_load
 from store import save_state as _store_save
@@ -109,30 +115,38 @@ def read_pending(path):
 
 
 def apply(pending, state_path):
-    """Append each surviving proposal to state.yaml's events as {week, actor,
-    text}; returns the count merged, or -1 (nothing written) if any actor is
-    unknown. Bumps nothing else — the clock belongs to tick.py / the DM.
+    """Apply the DM's surviving record: each surviving proposal appends to
+    state.yaml's events as {week, actor, text} (deduplicated — reimporting
+    the same file adds nothing), and any structured `effects:` entries are
+    validated and applied through effects.apply_session_record (all-or-
+    nothing: one invalid effect refuses the whole file). Returns the count
+    merged (events + effects), or -1 (nothing written) on any refusal.
+    Bumps nothing else — the clock belongs to tick.py / the DM.
     A pending week that is not the clock's next week is applied to the week
     it claims (the DM's file is authoritative) but warns loudly — stale
     files land in past weeks the scheduler no longer looks at."""
     state = load_state(state_path)
-    known = {f["id"] for f in state["factions"]} | {"world"}
-    week = pending["week"]
+    week = pending.get("week")
     next_week = state["meta"]["clock"]["week"] + 1
     if week is not None and week != next_week:
         print(f"warning: pending file is dated week {week}, but the next week "
               f"to simulate is {next_week} — these events land in week {week}, "
               f"which the scheduler reads only for history")
-    surviving = pending["proposals"]
-    for p in surviving:
-        if p["actor"] not in known:
-            print(f"refusing: unknown actor {p['actor']!r} — not a faction id or 'world'")
-            return -1
-    for p in surviving:
-        state["events"].append({"week": week, "actor": p["actor"], "text": p["text"]})
-    if surviving:
+    record = {
+        "week": week,
+        "events": pending.get("proposals") or [],
+        "effects": pending.get("effects") or [],
+    }
+    if pending.get("source"):
+        record["source"] = pending["source"]
+    events, applied, errors = effects.apply_session_record(record, state)
+    if errors:
+        for e in errors:
+            print(f"refusing: {e}", file=sys.stderr)
+        return -1
+    if events or applied:
         save_state(state, state_path)
-    return len(surviving)
+    return events + applied
 
 
 def load_state(path):
