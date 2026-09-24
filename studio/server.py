@@ -8,9 +8,9 @@ Hardening (this wave):
   bound port), the TestClient, and STUDIO_EXTRA_HOSTS are served — a DNS-
   rebinding page (attacker domain resolving at 127.0.0.1) gets 403
   {"error": "unknown host header"}.
-- Rotating file log at studio/logs/studio.log (1 MB x 5): every "studio.*"
-  logger — app modules and job progress lines (jobs.py mirrors log() there).
-  Uvicorn's access log stays console-only.
+- Rotating file log (1 MB x 5) at studio/logs/studio.log (STUDIO_LOG_FILE
+  overrides): every "studio.*" logger — app modules and job progress lines
+  (jobs.py mirrors log() there). Uvicorn's access log stays console-only.
 - On boot (lifespan), a left-behind week-run flag triggers the engine-home
   restore (routers/simulation.restore_interrupted_week).
 
@@ -43,15 +43,28 @@ PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 # ------------------------------------------------------------------- logging
 
 
+def _log_file_path() -> Path:
+    """Where the rotating log lives: $STUDIO_LOG_FILE if set (absolute, or
+    relative to the studio dir), else the default studio/logs/studio.log.
+    Tests set it to their own temp file before importing this module so a
+    test run never rotates the user's active log (rollover of a file held
+    open by the live server fails on Windows with WinError 32)."""
+    configured = os.environ.get("STUDIO_LOG_FILE")
+    if configured:
+        path = Path(configured)
+        return path if path.is_absolute() else STUDIO_DIR / path
+    return STUDIO_DIR / "logs" / "studio.log"
+
+
 def _setup_logging() -> None:
     """Attach the rotating file handler to the "studio" logger tree
     (idempotent — importing twice must not duplicate handlers)."""
-    logs_dir = STUDIO_DIR / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = _log_file_path()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     root = logging.getLogger("studio")
     if not any(isinstance(h, RotatingFileHandler) for h in root.handlers):
         handler = RotatingFileHandler(
-            logs_dir / "studio.log", maxBytes=1_000_000, backupCount=5,
+            log_path, maxBytes=1_000_000, backupCount=5,
             encoding="utf-8")
         handler.setFormatter(logging.Formatter(
             "%(asctime)s %(levelname)s %(name)s: %(message)s"))

@@ -5,9 +5,13 @@ tests can point it at tests/fixture-campaigns/ (or a writable copy of it)
 instead of the real campaigns/ tree.
 """
 
+import os
 import shutil
+import logging
 import sys
+import tempfile
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pytest
@@ -16,10 +20,32 @@ from fastapi.testclient import TestClient
 STUDIO_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(STUDIO_DIR))
 
+# Point the app's rotating log at a test-owned file BEFORE importing server:
+# server._setup_logging() runs at import time, and the default location is the
+# user's active studio.log — a test run that rotates it while the live server
+# holds the file open fails on Windows (WinError 32) and damages the user's log.
+_TEST_LOG_DIR = Path(tempfile.mkdtemp(prefix="studio-test-logs-"))
+os.environ["STUDIO_LOG_FILE"] = str(_TEST_LOG_DIR / "studio.log")
+
 import server  # noqa: E402
 import spine  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixture-campaigns"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _close_test_log_handlers():
+    """Close test-owned log handlers at teardown so no file handle outlives
+    the run (a later rollover or another process must never contend with a
+    handler this session opened)."""
+    yield
+    for name in ("studio", "studio.server", "studio.jobs"):
+        logger = logging.getLogger(name)
+        for handler in list(logger.handlers):
+            if isinstance(handler, RotatingFileHandler):
+                logger.removeHandler(handler)
+                handler.close()
+    shutil.rmtree(_TEST_LOG_DIR, ignore_errors=True)
 
 
 @pytest.fixture()

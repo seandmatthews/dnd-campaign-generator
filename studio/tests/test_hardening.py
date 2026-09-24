@@ -8,10 +8,12 @@ that live outside the repo root)."""
 
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import canon
 import engines
@@ -357,13 +359,28 @@ def test_canon_works_wherever_the_campaigns_root_lives(tmp_spine_root, monkeypat
 
 
 def test_log_file_created_with_rotating_handler():
-    log_path = server.STUDIO_DIR / "logs" / "studio.log"
-    assert log_path.is_file()  # importing server (conftest) creates it
     handlers = [h for h in logging.getLogger("studio").handlers
                 if isinstance(h, RotatingFileHandler)]
     assert handlers, "the studio logger must carry the rotating file handler"
     assert handlers[0].maxBytes == 1_000_000
     assert handlers[0].backupCount == 5
+    # conftest sets STUDIO_LOG_FILE before importing server: the handler must
+    # target that test-owned file, never the user's active studio.log
+    assert Path(handlers[0].baseFilename).resolve() == \
+        Path(os.environ["STUDIO_LOG_FILE"]).resolve()
+    assert Path(handlers[0].baseFilename).is_file()
+
+
+def test_log_path_env_override(tmp_path, monkeypatch):
+    """STUDIO_LOG_FILE decides where the rotating log lives (absolute or
+    studio-relative); the default stays the user's studio/logs/studio.log."""
+    custom = tmp_path / "logs" / "custom.log"
+    monkeypatch.setenv("STUDIO_LOG_FILE", str(custom))
+    assert server._log_file_path() == custom
+    monkeypatch.setenv("STUDIO_LOG_FILE", "logs/relative.log")
+    assert server._log_file_path() == server.STUDIO_DIR / "logs" / "relative.log"
+    monkeypatch.delenv("STUDIO_LOG_FILE")
+    assert server._log_file_path() == server.STUDIO_DIR / "logs" / "studio.log"
 
 
 def test_job_log_lines_mirror_into_the_log(client):
