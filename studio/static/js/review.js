@@ -173,6 +173,9 @@
         '<header class="review-group-head">' +
           '<div class="review-group-meta">' +
             '<code class="review-file">' + S.esc(group.file) + '</code>' +
+            (meta && meta.legacy
+              ? '<span class="pill pill-provenance" title="The old implementation already committed this week; approving only writes timeline entries.">legacy &mdash; timeline-only</span>'
+              : '') +
             (prov.length
               ? '<span class="review-group-prov">' + S.esc(prov.join(' · ')) + '</span>'
               : '') +

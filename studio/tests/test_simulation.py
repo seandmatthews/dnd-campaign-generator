@@ -81,7 +81,11 @@ def test_week_job_error_keeps_log_and_sets_error(client, tmp_spine_root, monkeyp
     assert "week: 3" in state.read_text(encoding="utf-8")
 
 
-def test_week_job_happy_path_copy_in_out(client, tmp_spine_root, monkeypatch):
+def test_week_job_happy_path_proposal_not_copy_out(
+        client, tmp_spine_root, monkeypatch):
+    """Phase 2 contract: the week job copies the campaign state INTO the
+    engine home (scratch), runs, and stages a PROPOSAL — the engine's output
+    is never copied back into the campaign directly."""
     calls = {}
 
     def fake_tick(engine_root, script, *args, timeout=600, on_line=None):
@@ -94,7 +98,8 @@ def test_week_job_happy_path_copy_in_out(client, tmp_spine_root, monkeypatch):
         if prev.exists():
             (world / "state.yaml.bak").write_text(prev.read_text(encoding="utf-8"),
                                                   encoding="utf-8")
-        prev.write_text("meta:\n  clock:\n    week: 4\n", encoding="utf-8")
+        prev.write_text("meta:\n  clock:\n    week: 4\n"
+                        "meta_extra: kept\n", encoding="utf-8")
         (engine_root / "chronicle").mkdir(exist_ok=True)
         (engine_root / "chronicle" / "0004-the-gate.md").write_text(
             "# Week 4 — The Gate\n\nProse.\n\nHeld (scheduler): ferrymen\n",
@@ -103,6 +108,8 @@ def test_week_job_happy_path_copy_in_out(client, tmp_spine_root, monkeypatch):
 
     monkeypatch.setattr(engines, "run_py", fake_tick)
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_spine_root / "engine-home")
+    campaign_state_before = (tmp_spine_root / "testvale" / "simulation" /
+                             "state.yaml").read_bytes()
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     assert r.status_code == 202
@@ -110,17 +117,18 @@ def test_week_job_happy_path_copy_in_out(client, tmp_spine_root, monkeypatch):
     assert job["status"] == "done", job["error"]
     assert calls["args"] == ("src/tick.py", "--live")
     assert job["result"]["week"] == 4
-    assert job["result"]["chronicle"] == {
-        "week": 4, "title": "The Gate",
-        "file": "simulation/chronicle/0004-the-gate.md"}
+    assert job["result"]["status"] == "pending"
+    assert job["result"]["proposal_id"]
     # held: from the log's HOLDS line and the chronicle's Held line
     assert job["result"]["held"] == ["ferrymen", "wardens"]
-    # copy-out landed in the campaign
-    state = (tmp_spine_root / "testvale" / "simulation" / "state.yaml").read_text(
-        encoding="utf-8")
-    assert "week: 4" in state
-    assert (tmp_spine_root / "testvale" / "simulation" / "chronicle" /
-            "0004-the-gate.md").is_file()
+    # copy-in happened (the engine home saw the campaign state) ...
+    engine_state = (tmp_spine_root / "engine-home" / "world" / "state.yaml")
+    assert engine_state.is_file()
+    # ... but nothing was copied OUT: the campaign is byte-identical
+    assert (tmp_spine_root / "testvale" / "simulation" / "state.yaml"
+            ).read_bytes() == campaign_state_before
+    assert not (tmp_spine_root / "testvale" / "simulation" / "chronicle" /
+                "0004-the-gate.md").exists()
 
 
 def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatch,

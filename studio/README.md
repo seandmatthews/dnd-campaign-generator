@@ -114,12 +114,14 @@ editing is not guaranteed.
 
 ## The engine homes are scratch
 
-`agentic-simulator/world/` is a working area, not canon. A live week
-copies the campaign's state in, runs, and copies the results back **only
-on success** — so a crashed or killed week never corrupts a campaign, and
-the engine home is restored from the campaign on the next boot/week. A
-`.week-run-flag` in `agentic-simulator/world/` marks a run in progress
-(or left over from a crash); the doctor reports it.
+`agentic-simulator/world/` is a working area, not canon. A week run copies
+the campaign's state in, runs against scratch, and stages the output as a
+**proposal** — the campaign itself changes only when you accept the whole
+proposed week (Simulation tab, or `POST .../simulation/proposal/{id}/accept`).
+A crashed or killed run never corrupts a campaign, and the engine home is
+restored from the campaign on the next boot/week. A `.week-run-flag` in
+`agentic-simulator/world/` marks a run in progress (or left over from a
+crash); the doctor reports it.
 
 The flip side of scratch: if you hand-run weeks in agentic-simulator while
 a studio campaign exists, the studio's next week will copy right over your
@@ -145,15 +147,21 @@ Work through the app, or copy the state back into the campaign yourself.
   Review like everything else.
 - **Agent Simulation** — the faction sandbox: create it right on the tab
   (premise + 2-5 factions, no LLM involved — it writes
-  `simulation/state.yaml`), then fog-of-war views, live weeks on dice
-  (costs API credits), chronicles, why-chains, rumor spread. New
-  chronicles are linkified on copy-in: the first mention of each known
-  name becomes a wiki-link, so backlinks answer "where did this faction
-  show up in the story". A finished week proposes timeline entries, also
-  pending.
+  `simulation/state.yaml`), then fog-of-war views, proposed weeks, the
+  chronicle, why-chains, rumor spread. **Propose week** runs the engine
+  against scratch data (costs API credits) and stages a proposal: the diff
+  (clock, resources, events, rumors), the proposed chronicle, and the
+  timeline entries appear at the top of the tab while the live campaign is
+  byte-identical to before. **Accept** publishes the whole week exactly
+  once (idempotent, revision-checked, transactional); **discard** keeps an
+  audit receipt and changes nothing. New chronicles are linkified at
+  accept: the first mention of each known name becomes a wiki-link, so
+  backlinks answer "where did this faction show up in the story".
 - **Review** — one queue for everything awaiting your decision: pending
-  lore, pending page drafts, pending week events, verification findings
-  inline — plus the vault's own advisory findings (dangling wiki-links,
+  lore, pending page drafts, legacy pending week events (timeline-only —
+  the old flow's weeks were already committed; approving never re-applies
+  effects and deleting never undoes a week), verification findings inline —
+  plus the vault's own advisory findings (dangling wiki-links,
   name/alias collisions). Approve writes into the timeline (and stubs the
   entry's new names as pages); delete discards.
 

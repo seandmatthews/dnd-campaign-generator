@@ -314,6 +314,144 @@
     root.appendChild(panel);
   }
 
+  /* ----- proposed week panel (Phase 2: generate -> review -> accept) ----- */
+
+  function diffRows(diff) {
+    const rows = [];
+    const clock = diff && diff.clock;
+    if (clock) {
+      rows.push('<tr><td>Clock</td><td class="num">week ' +
+        S.esc(String(clock.before)) + ' &rarr; week ' +
+        S.esc(String(clock.after)) + '</td></tr>');
+    }
+    const res = (diff && diff.resources) || {};
+    Object.keys(res).forEach((fid) => {
+      Object.keys(res[fid]).forEach((k) => {
+        const ch = res[fid][k];
+        rows.push('<tr><td>' + S.esc(fid) + ' &middot; ' + S.esc(k) +
+          '</td><td class="num">' + S.esc(String(ch.before)) + ' &rarr; ' +
+          S.esc(String(ch.after)) + '</td></tr>');
+      });
+    });
+    const evs = (diff && diff.events_added) || [];
+    if (evs.length) {
+      rows.push('<tr><td>Events added</td><td class="num">' + evs.length + '</td></tr>');
+    }
+    const rums = (diff && diff.rumors_added) || [];
+    if (rums.length) {
+      rows.push('<tr><td>Rumors added</td><td class="num">' + rums.length + '</td></tr>');
+    }
+    if (diff && diff.timeline_entries) {
+      rows.push('<tr><td>Timeline entries</td><td class="num">' +
+        S.esc(String(diff.timeline_entries)) + '</td></tr>');
+    }
+    return rows.join('');
+  }
+
+  function proposalPanel(root, pid) {
+    const panel = S.el(
+      '<section class="panel proposal-panel">' +
+        '<h3 class="panel-title">Loading the proposed week…</h3>' +
+      '</section>'
+    );
+    root.appendChild(panel);
+
+    S.api(S.campUrl('/simulation/proposal')).then((data) => {
+      const p = data && data.proposal;
+      if (!p) { panel.remove(); return; }
+      const diff = data.diff || {};
+      const evs = diff.events_added || [];
+      const rums = diff.rumors_added || [];
+      const chron = (data.chronicles && data.chronicles.length)
+        ? data.chronicles[data.chronicles.length - 1] : null;
+      const held = (p.run_record && p.run_record.held) || [];
+
+      panel.innerHTML = '';
+      panel.appendChild(S.el(
+        '<h3 class="panel-title">Proposed week ' + S.esc(String(p.proposed_week)) +
+          ' &mdash; not canon yet</h3>' +
+        '<p class="panel-note"><strong>The world has not advanced.</strong> ' +
+          'This is a proposal generated from the current state (' +
+          'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
+          'the whole week exactly once; discarding changes nothing.</p>' +
+        '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
+        (evs.length
+          ? '<details class="proposal-events"><summary>Proposed events (' + evs.length + ')</summary><ul class="event-list">' +
+              evs.map((e) => '<li><span class="event-text">' + S.esc(e.text || '') + '</span></li>').join('') +
+            '</ul></details>'
+          : '') +
+        (rums.length
+          ? '<details class="proposal-rumors"><summary>Proposed rumors (' + rums.length + ')</summary><ul class="rumor-list">' +
+              rums.map((r) => '<li class="rumor-entry"><span class="rumor-claim">' + S.esc(r.claim || '') + '</span></li>').join('') +
+            '</ul></details>'
+          : '') +
+        (chron
+          ? '<div class="proposal-chronicle"><h5 class="findings-title">Chronicle (proposed)</h5><article class="chronicle"></article></div>'
+          : '') +
+        '<div class="inline-form proposal-actions">' +
+          '<button type="button" class="btn btn-primary proposal-accept">Accept week ' +
+            S.esc(String(p.proposed_week)) + ' — publish everything</button>' +
+          '<button type="button" class="btn btn-danger proposal-discard">Discard</button>' +
+          '<span class="muted form-note">Accept publishes the state, chronicle and timeline entries as one step; discard keeps the audit receipt only.</span>' +
+        '</div>' +
+        '<div class="proposal-error"></div>'
+      ));
+      if (chron) panel.querySelector('.chronicle').innerHTML = S.md(chron.markdown || '');
+
+      const errBox = panel.querySelector('.proposal-error');
+      const acceptBtn = panel.querySelector('.proposal-accept');
+      const discardBtn = panel.querySelector('.proposal-discard');
+
+      acceptBtn.addEventListener('click', async () => {
+        if (acceptBtn.disabled) return;
+        const ok = await S.confirmRun(
+          'Accepting publishes the whole proposed week into the campaign — ' +
+          'clock, resources, chronicle, timeline — exactly once.'
+        );
+        if (!ok) return;
+        acceptBtn.disabled = true; discardBtn.disabled = true;
+        errBox.innerHTML = '';
+        try {
+          const r = await S.api(S.campUrl('/simulation/proposal/' +
+            encodeURIComponent(p.proposal_id) + '/accept'), { method: 'POST' });
+          S.toast('Week ' + (r.week != null ? r.week : p.proposed_week) +
+            ' is canon — accepted exactly once.', 'ok');
+          if (r.snapshot && (r.snapshot.state === 'failed' ||
+              r.snapshot.state === 'unavailable')) {
+            S.toast('Published, but the history snapshot ' + r.snapshot.state +
+              ' — retry from the campaign summary.', 'error');
+          }
+          S.showTab('sim');
+        } catch (err) {
+          errBox.innerHTML = '';
+          errBox.appendChild(S.errorPanel(err));
+          acceptBtn.disabled = false; discardBtn.disabled = false;
+        }
+      });
+
+      discardBtn.addEventListener('click', async () => {
+        if (discardBtn.disabled) return;
+        const ok = await S.confirmRun(
+          'Discard this proposed week? Nothing was ever written to the ' +
+          'campaign; the proposal stays as an audit receipt.'
+        );
+        if (!ok) return;
+        acceptBtn.disabled = true; discardBtn.disabled = true;
+        errBox.innerHTML = '';
+        try {
+          await S.api(S.campUrl('/simulation/proposal/' +
+            encodeURIComponent(p.proposal_id) + '/discard'), { method: 'POST' });
+          S.toast('Proposal discarded — the campaign never changed.', 'ok');
+          S.showTab('sim');
+        } catch (err) {
+          errBox.innerHTML = '';
+          errBox.appendChild(S.errorPanel(err));
+          acceptBtn.disabled = false; discardBtn.disabled = false;
+        }
+      });
+    }).catch(() => { panel.remove(); });
+  }
+
   S.tabs.sim = async function (container) {
     container.innerHTML = '';
     if (!S.state.campaign) {
@@ -375,6 +513,11 @@
     const viewIds = (sim && Array.isArray(sim.views_available) && sim.views_available.length)
       ? sim.views_available
       : factions.map((f) => f.id).filter(Boolean);
+
+    /* the pending proposal leads the tab: nothing else has moved */
+    if (sim && sim.pending_proposal) {
+      proposalPanel(root, sim.pending_proposal);
+    }
 
     /* header strip: week clock + season + premise */
     const nextWeek = (week != null && !Number.isNaN(Number(week))) ? Number(week) + 1 : '?';
@@ -564,13 +707,14 @@
     if (!factions.length) whyBtn.disabled = true;
     inspRow.appendChild(whyPanel);
 
-    /* run week N — the expensive button */
+    /* run week N — the expensive button: it GENERATES a proposal; only
+       accepting the proposal moves the world */
     const runPanel = S.el(
       '<section class="panel run-panel">' +
-        '<h3 class="panel-title">Advance the world</h3>' +
+        '<h3 class="panel-title">Generate week ' + S.esc(String(nextWeek)) + '</h3>' +
         '<div class="inline-form">' +
-          '<button type="button" class="btn btn-primary run-week-btn">Run week ' + S.esc(String(nextWeek)) + '</button>' +
-          '<span class="muted form-note">Runs the live scheduler, factions, rumors and dice — and writes the chronicle.</span>' +
+          '<button type="button" class="btn btn-primary run-week-btn">Propose week ' + S.esc(String(nextWeek)) + '</button>' +
+          '<span class="muted form-note">Runs the live scheduler, factions and dice against scratch data and stages a proposal — the campaign changes only when you accept it.</span>' +
         '</div>' +
         '<pre class="log-tail hidden run-log"></pre>' +
         '<div class="run-error"></div>' +
@@ -582,7 +726,8 @@
     runBtn.addEventListener('click', async () => {
       if (runBtn.disabled) return;
       const ok = await S.confirmRun(
-        'This runs a real week — it spends API credits and advances the canon clock.'
+        'This runs a real week against scratch data — it spends API credits. ' +
+        'The campaign changes only if you accept the proposal afterwards.'
       );
       if (!ok) return;
       runBtn.disabled = true;
@@ -604,11 +749,11 @@
         const held = Array.isArray(r.held) ? r.held : [];
         if (held.length) S.state.lastHeld = held; // banner on the re-render
         S.toast(
-          'Week ' + (r.week != null ? r.week : nextWeek) + ' is done' +
+          'Week ' + (r.week != null ? r.week : nextWeek) + ' is PROPOSED — review it above' +
           (held.length ? ' (' + held.length + ' faction' + (held.length === 1 ? '' : 's') + ' held)' : ''),
           'ok'
         );
-        S.showTab('sim'); // re-render: new clock, new chronicle, held banner
+        S.showTab('sim'); // re-render: the proposal panel leads the tab
       }).catch((err) => {
         runErr.innerHTML = '';
         runErr.appendChild(S.errorPanel(err));

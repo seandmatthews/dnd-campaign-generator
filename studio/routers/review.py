@@ -281,6 +281,9 @@ def get_review(name: str):
                 # send this back with approve/delete: the request is refused
                 # (409, nothing written) when the file changed since this view
                 "revision": publication.file_revision(path),
+                # pending-week files predate proposal-based weeks: they
+                # describe weeks the OLD implementation already committed
+                "legacy": sub == "simulation",
             })
 
     conflicts = publication.unresolved_conflicts(name)
@@ -292,6 +295,13 @@ def get_review(name: str):
             "(affected: %s)" % (
                 ", ".join(c["transaction"] for c in conflicts),
                 ", ".join(affected) or "no files listed"))
+    if any(f.get("legacy") for f in files):
+        notes.append(
+            "pending-week files are LEGACY timeline-only reviews from before "
+            "proposal-based weeks: the weeks they describe were already "
+            "committed by the old implementation — approving only writes "
+            "timeline entries (never re-applies effects), and deleting one "
+            "does not undo a week")
     out = {"items": items, "files": files}
     if notes:
         out["notes"] = notes

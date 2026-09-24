@@ -507,8 +507,8 @@ def test_linkify_markdown_basics(tmp_spine_root):
 
 
 def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
-    """The week job linkifies its new chronicles on copy-out (campaign copy
-    only; the engine home is scratch)."""
+    """Accepting a proposed week linkifies its new chronicles on publication
+    (campaign copy only; the engine home is scratch)."""
     import engines as eng
 
     state = ("meta:\n  clock:\n    week: 4\n"
@@ -540,12 +540,19 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
     job = wait_for_job(client, r.json()["job_id"])
     assert job["status"] == "done", job["error"]
 
+    # generation staged a proposal: the campaign has NO chronicle yet
     copied = (tmp_spine_root / "testvale" / "simulation" / "chronicle" /
               "0004-the-toll.md")
-    text = copied.read_text(encoding="utf-8")
-    assert "[[wardens]]" in text  # linkified on the campaign copy
+    assert not copied.exists()
     # the engine home keeps its raw copy (scratch is never rewritten)
     raw = (engine_home / "chronicle" / "0004-the-toll.md").read_text(
         encoding="utf-8")
     assert "[[wardens]]" not in raw
+
+    pid = job["result"]["proposal_id"]
+    r = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r.status_code == 200, r.text
+    text = copied.read_text(encoding="utf-8")
+    assert "[[wardens]]" in text  # linkified on the campaign copy at accept
   

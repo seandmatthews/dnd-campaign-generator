@@ -210,7 +210,8 @@ shapes in this document true.
 ### Simulation (B reads/week → G, M3)
 - `GET /api/campaign/{name}/simulation` → `{"clock":{"week","season"},
   "premise":str,"factions":[full dicts],"events":[…],"rumors":[…],
-  "chronicles":[{"week","title","file"}],"views_available":[ids]}`.
+  "chronicles":[{"week","title","file"}],"views_available":[ids],
+  "pending_proposal":id|null}`.
   **404 is a normal state for a fresh campaign** (no state.yaml yet — no
   factions exist); the UI renders it as the create-a-simulation form, not
   an error.
@@ -233,24 +234,48 @@ shapes in this document true.
   (cwd=agentic-simulator; E adds this CLI, printing YAML).
 - `POST /api/campaign/{name}/simulation/week` `{"confirm":true}` → job.
   **422 unless `confirm` is exactly true** (D5: the expensive button).
-  Takes the campaign lock (**409 busy** while another mutating job runs).
-  Interrupted-run detection: the job writes
+  **409 when a pending proposal exists** (accept or discard it first) or a
+  recovery conflict is parked. Takes the campaign lock (**409 busy** while
+  another mutating job runs). Interrupted-run detection: the job writes
   `agentic-simulator/world/.week-run-flag` (JSON: campaign + ISO timestamp)
-  before copy-in and removes it in a `finally` after copy-out; if the
-  server died mid-week, the next boot restores the engine home's
-  `world/state.yaml` from `state.yaml.bak` (when present), deletes the
-  flag, and logs "interrupted week run for campaign X — engine home
-  restored" (`GET /api/health` reports `week_run_in_progress: true` until
-  then). Copy-in: campaign `simulation/state.yaml` → `agentic-simulator/world/state.yaml`.
-  Run: `python -X utf8 src/tick.py <live-mode argv>` — read tick.py's docstring
-  for the exact incantation; report it. Copy-out: new `state.yaml` + any new
-  `chronicle/000N-*.md` → campaign `simulation/`. Result
-  `{"week","chronicle":{...},"held":[faction ids],"pending":str,
-  "pending_entries":n}` — after a SUCCESSFUL week the server also stages
-  `simulation/pending-week-N.yaml` (N = the week just run; see Shared file
-  shapes): one proposed timeline entry per NON-WORLD event, purely
-  mechanical extraction, no LLM call — and commits snapshot
-  `campaign/<name>: week N — <chronicle title>`.
+  before copy-in and removes it in a `finally`; if the server died mid-run,
+  the next boot restores the engine home's `world/state.yaml` from
+  `state.yaml.bak` (when present), deletes the flag, and logs "interrupted
+  week run for campaign X — engine home restored". Copy-in: campaign
+  `simulation/state.yaml` → `agentic-simulator/world/state.yaml`.
+  Run: `python -X utf8 src/tick.py --live`. **Copy-out does NOT touch the
+  campaign**: the engine's output is staged as a proposal bundle under
+  `simulation/proposals/<id>/` (proposed state.yaml, chronicle files,
+  timeline entries, structured diff.json, run_record with the week's RNG
+  seed and model identity — no secrets). Result
+  `{"proposal_id","status":"pending","week","base_week","chronicle":{...},
+  "held":[...],"timeline_entries":n,"diff":{...}}`. Invalid candidates are
+  job errors, never bundles: engine failure, clock not advancing exactly
+  one week, no chronicle written, or every faction call failed. A genuinely
+  quiet scheduler-held week is a valid proposal.
+- `GET /api/campaign/{name}/simulation/proposal` → the pending bundle
+  (`{"proposal":null}` when none): `{"proposal":{"proposal_id","status",
+  "base_week","proposed_week","created","run_record","base_revisions",
+  "input_set_revisions"},"diff":{clock,resources,events_added,
+  rumors_added,timeline_entries},"entries":[...],"chronicles":[{file,title,
+  markdown}]}`. Reads disk, so review survives a restart.
+- `POST /api/campaign/{name}/simulation/proposal/{pid}/accept` → publishes
+  the WHOLE week (state, chronicles, timeline entries) as one transactional
+  publication validated against the base revisions recorded at generation
+  time — an external edit since generation is a 409 (discard and
+  regenerate; nothing written). Advances the clock exactly once; repeating
+  the accept returns the recorded result (`"idempotent":true`). Commits
+  snapshot `campaign/<name>: week N — <title>`. Chronical linkify runs
+  after publication (advisory decoration, as before).
+- `POST /api/campaign/{name}/simulation/proposal/{pid}/discard` → flips the
+  bundle's status to `discarded`; live files were never touched. The bundle
+  stays on disk as an audit receipt; rejected content is never fed into
+  future prompts.
+- Legacy `simulation/pending-week-*.yaml` files (pre-proposal
+  implementations) remain reviewable as **timeline-only** reviews: the
+  weeks they describe were already committed by the old flow — approving
+  writes timeline entries only (never re-applies effects), deleting one
+  does not undo a week. Review GET marks them `"legacy": true`.
 - `GET /api/campaign/{name}/simulation/chronicle/{week}` → `{"week","title","markdown"}`.
 - `POST /api/campaign/{name}/simulation/why` `{"week":int,"faction":str}` → sync.
   Engine: `python -X utf8 src/why.py <week> <faction> --json` (E adds the flag).

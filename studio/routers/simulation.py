@@ -1,27 +1,33 @@
-"""Simulation tab API: reads off the spine, the live week, views, why.
+"""Simulation tab API: reads off the spine, week PROPOSALS, views, why.
 
-The live week (D4 copy-in/copy-out, D5 confirm):
-  0. a `.week-run-flag` (campaign + timestamp) is written into the engine
-     home BEFORE copy-in and removed after copy-out/copy-back; on boot the
-     server restores world/state.yaml from state.yaml.bak when the flag is
-     left behind (restore_interrupted_week, called from server.py's lifespan)
-  1. campaign simulation/state.yaml -> agentic-simulator/world/state.yaml
-     (the engine's previous state is kept as state.yaml.bak first; the
-     engine home is scratch, the campaign is canon)
-  2. run `python -X utf8 src/tick.py --live` (tick.py docstring mode 2),
-     cwd=agentic-simulator, list-form args per D3
-  3. copy back the new state.yaml + any NEW chronicle files (diff by
-     filename); on engine failure nothing is copied back
-  4. result {week, chronicle:{week,title,file}, held:[faction ids]} — held
-     parsed from the tick log's `HOLDS (` lines and the chronicle's
-     `Held (scheduler): a, b` line
-  5. a successful week commits a canon snapshot ("campaign/<name>: week N —
-     title") and takes the per-campaign mutation lock for its whole run
-     (submit_campaign_job: 409 while another mutating job is in flight)
+The live week became a proposal flow (Phase 2):
+  0. a `.week-run-flag` guards the engine home as before; on boot a
+     left-behind flag restores world/state.yaml from state.yaml.bak
+  1. POST .../week captures the base revisions (state.yaml bytes, timeline
+     bytes, chronicle + entity-pages membership fingerprints), copies the
+     state into the engine home (scratch), runs `tick.py --live`
+  2. the engine's OUTPUT IS NOT COPYED BACK: it is staged as a proposal
+     bundle under simulation/proposals/<id>/ (proposed state, chronicles,
+     timeline entries, structured diff, run record). Live clock, resources,
+     rumors, events, timeline, chronicles remain byte-identical.
+  3. GET .../proposal shows the pending bundle (survives restarts);
+     POST .../proposal/{id}/accept publishes the WHOLE bundle through
+     publication.py (revision-validated, transactional, idempotent);
+     POST .../proposal/{id}/discard flips bundle status only.
+  4. exactly one pending proposal per campaign; a new week is refused
+     while one is unresolved.
+  5. Standalone `python src/tick.py --live` keeps its direct-advance
+     behavior — Studio's copy-in/copy-out is the only thing that changed.
+
+Invalid candidates never become approvable bundles: an engine failure, a
+clock that did not advance exactly one week, a missing chronicle, or a run
+where every faction call failed are job errors, not proposals. A genuinely
+quiet scheduler-held week is valid.
 """
 
 import contextlib
 import datetime
+import hashlib
 import json
 import logging
 import re
@@ -34,8 +40,13 @@ from pydantic import BaseModel, StrictBool, field_validator
 import canon
 import engines
 import links
+import llm_client
+import proposals
+import publication
 import spine
 from routers.common import require_campaign, submit_campaign_job
+from routers.common import ensure_publishable_409
+from routers.review import _append_approved, _idempotency_key  # noqa: PLC2701
 
 router = APIRouter()
 
@@ -268,6 +279,8 @@ def get_simulation(name: str):
         "rumors": state.get("rumors") or [],
         "chronicles": spine.chronicles(name),
         "views_available": [f.get("id") for f in factions],
+        "pending_proposal": (proposals.find_pending(name) or {}).get(
+            "proposal_id"),
     }
 
 
@@ -319,6 +332,14 @@ def post_week(name: str, body: WeekBody):
             status_code=404,
             detail="no simulation/state.yaml in this campaign — create the "
                    "sandbox first ('Create a simulation' on this tab)")
+    pending = proposals.find_pending(name)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a proposed week {pending.get('proposed_week')} is "
+                   f"awaiting review ({pending.get('proposal_id')}) — accept "
+                   f"or discard it before generating another")
+    ensure_publishable_409(name)  # a parked conflict blocks campaign writes
     # fast-fail courtesy: the engine home is shared across campaigns, and the
     # job's blocking acquire would otherwise queue a second week behind a
     # half-hour run from a different campaign with no signal at all
@@ -330,35 +351,51 @@ def post_week(name: str, body: WeekBody):
     engines.ENGINE_LOCK.release()
 
     def job(log):
-        sim_dir = d / "simulation"
         # interrupted-run detection: flagged before copy-in, cleared only
-        # when copy-out/copy-back has finished (or failed and rolled back)
+        # when the proposal is staged (or failed and rolled back)
         write_week_flag(name)
         log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
         # the engine home is one shared scratch file across campaigns: the
-        # whole copy-in -> tick -> copy-back sequence is a critical section
+        # whole copy-in -> tick sequence is a critical section
         # (engines.ENGINE_LOCK). Lock order: campaign lock (held by this job)
         # outside, engine lock inside — views/why take only the engine lock.
         with engines.ENGINE_LOCK:
-            return _run_week_locked(name, d, log)
+            return _run_week_proposal(name, d, log)
 
     return submit_campaign_job("sim-week", name, job)
 
 
-def _run_week_locked(name: str, d: Path, log) -> dict:
-    """The week's copy-in -> tick -> copy-back, run under the engine lock
-    (post_week's job holds the campaign lock outside). Flag clearing happens
-    however the block exits."""
-    sim_dir = d / "simulation"
+def _clock_week(doc: dict):
+    return ((doc.get("meta") or {}).get("clock") or {}).get("week")
+
+
+def _run_week_proposal(name: str, d: Path, log) -> dict:
+    """Copy-in -> tick -> STAGE A PROPOSAL, run under the engine lock
+    (post_week's job holds the campaign lock outside). Nothing is copied
+    into the campaign here: the engine's output becomes a pending proposal
+    bundle the DM reviews. Flag clearing happens however the block exits."""
     try:
-        _copy_state_in(name)
-        log("state copied into engine home (previous engine state kept as "
-            "state.yaml.bak)")
+        base_doc = spine.load_state(name)
+        base_week = _clock_week(base_doc)
+        base_revisions = {
+            "simulation/state.yaml": publication.file_revision(
+                d / "simulation" / "state.yaml"),
+            "lore/timeline.yaml": publication.file_revision(
+                d / "lore" / "timeline.yaml"),
+        }
+        input_set_revisions = {
+            "simulation/chronicle": publication.fingerprint_dir(
+                d / "simulation" / "chronicle"),
+            "lore/entities": publication.fingerprint_dir(
+                d / "lore" / "entities"),
+        }
         chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
         before = {p.name for p in chronicle_dir.glob("*.md")} \
             if chronicle_dir.is_dir() else set()
 
+        log("state copied into engine home (previous engine state kept as "
+            "state.yaml.bak)")
         log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
         rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/tick.py",
                                    "--live", timeout=_WEEK_TIMEOUT, on_line=log)
@@ -368,75 +405,117 @@ def _run_week_locked(name: str, d: Path, log) -> dict:
             raise RuntimeError("tick --live failed rc=%s: %s"
                                % (rc, " | ".join(lines[-10:])))
 
-        new_state_file = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
-        engines.copy_file_atomic(new_state_file, sim_dir / "state.yaml")
-        after = {p.name for p in chronicle_dir.glob("*.md")}
-        new_files = after - before
+        engine_state = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
+        try:
+            new_state_text = engine_state.read_text(encoding="utf-8")
+        except OSError as e:
+            raise RuntimeError(f"the engine wrote no state: {e}")
+        after_doc = yaml.safe_load(new_state_text) or {}
+        if not isinstance(after_doc, dict):
+            raise RuntimeError("the engine's state does not parse as a "
+                               "mapping — no proposal staged")
+        proposed_week = _clock_week(after_doc)
+
+        # invalid candidates never become approvable bundles
+        if base_week is not None and proposed_week != base_week + 1:
+            raise RuntimeError(
+                f"the engine did not advance exactly one week (base week "
+                f"{base_week} -> {proposed_week}) — no proposal staged")
+        new_files = sorted(
+            (chronicle_dir.glob("*.md") and
+             {p.name for p in chronicle_dir.glob("*.md")} - before)
+            if chronicle_dir.is_dir() else set())
+        if not new_files:
+            raise RuntimeError("the engine wrote no chronicle — no proposal "
+                               "staged (a run with no chronicle cannot be "
+                               "reviewed)")
+        n_factions = len(base_doc.get("factions") or [])
+        proposal_failed = [ln for ln in lines
+                           if "HOLDS (proposal failed" in ln]
+        scheduler_held = {m.group(1) for ln in lines
+                          if (m := _HOLDS_RE.match(ln))
+                          and "proposal failed" not in ln}
+        if n_factions and proposal_failed \
+                and (len(proposal_failed) + len(scheduler_held)) >= n_factions:
+            tail = " | ".join(proposal_failed[-3:])
+            raise RuntimeError(
+                "every faction call failed or held — reporting generation "
+                f"failure rather than staging an empty week ({tail})")
+
+        # the engine's RNG seed for the proposed week (replay identity; the
+        # LLM responses themselves are nondeterministic and are NOT replayed)
+        run_record = {
+            "engine": "agentic-simulator/src/tick.py --live",
+            "seed": ((after_doc.get("meta") or {}).get("rng_seeds") or {})
+            .get(str(proposed_week)),
+            "model": None, "base_url": None,
+        }
+        try:
+            cfg = llm_client.resolve_config()
+            run_record["model"] = cfg.get("model")
+            run_record["base_url"] = cfg.get("url")
+        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
+            pass
+
+        chronicles = {fn: (chronicle_dir / fn).read_text(encoding="utf-8")
+                      for fn in new_files}
+        entries = build_week_entries(proposed_week,
+                                     after_doc.get("events") or [])
+        pid = proposals.create(
+            name, base_week=base_week, proposed_week=proposed_week,
+            base_revisions=base_revisions,
+            input_set_revisions=input_set_revisions,
+            artifacts={"state": new_state_text, "chronicles": chronicles,
+                       "entries": entries},
+            run_record=run_record, before_state=base_doc)
+        log(f"proposed week {proposed_week} staged ({pid}) — nothing in the "
+            "campaign has changed; review it, then accept or discard")
+
+        held = {m.group(1) for ln in lines if (m := _HOLDS_RE.match(ln))}
         for fn in new_files:
-            engines.copy_file(chronicle_dir / fn, sim_dir / "chronicle" / fn)
-            # vault stage 4: linkify the campaign copy on write — the first
-            # occurrence of each known name/alias becomes a wiki-link, so
-            # entity backlinks answer "where did this show up in the story?"
-            # (names that resolve to nothing are left alone). Advisory: a
-            # linkify failure never fails the week.
-            try:
-                if links.linkify_chronicle(name, fn):
-                    log(f"linked lore names in chronicle/{fn}")
-            except Exception as e:  # noqa: BLE001
-                log(f"chronicle linkify skipped for {fn}: {e}")
-            log(f"copied back chronicle/{fn}")
-
-        new_state = spine.load_state(name)
-        week = (new_state.get("meta") or {}).get("clock", {}).get("week")
-        chronicle = None
-        held = {m.group(1) for ln in lines
-                if (m := _HOLDS_RE.match(ln))}
-        if new_files:
-            # the run's chronicle = the newest new file by mtime; sorted-by-
-            # name is wrong for reruns (0005-a-2.md sorts before 0005-a.md)
-            fn = max(new_files, key=lambda f: (chronicle_dir / f).stat().st_mtime)
-            chronicle = _chronicle_result(name, fn)
-            held |= _held_from_chronicle(sim_dir / "chronicle" / fn)
-
-        result = {"week": week, "chronicle": chronicle, "held": sorted(held)}
-        # M3 approval queue: stage the pending-week skeleton for the week
-        # just run (mechanical extraction; no LLM — the chronicle is already
-        # written, the timeline only needs its skeleton)
-        if week is not None:
-            staged = stage_pending_week(name, week,
-                                        new_state.get("events") or [])
-            result["pending"] = f"simulation/pending-week-{week}.yaml"
-            result["pending_entries"] = len(staged["entries"])
-            if staged["entries"]:
-                log(f"staged {len(staged['entries'])} proposed timeline "
-                    f"entries -> simulation/pending-week-{week}.yaml "
-                    "(review them in the Review tab)")
-            else:
-                log(f"no non-world events in week {week} — staged an empty "
-                    f"pending-week-{week}.yaml")
-
-        # canon snapshot: the clock advanced, the chronicle exists. A failed
-        # or unavailable snapshot is reported in the job result (and the UI),
-        # not just logged — "published; history snapshot failed" is not a
-        # success, and the snapshot retry route can finish the job.
-        snap = canon.snapshot_result(name, _week_message(name, week, chronicle))
-        result["snapshot"] = snap
-        if snap["state"] in ("failed", "unavailable"):
-            log(f"WARNING: the week is published but its history snapshot "
-                f"{snap['state']} — {snap['detail']} (retry: POST "
-                f"/api/campaign/{name}/snapshot)")
-        return result
+            held |= _held_from_chronicle_path(chronicle_dir / fn)
+        diff = proposals.diff_states(base_doc, after_doc, entries)
+        return {
+            "proposal_id": pid, "status": "pending",
+            "week": proposed_week, "base_week": base_week,
+            "chronicle": _chronicle_meta(new_files),
+            "held": sorted(held), "timeline_entries": len(entries),
+            "diff": diff,
+        }
     finally:
         clear_week_flag()
 
 
-def _week_message(name: str, week, chronicle) -> str:
-    msg = f"campaign/{name}: week {week}" if week is not None \
-        else f"campaign/{name}: simulation tick"
-    title = str((chronicle or {}).get("title") or "").strip()
-    if title:
-        msg += f" — {title}"
-    return msg
+def _chronicle_meta(filenames: list) -> dict | None:
+    """The primary chronicle for a run = the newest new file by mtime
+    (sorted-by-name is wrong for reruns: 0005-a-2.md sorts before
+    0005-a.md). Title parsed from the file's `# Week N — Title` heading."""
+    if not filenames:
+        return None
+    chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
+    fn = max(filenames, key=lambda f: (chronicle_dir / f).stat().st_mtime)
+    title = fn
+    try:
+        for ln in (chronicle_dir / fn).read_text(encoding="utf-8").splitlines()[:1]:
+            m = re.match(r"#\s*Week\s+\d+\s*[—–-]\s*(.+?)\s*$", ln)
+            if m:
+                title = m.group(1)
+    except (OSError, UnicodeDecodeError):
+        pass
+    week_m = re.match(r"(\d{4})", fn)
+    return {"week": int(week_m.group(1)) if week_m else None,
+            "title": title, "file": f"simulation/chronicle/{fn}"}
+
+
+def _held_from_chronicle_path(path: Path) -> set:
+    """The chronicle's `Held (scheduler): a, b` line (tick.py write_chronicle)."""
+    held = set()
+    for ln in path.read_text(encoding="utf-8").splitlines():
+        if ln.startswith("Held") and ":" in ln:
+            for tok in re.split(r"[,\s]+", ln.split(":", 1)[1].strip()):
+                if tok:
+                    held.add(tok)
+    return held
 
 
 # ------------------------------------------------- interrupted-week flag
@@ -489,26 +568,6 @@ def restore_interrupted_week():
     return {"campaign": name, "restored": bak.is_file()}
 
 
-def _chronicle_result(name: str, filename: str) -> dict:
-    c = next((c for c in spine.chronicles(name)
-              if c["file"] == f"simulation/chronicle/{filename}"), None)
-    if c is None:
-        return {"week": None, "title": filename, 
-                "file": f"simulation/chronicle/{filename}"}
-    return c
-
-
-def _held_from_chronicle(path: Path) -> set:
-    """The chronicle's `Held (scheduler): a, b` line (tick.py write_chronicle)."""
-    held = set()
-    for ln in path.read_text(encoding="utf-8").splitlines():
-        if ln.startswith("Held") and ":" in ln:
-            for tok in re.split(r"[,\s]+", ln.split(":", 1)[1].strip()):
-                if tok:
-                    held.add(tok)
-    return held
-
-
 def propose_title(text: str, max_words: int = 7, min_words: int = 4) -> str:
     """One short title for a proposed timeline entry. Mechanical, per the
     design doc: the chronicle prose is already written and reviewable — the
@@ -524,12 +583,11 @@ def propose_title(text: str, max_words: int = 7, min_words: int = 4) -> str:
     return " ".join(head).strip()
 
 
-def stage_pending_week(name: str, week: int, events: list) -> dict:
-    """M3: mechanically stage simulation/pending-week-N.yaml — one proposed
-    timeline entry per NON-WORLD event of the week just run (world events
-    are scenery, not faction history). The pending file IS the state of the
-    review; the DM edits/approves it in the Review tab. No LLM call.
-    Returns the staged doc."""
+def build_week_entries(week: int, events: list) -> list:
+    """One proposed timeline entry per NON-WORLD event of the proposed week
+    (world events are scenery, not faction history). Pure: the entries are
+    staged INTO THE PROPOSAL BUNDLE — nothing lands in lore/pending or the
+    timeline until the whole week is accepted."""
     entries = []
     for ev in events or []:
         if not isinstance(ev, dict) or ev.get("week") != week:
@@ -546,19 +604,152 @@ def stage_pending_week(name: str, week: int, events: list) -> dict:
             "text": text,
             "source": f"sim:week-{week}",
         })
-    doc = {
-        "created": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(timespec="seconds"),
-        "week": week,
-        "entries": entries,
+    return entries
+
+
+# -------------------------------------------------------- proposal routes
+
+
+@router.get("/api/campaign/{name}/simulation/proposal")
+def get_proposal(name: str):
+    """The pending proposed week, everything the DM needs to decide, or
+    {"proposal": null}. Reads the bundle from disk, so review works after a
+    server restart."""
+    require_campaign(name)
+    pending = proposals.find_pending(name)
+    if not pending:
+        return {"proposal": None}
+    pid = str(pending.get("proposal_id"))
+    bundle = proposals.load(name, pid)
+    return {
+        "proposal": {
+            "proposal_id": pid,
+            "status": pending.get("status"),
+            "base_week": pending.get("base_week"),
+            "proposed_week": pending.get("proposed_week"),
+            "created": pending.get("created"),
+            "run_record": pending.get("run_record") or {},
+            "base_revisions": pending.get("base_revisions") or {},
+            "input_set_revisions": pending.get("input_set_revisions") or {},
+        },
+        "diff": bundle["diff"],
+        "entries": bundle["entries"],
+        "chronicles": [
+            {"file": f"simulation/chronicle/{fn}", "title": fn,
+             "markdown": text}
+            for fn, text in bundle["chronicles"].items()],
     }
-    path = spine.campaign_dir(name) / "simulation" / f"pending-week-{week}.yaml"
-    # atomic write: a review GET may read this file while the week job is
-    # still finishing
-    spine.write_text_atomic(
-        path,
-        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
-    return doc
+
+
+@router.post("/api/campaign/{name}/simulation/proposal/{pid}/accept")
+def accept_proposal(name: str, pid: str):
+    """Publish the WHOLE proposed week: state, chronicles, and timeline
+    entries are one transactional publication (publication.py), validated
+    against the base revisions recorded at generation time. Idempotent:
+    repeating the accept returns the recorded result. World advancement
+    happens exactly here, exactly once."""
+    require_campaign(name)
+    # a stable key for this exact accept: a repeat (double click, retry,
+    # restart) returns the recorded result instead of applying twice
+    key = hashlib.sha256(
+        json.dumps(["accept-proposal", name, pid]).encode("utf-8")).hexdigest()
+    with spine.campaign_lock(name):
+        ensure_publishable_409(name)
+        prior = publication.receipt(name, key)
+        if prior:
+            return {**prior, "idempotent": True}
+        try:
+            bundle = proposals.load(name, pid)
+        except proposals.ProposalError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        manifest = bundle["manifest"]
+        if manifest.get("status") != "pending":
+            raise HTTPException(
+                status_code=409,
+                detail=f"proposal {pid} is {manifest.get('status')!r}, "
+                       "not pending — refresh and check its state")
+        d = spine.campaign_dir(name)
+
+        entries = bundle["entries"]
+        new_timeline = _append_approved(d, entries)  # 409 on duplicates
+        writes = [{
+            "path": "simulation/state.yaml",
+            "text": bundle["state_text"],
+        }, {
+            "path": "lore/timeline.yaml",
+            "text": yaml.safe_dump(new_timeline, sort_keys=False,
+                                   allow_unicode=True, width=100),
+        }]
+        base = dict(manifest.get("base_revisions") or {})
+        for fn in bundle["chronicles"]:
+            rel = f"simulation/chronicle/{fn}"
+            writes.append({"path": rel, "text": bundle["chronicles"][fn]})
+            base[rel] = publication.ABSENT  # create-only: a file that
+            # appeared in the meantime is an external edit -> conflict
+        try:
+            pub = publication.publish(
+                name, writes, operation=f"accept week "
+                f"{manifest.get('proposed_week')} proposal",
+                base_revisions=base, idempotency_key=key)
+        except publication.RevisionConflict as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"stale proposal: {e} — the campaign changed since "
+                       f"this week was generated. Discard it and generate a "
+                       f"fresh one from the new base. Nothing was written.")
+        except publication.PublicationConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:  # noqa: BLE001 — mid-flight failure
+            raise HTTPException(
+                status_code=500,
+                detail=f"the week could not be published ({e}) — the staged "
+                       f"transaction is kept and will be recovered "
+                       f"automatically when the studio restarts")
+
+        week = manifest.get("proposed_week")
+        result = {
+            "accepted": pid, "week": week,
+            "transaction": pub["transaction"],
+            "chronicles": sorted(bundle["chronicles"]),
+            "timeline_entries": len(entries),
+        }
+        if pub["state"] == "noop":
+            result["noop"] = True
+        publication.record_receipt(name, key, result)
+        proposals.set_status(name, pid, "accepted",
+                             decided_note="published; see the receipt")
+        chron = _chronicle_meta(sorted(bundle["chronicles"]))
+        msg = f"campaign/{name}: week {week}"
+        if chron and chron.get("title"):
+            msg += f" — {chron['title']}"
+        # vault stage 4 advisory decoration after publication, as before
+        for fn in bundle["chronicles"]:
+            try:
+                if links.linkify_chronicle(name, fn):
+                    _log.info("linked lore names in chronicle/%s", fn)
+            except Exception as e:  # noqa: BLE001 — advisory, never blocking
+                _log.warning("chronicle linkify skipped for %s: %s", fn, e)
+        snap = canon.snapshot_result(name, msg)
+        publication.after_snapshot(name, pub["transaction"], snap)
+        result["snapshot"] = snap
+        return result
+
+
+@router.post("/api/campaign/{name}/simulation/proposal/{pid}/discard")
+def discard_proposal(name: str, pid: str):
+    """Discard a proposal: flips the bundle's status only. The live campaign
+    is untouched (it was never touched — generation staged everything), and
+    the bundle stays on disk as an audit receipt. Rejected content is never
+    fed into future prompts."""
+    require_campaign(name)
+    with spine.campaign_lock(name):
+        try:
+            proposals.set_status(name, pid, "discarded",
+                                 decided_note="discarded by the DM; no canon "
+                                              "change ever happened")
+        except proposals.ProposalError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"discarded": pid}
 
 
 @router.get("/api/campaign/{name}/simulation/chronicle/{week}")
