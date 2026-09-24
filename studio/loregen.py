@@ -400,6 +400,7 @@ def generate_entries(campaign_dir, focus="", log=None):
     the world file is missing (the router maps that to 422)."""
     campaign_dir = pathlib.Path(campaign_dir)
     log = log or (lambda line: None)
+    llm_client.begin_run()  # per-run call ceiling; a run stops between calls
 
     geo_path = campaign_dir / "world" / "geography.yaml"
     if not geo_path.is_file():
@@ -562,7 +563,7 @@ def _missing_page_findings(raw_pages, groups, known):
     return kept, findings
 
 
-def generate_missing_pages(campaign_dir, targets=None, log=None):
+def generate_missing_pages(campaign_dir, targets=None, log=None, limit=None):
     """Vault stage 4: dangling wiki-links become fed-or-refused generation
     prompts (obsidian-integration.md §3). The grounding is already present —
     the pages that link the missing name — so the prompt is fed those pages
@@ -571,6 +572,7 @@ def generate_missing_pages(campaign_dir, targets=None, log=None):
     none of the requested targets is one)."""
     campaign_dir = pathlib.Path(campaign_dir)
     log = log or (lambda line: None)
+    llm_client.begin_run()  # per-run call ceiling; a run stops between calls
     cname = campaign_dir.name
 
     groups = {}
@@ -590,6 +592,8 @@ def generate_missing_pages(campaign_dir, targets=None, log=None):
                 "missing-page list may have changed; refresh and retry")
         groups = {k: groups[k] for k in wanted}
     chosen = list(groups.values())[:6]  # the most-linked first
+    if limit is not None:
+        chosen = chosen[:max(0, int(limit))]  # bound the run before it burns calls
 
     blocks = []
     for t in chosen:

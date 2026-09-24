@@ -12,8 +12,10 @@ of existing lore — ever.
 """
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+import briefing
 import knowledge
 import publication
 import spine
@@ -120,3 +122,73 @@ def post_reconcile(name: str, fact_id: str):
         updated = next(f for f in knowledge.load(name)["facts"]
                        if f["id"] == fact_id)
         return {"fact": updated}
+
+
+# ------------------------------------------------- briefing + disclosure
+
+
+@router.get("/api/campaign/{name}/briefing")
+def get_briefing(name: str, since_week: int = 0, focus: str = ""):
+    """The deterministic DM briefing: approved changes after `since_week`,
+    affected factions/places, and unresolved decisions — capped at the
+    first ten items with an honest 'N more not shown' count. `focus` is a
+    comma-separated list of faction/place names. Items marked pending are
+    proposals, never canon."""
+    require_campaign(name)
+    doc = briefing.build(
+        name, since_week=since_week,
+        focus=[f.strip() for f in focus.split(",") if f.strip()])
+    return doc
+
+
+@router.get("/api/campaign/{name}/briefing/markdown",
+            response_class=PlainTextResponse)
+def get_briefing_markdown(name: str, since_week: int = 0, focus: str = ""):
+    """The same briefing as durable Markdown (save/print for the session)."""
+    require_campaign(name)
+    doc = briefing.build(
+        name, since_week=since_week,
+        focus=[f.strip() for f in focus.split(",") if f.strip()])
+    return doc["markdown"]
+
+
+@router.post("/api/campaign/{name}/knowledge/{fact_id}/reveal")
+def post_reveal(name: str, fact_id: str, body: dict | None = None):
+    """Disclose one current public fact to the party — the explicit reveal
+    that makes public-in-world knowledge party knowledge."""
+    require_campaign(name)
+    with spine.campaign_lock(name):
+        week = None
+        if isinstance(body, dict) and body.get("week") is not None:
+            week = int(body["week"])
+        try:
+            briefing.reveal(name, fact_id, week=week)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        return {"revealed": fact_id}
+
+
+@router.post("/api/campaign/{name}/knowledge/{fact_id}/revoke")
+def post_revoke(name: str, fact_id: str):
+    """Undo a reveal (not yet at the table)."""
+    require_campaign(name)
+    with spine.campaign_lock(name):
+        briefing.revoke(name, fact_id)
+        return {"revoked": fact_id}
+
+
+@router.get("/api/campaign/{name}/disclosure")
+def get_disclosure(name: str):
+    """The party-disclosure record: what has deliberately been revealed."""
+    require_campaign(name)
+    return briefing.load_disclosure(name)
+
+
+@router.get("/api/campaign/{name}/disclosure/handout",
+            response_class=PlainTextResponse)
+def get_handout(name: str):
+    """The shareable player handout: ONLY revealed facts. Empty disclosure
+    produces an empty handout with an explanation — never a fallback to the
+    DM briefing."""
+    require_campaign(name)
+    return briefing.handout_markdown(name)

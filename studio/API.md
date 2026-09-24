@@ -372,6 +372,29 @@ shapes in this document true.
   source file after reading it: the recorded revision catches up, the
   approved text is unchanged.
 
+### Briefing + player disclosure (Phase 6 — deterministic, no LLM)
+- `GET /api/campaign/{name}/briefing?since_week=N&focus=A,B` → the DM
+  briefing: approved changes after week N (events, rumors), affected
+  factions/places with refs to the entity page / week chronicle / matching
+  map, and unresolved decisions — a pending proposal is included but always
+  labeled `status: "pending"` (PROPOSED, NOT CANON), stale knowledge facts
+  and pending review counts as `needs_attention`. Capped: `shown` items
+  (default cap 10) plus an honest `omitted` count — never a silent
+  truncation. `markdown` rides in the payload.
+- `GET /api/campaign/{name}/briefing/markdown` → the same briefing as
+  durable Markdown (PlainTextResponse) for save/print.
+- `POST /api/campaign/{name}/knowledge/{id}/reveal` `{"week"?:int}` → moves
+  one CURRENT PUBLIC fact into the party-disclosure record
+  (`simulation/party-knowledge.yaml`). Only public facts reveal: 422
+  otherwise — faction-restricted knowledge has no accidental path to the
+  party. Idempotent. `POST .../knowledge/{id}/revoke` undoes a reveal.
+- `GET /api/campaign/{name}/disclosure` → the record.
+- `GET /api/campaign/{name}/disclosure/handout` → the shareable handout
+  (PlainTextResponse): ONLY the revealed facts' text (+ known-since week).
+  An empty disclosure set produces an empty handout WITH an explanation —
+  never a fallback to the DM briefing. No mechanics, no pending proposals,
+  no secret titles or file paths.
+
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive
   substring grep over the campaign's text files: `lore/*.yaml`,

@@ -156,6 +156,38 @@ def _post_json(cfg, body, timeout, attempts=3):
     raise last or RuntimeError("unreachable: retry loop exhausted")
 
 
+class BudgetExceeded(RuntimeError):
+    """The per-run call ceiling is used up — callers stop between calls with
+    a clear incomplete status instead of burning an unbounded run."""
+
+
+# Per-run metering: an explicit ceiling on provider CALLS (and an
+# approximate token tally for the log). This is a budget guard, not an
+# invoice — the numbers are estimates, never the provider's exact charges.
+# The ceiling is explicit and configurable; a run that hits it stops
+# between calls with an incomplete status.
+def _env_limit():
+    try:
+        return max(1, int(os.environ.get("LLM_MAX_CALLS") or 24))
+    except ValueError:
+        return 24
+_BUDGET = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+
+
+def begin_run(limit=None):
+    """Reset the meter for one logical run (a week, a generation job)."""
+    _BUDGET["calls"] = 0
+    _BUDGET["tokens"] = 0
+    if limit is not None:
+        _BUDGET["limit"] = max(1, int(limit))
+
+
+def run_usage():
+    """Approximate metering for the run so far: {"calls", "tokens"}."""
+    return {"calls": _BUDGET["calls"], "tokens": _BUDGET["tokens"],
+            "limit": _BUDGET["limit"]}
+
+
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
     """Ask the model; on ANY finish_reason == "length", double max_tokens up
@@ -174,10 +206,19 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     }
     best = ""
     while True:
+        if _BUDGET["calls"] >= _BUDGET["limit"]:
+            raise BudgetExceeded(
+                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
+                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+                "incomplete; raise LLM_MAX_CALLS or split the work")
         data = _post_json(cfg, body, timeout)
+        _BUDGET["calls"] += 1
         usage = data.get("usage") or {}
         if usage:
-            _log.info("llm tokens: prompt=%s completion=%s",
+            _BUDGET["tokens"] += int(usage.get("total_tokens") or 0)
+            _log.info("llm tokens (run meter ~%d calls / ~%d tokens — "
+                      "estimates, not the provider's bill): prompt=%s "
+                      "completion=%s", _BUDGET["calls"], _BUDGET["tokens"],
                       usage.get("prompt_tokens", "?"),
                       usage.get("completion_tokens", "?"))
         choice = data["choices"][0]

@@ -62,15 +62,24 @@ def get_missing_pages(name: str):
 def post_missing_pages(name: str, body: dict | None = None):
     """Write the missing pages (fed-or-refused, vault stage 4): each dangling
     wiki-link is a generation target grounded in the pages that link it.
-    Body {"targets"?: [str]} limits the run; a job stages
-    lore/pending-pages-N.yaml for review — nothing lands unreviewed."""
+    Body {"targets"?: [str]} limits the run to those names, and
+    {"limit"?: int} to at most that many — bounding the run BEFORE it burns
+    calls instead of recursively expanding every new dangling link. A job
+    stages lore/pending-pages-N.yaml for review — nothing lands unreviewed.
+    Deferred drafts are left alone either way: regeneration writes the next
+    free pending file and never overwrites one awaiting a decision."""
     d = require_campaign(name)
     targets = None
-    if isinstance(body, dict) and isinstance(body.get("targets"), list):
-        targets = [str(t) for t in body["targets"] if str(t).strip()]
+    limit = None
+    if isinstance(body, dict):
+        if isinstance(body.get("targets"), list):
+            targets = [str(t) for t in body["targets"] if str(t).strip()]
+        if isinstance(body.get("limit"), int) and body["limit"] > 0:
+            limit = body["limit"]
 
     def job(log):
-        result = loregen.generate_missing_pages(d, targets, log=log)
+        result = loregen.generate_missing_pages(d, targets, log=log,
+                                                limit=limit)
         canon.snapshot(name,
                        f"campaign/{name}: stage {result['pages']} pending "
                        "lore pages")

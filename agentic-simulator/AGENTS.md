@@ -54,7 +54,11 @@ it has its own AGENTS.md). The relationship is one-directional and optional:
    propose; nothing in `src/` generates prose the state cannot back up.
 2. Smallest increment that runs. A mechanic must be explainable in one
    sentence before it is implemented.
-3. Machine setup notes: no Node tooling is needed to run this engine
+3. Spending is bounded: every run meters its LLM calls against an
+   explicit ceiling (`LLM_MAX_CALLS`, default 24) and stops between calls
+   with a clear incomplete status when exhausted — the token tally in the
+   log is an estimate, never the provider's bill.
+4. Machine setup notes: no Node tooling is needed to run this engine
    (stdlib Python only); map-engine installs elsewhere in the parent are
    plain `npm install`, engines invoking binaries with `node` directly.
    Dependencies: Python 3.10 + PyYAML. The LLM endpoint/key/model come from

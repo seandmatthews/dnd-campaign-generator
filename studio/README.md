@@ -188,6 +188,29 @@ engines' own artifacts.
 - Every app feature has a CLI equivalent in the engines; the studio is a
   chassis, never a requirement.
 
+## Briefing and the player handout
+
+The Simulation tab's data plus the knowledge records compile — with no LLM
+pass — into a **DM briefing**: changes in a week range, unresolved
+decisions (pending proposals clearly labeled as NOT canon, stale facts,
+pending reviews), capped at ten items with an honest "N more not shown"
+count. `GET /api/campaign/{name}/briefing/markdown` is the durable copy.
+
+The **player handout** is a separate, deliberate step: revealing a fact
+(only current `public` facts can be revealed) copies its approved text into
+the party-disclosure record, and the handout contains only what was
+revealed. Public in the world is not automatically known by the party —
+the reveal IS the discovery. An empty disclosure set exports an empty
+handout with an explanation, never the DM briefing.
+
+## Budget
+
+Every LLM-consuming run (a week, a lore generation) meters its provider
+calls against an explicit ceiling (`LLM_MAX_CALLS`, default 24) and stops
+between calls with a clear incomplete status when it runs out — a budget
+guard, not a billing estimate; the token tally in the logs is approximate
+and never presented as the provider's exact charges.
+
 ## The engines
 
 The studio invokes three sibling projects as headless CLIs and never

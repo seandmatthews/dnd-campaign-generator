@@ -142,6 +142,37 @@ def _post_json(cfg, body, timeout, attempts=3):
     raise last or RuntimeError("unreachable: retry loop exhausted")
 
 
+class BudgetExceeded(RuntimeError):
+    """The per-run call ceiling is used up — the run stops between calls
+    with a clear incomplete status instead of spending without a bound."""
+
+
+# Per-run metering: an explicit ceiling on provider CALLS (env
+# LLM_MAX_CALLS, default 24 — a week is ~2 calls per faction plus
+# narration) and an approximate token tally. Estimates, never the
+# provider's exact charges; the ceiling is the budget, the tally is the log.
+def _env_limit():
+    try:
+        return max(1, int(os.environ.get("LLM_MAX_CALLS") or 24))
+    except ValueError:
+        return 24
+
+_BUDGET = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+
+
+def begin_run(limit=None):
+    """Reset the meter for one logical run (tick.py's run_live)."""
+    _BUDGET["calls"] = 0
+    _BUDGET["tokens"] = 0
+    if limit is not None:
+        _BUDGET["limit"] = max(1, int(limit))
+
+
+def run_usage():
+    return {"calls": _BUDGET["calls"], "tokens": _BUDGET["tokens"],
+            "limit": _BUDGET["limit"]}
+
+
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
     """Ask the model, letting it think as long as it needs: reasoning models
@@ -150,6 +181,11 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     mid-sentence one — with finish_reason "length". When that happens,
     double the budget and retry, keeping the longest answer seen. Token
     usage is printed to stderr per call so cost is never invisible."""
+    if _BUDGET["calls"] >= _BUDGET["limit"]:
+        raise BudgetExceeded(
+            f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
+            f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+            "incomplete; raise LLM_MAX_CALLS to allow a longer run")
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -166,9 +202,13 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     best = ""
     while True:
         data = _post_json(cfg, body, timeout)
+        _BUDGET["calls"] += 1
         usage = data.get("usage") or {}
         if usage:
-            print(f"  [llm] tokens: prompt={usage.get('prompt_tokens', '?')} "
+            _BUDGET["tokens"] += int(usage.get("total_tokens") or 0)
+            print(f"  [llm] tokens (run meter ~{_BUDGET['calls']} calls / "
+                  f"~{_BUDGET['tokens']} tokens — estimates, not the "
+                  f"provider's bill): prompt={usage.get('prompt_tokens', '?')} "
                   f"completion={usage.get('completion_tokens', '?')}", file=sys.stderr)
         choice = data["choices"][0]
         content = choice["message"].get("content") or ""

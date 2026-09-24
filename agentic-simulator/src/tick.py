@@ -161,6 +161,7 @@ def run_live(state):
     seed = random.SystemRandom().getrandbits(31)
     resolve.set_rng(seed)
     state.setdefault("meta", {}).setdefault("rng_seeds", {})[str(week)] = seed
+    llm.begin_run()  # explicit per-run call ceiling: stop between calls
 
     rumors.spread(state, state.get("rumors", []))   # rumors move before actions do
 
