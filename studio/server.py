@@ -35,6 +35,7 @@ from starlette.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import spine  # noqa: E402
+import publication  # noqa: E402
 from routers import campaigns, lore, maps, review, simulation, system  # noqa: E402
 
 STUDIO_DIR = Path(__file__).resolve().parent
@@ -82,9 +83,24 @@ log = logging.getLogger("studio.server")
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Boot repair: a .week-run-flag left by a crashed week run restores the
-    engine home from its backup (see routers/simulation.restore_interrupted_week)."""
+    """Boot repair, before serving: a .week-run-flag left by a crashed week
+    run restores the engine home (routers/simulation.restore_interrupted_week);
+    open publication transactions roll forward or park as conflicts
+    (publication.recover_campaign)."""
     simulation.restore_interrupted_week()
+    for camp in spine.list_campaigns():
+        try:
+            recovered = publication.recover_campaign(camp["name"])
+        except Exception as e:  # noqa: BLE001 — one bad campaign boots alone
+            log.error("publication recovery failed for %s: %s", camp["name"], e)
+            continue
+        if recovered["recovered"]:
+            log.info("publication recovery for %s: rolled forward %s",
+                     camp["name"], ", ".join(recovered["recovered"]))
+        if recovered["conflicts"]:
+            log.warning("publication recovery for %s: %s parked as conflict — "
+                        "resolve before approving in that campaign",
+                        camp["name"], ", ".join(recovered["conflicts"]))
     log.info("campaign studio up — http://127.0.0.1:%d", PORT)
     yield
 

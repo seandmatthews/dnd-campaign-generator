@@ -80,41 +80,64 @@ def _ensure_repo(root) -> bool:
 def snapshot(campaign_name: str, message: str):
     """Commit the campaign's current state with `message`. Returns the short
     commit hash, or None when skipped (git absent / init failed / nothing to
-    commit / any VCS failure — all logged, never raised)."""
+    commit / any VCS failure — all logged, never raised). Compatibility
+    wrapper around snapshot_result(); new callers should use that and
+    surface the state."""
+    return snapshot_result(campaign_name, message).get("commit")
+
+
+def snapshot_result(campaign_name: str, message: str) -> dict:
+    """Commit with a reportable outcome:
+      {"state": "committed"|"no_change"|"unavailable"|"failed",
+       "commit": short sha or None, "detail": str}
+    committed = history recorded; no_change = nothing differed (a no-op is
+    success, not failure); unavailable = git missing so no undo trail exists
+    (distinct from a command failing); failed = git ran and failed. The
+    mutation itself is never blocked either way (a VCS failure never stands
+    between the DM and their files)."""
     if not (GIT and AVAILABLE):
         log.info("canon snapshot skipped (git unavailable): %s", message)
-        return None
+        return {"state": "unavailable", "commit": None,
+                "detail": "git is not installed or disabled — no history "
+                          "snapshot was made (the files themselves are fine)"}
     try:
         d = spine.campaign_dir(campaign_name)
     except spine.CampaignNotFound:
         log.warning("canon snapshot skipped (unknown campaign %s)",
                     campaign_name)
-        return None
+        return {"state": "failed", "commit": None,
+                "detail": f"unknown campaign: {campaign_name}"}
     root = d.parent
     if not _ensure_repo(root):
-        return None
+        return {"state": "unavailable", "commit": None,
+                "detail": "the campaigns workspace could not be initialized "
+                          "as a git repository"}
 
     with _SNAPSHOT_LOCK:
         return _snapshot_locked(root, campaign_name, message)
 
 
-def _snapshot_locked(root, campaign_name: str, message: str):
+def _snapshot_locked(root, campaign_name: str, message: str) -> dict:
     message = " ".join(str(message).split())[:MESSAGE_MAX]
     rc, out, err = _git(root, "add", "-A", "--", campaign_name)
     if rc != 0:
         log.warning("canon snapshot failed at git add (%s): %s",
                     campaign_name, (err or out).strip()[-300:])
-        return None
+        return {"state": "failed", "commit": None,
+                "detail": "git add failed: " + (err or out).strip()[-200:]}
     rc, out, err = _git(root, "commit", "-m", message,
                         "--only", "--", campaign_name)
     if rc != 0:
         if "nothing to commit" in (out + err):
             log.info("canon snapshot: nothing to commit for %s", campaign_name)
-        else:
-            log.warning("canon snapshot failed at git commit (%s): %s",
-                        campaign_name, (err or out).strip()[-300:])
-        return None
+            return {"state": "no_change", "commit": None,
+                    "detail": "nothing to commit — the campaign files were "
+                              "already identical to the last snapshot"}
+        log.warning("canon snapshot failed at git commit (%s): %s",
+                    campaign_name, (err or out).strip()[-300:])
+        return {"state": "failed", "commit": None,
+                "detail": "git commit failed: " + (err or out).strip()[-200:]}
     m = _COMMIT_RE.search(out)
     sha = m.group(1) if m else "?"
     log.info("canon snapshot %s %s", sha, message)
-    return sha
+    return {"state": "committed", "commit": sha, "detail": message}

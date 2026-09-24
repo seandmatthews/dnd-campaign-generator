@@ -102,6 +102,17 @@ def test_findings_budget_skip_notes(tmp_spine_root):
     assert notes and "skipped" in notes[0]
 
 
+def _core(r):
+    """The pre-transactional response fields. Approve/delete now also carry
+    `transaction` and `snapshot` (Phase 1: recoverable publication + visible
+    snapshot status) — intentional contract change, asserted separately."""
+    d = dict(r.json())
+    d.pop("transaction", None)
+    d.pop("snapshot", None)
+    d.pop("noop", None)
+    return d
+
+
 def test_approve_assigns_next_free_tids_and_deletes_empty_pending(
         client, tmp_spine_root):
     _write_pending(tmp_spine_root, "simulation/pending-week-8.yaml", {
@@ -116,9 +127,11 @@ def test_approve_assigns_next_free_tids_and_deletes_empty_pending(
     pending = tmp_spine_root / "testvale" / "simulation" / "pending-week-8.yaml"
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "simulation/pending-week-8.yaml", "all": True})
-    assert r.status_code == 200 and r.json() == {
+    assert r.status_code == 200 and _core(r) == {
         "approved": 2, "entries": 2, "pages": 0, "pages_skipped": 0,
         "stubs": 0}
+    assert r.json()["snapshot"]["state"] == "committed"
+    assert r.json()["transaction"]
     assert not pending.exists()
     entries = _timeline_entries(tmp_spine_root)
     assert [e["id"] for e in entries] == ["t0001", "t0002", "t0003", "t0004"]
@@ -141,7 +154,7 @@ def test_approve_keeps_t_ids_and_refuses_duplicates(client, tmp_spine_root):
     path.write_text(yaml.safe_dump(dup, sort_keys=False), encoding="utf-8")
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "lore/pending-entries-1.yaml", "all": True})
-    assert r.status_code == 200 and r.json() == {
+    assert r.status_code == 200 and _core(r) == {
         "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
         "stubs": 0}
     entries = _timeline_entries(tmp_spine_root)
@@ -163,12 +176,12 @@ def test_delete_removes_entries_and_empty_file(client, tmp_spine_root):
     r = client.post("/api/campaign/testvale/review/delete",
                     json={"file": "lore/pending-entries-9.yaml",
                           "ids": ["t0008"]})
-    assert r.status_code == 200 and r.json() == {"deleted": 1}
+    assert r.status_code == 200 and _core(r) == {"deleted": 1}
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert [e["id"] for e in doc["entries"]] == ["t0007"]
     r = client.post("/api/campaign/testvale/review/delete",
                     json={"file": "lore/pending-entries-9.yaml", "all": True})
-    assert r.status_code == 200 and r.json() == {"deleted": 1}
+    assert r.status_code == 200 and _core(r) == {"deleted": 1}
     assert not path.exists()
     assert len(_timeline_entries(tmp_spine_root)) == 2  # timeline untouched
 

@@ -240,10 +240,12 @@ def post_create_state(name: str, body: CreateStateBody):
     # write plus a git commit, same as review approve/delete.
     with spine.campaign_lock(name):
         spine.write_state(name, doc)
-        canon.snapshot(name, f"campaign/{name}: simulation "
-                             f"{'replaced' if replaced else 'created'}")
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: simulation "
+                  f"{'replaced' if replaced else 'created'}")
     return {"ok": True, "week": 0,
-            "factions": [f["id"] for f in doc["factions"]]}
+            "factions": [f["id"] for f in doc["factions"]],
+            "snapshot": snap}
 
 
 @router.get("/api/campaign/{name}/simulation")
@@ -413,8 +415,16 @@ def _run_week_locked(name: str, d: Path, log) -> dict:
                 log(f"no non-world events in week {week} — staged an empty "
                     f"pending-week-{week}.yaml")
 
-        # canon snapshot: the clock advanced, the chronicle exists
-        canon.snapshot(name, _week_message(name, week, chronicle))
+        # canon snapshot: the clock advanced, the chronicle exists. A failed
+        # or unavailable snapshot is reported in the job result (and the UI),
+        # not just logged — "published; history snapshot failed" is not a
+        # success, and the snapshot retry route can finish the job.
+        snap = canon.snapshot_result(name, _week_message(name, week, chronicle))
+        result["snapshot"] = snap
+        if snap["state"] in ("failed", "unavailable"):
+            log(f"WARNING: the week is published but its history snapshot "
+                f"{snap['state']} — {snap['detail']} (retry: POST "
+                f"/api/campaign/{name}/snapshot)")
         return result
     finally:
         clear_week_flag()

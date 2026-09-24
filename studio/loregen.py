@@ -29,6 +29,7 @@ import yaml
 import engines
 import links
 import llm_client
+import publication
 import spine
 
 
@@ -38,6 +39,22 @@ class FedOrRefused(Exception):
 
 
 # --------------------------------------------------------------------- files
+
+def _input_provenance(campaign_dir: pathlib.Path, files, dirs=()) -> dict:
+    """Revisions of everything a generation run read, written into the
+    pending doc: approval re-checks them and refuses a stale draft (409) so
+    prose derived from superseded canon never lands. files = campaign-rel
+    paths (byte revisions); dirs = campaign-rel directories (membership
+    fingerprints — a page created or deleted later invalidates the draft)."""
+    return {
+        "base_revisions": {
+            rel: publication.file_revision(campaign_dir / rel)
+            for rel in files},
+        "input_fingerprints": {
+            rel: publication.fingerprint_dir(campaign_dir / rel)
+            for rel in dirs},
+    }
+
 
 def _read(path: pathlib.Path) -> str:
     try:
@@ -429,12 +446,17 @@ def generate_entries(campaign_dir, focus="", log=None):
     pending_path = _next_pending_path(campaign_dir)
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
+    provenance = _input_provenance(
+        campaign_dir,
+        files=["world/geography.yaml", "lore/timeline.yaml"]
+              + [f"lore/style/{fn}" for fn in styles],
+        dirs=["lore/entities"])
     # atomic: under the campaign lock (submit_campaign_job), but a concurrent
     # review GET may read this file mid-write — tmp+replace keeps it whole
     spine.write_text_atomic(
         pending_path,
         yaml.safe_dump({"entries": entries, "created": created,
-                        "focus": focus or ""},
+                        "focus": focus or "", **provenance},
                        sort_keys=False, allow_unicode=True, width=100))
     pending_name = f"lore/{pending_path.name}"
     log(f"staged {len(entries)} entries to {pending_name} — nothing touches "
@@ -602,6 +624,12 @@ def generate_missing_pages(campaign_dir, targets=None, log=None):
     pending_path = _next_pending_path(campaign_dir, kind="pages")
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
+    provenance = _input_provenance(
+        campaign_dir,
+        files=sorted({t_rel for t in chosen for t_rel in t["sources"]}
+                     | {"world/geography.yaml"}
+                     | {f"lore/style/{fn}" for fn in styles}),
+        dirs=["lore/entities"])
     entries = [{"id": f"page-{i + 1}", "title": p["name"],
                 "text": p["body"], "source": "authored",
                 "page": {"kind": p["kind"], "aliases": p["aliases"]},
@@ -610,7 +638,7 @@ def generate_missing_pages(campaign_dir, targets=None, log=None):
     spine.write_text_atomic(
         pending_path,
         yaml.safe_dump({"entries": entries, "created": created,
-                        "mode": "missing-pages"},
+                        "mode": "missing-pages", **provenance},
                        sort_keys=False, allow_unicode=True, width=100))
     pending_name = f"lore/{pending_path.name}"
     log(f"staged {len(entries)} page drafts to {pending_name} — nothing "

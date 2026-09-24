@@ -99,6 +99,19 @@ because the history *is* the undo. `git -C campaigns log -- <name>` shows
 the trail; a bad approval or a bad week is one checkout away from gone.
 Zipping `campaigns/` carries the undo history with it.
 
+Snapshots are reported, not assumed: approve/delete/week results carry
+`snapshot: {"state": "committed|no_change|unavailable|failed", ...}`. Only
+`committed` (and the benign `no_change`) mean the undo trail actually has
+the change; if git was missing or failed, the UI says so and
+`POST /api/campaign/{name}/snapshot` retries. Approvals are also
+**transactional** (studio/publication.py): a crash mid-approval is
+completed (or parked as a visible conflict, never silently resolved) on
+the next boot, and re-submitting the same approval answers with its
+recorded result instead of applying twice. An editor that ignores the
+app (Obsidian) can still make a staged approval stale — that is a 409
+with nothing written, not a silent overwrite; exclusive cross-process
+editing is not guaranteed.
+
 ## The engine homes are scratch
 
 `agentic-simulator/world/` is a working area, not canon. A live week

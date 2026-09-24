@@ -15,12 +15,23 @@ provisional ids get the next free t-number), the pending file is rewritten
 without them and deleted when empty. Nothing lands unreviewed (guardrail 3):
 these two routes are the ONLY writers from pending into the spine.
 
+Approval is transactional (studio/publication.py): the timeline write, the
+pending rewrite, page drafts and stub pages are ONE publication — staged
+first, then applied, then verified; a crash leaves an open transaction that
+boot recovery rolls forward. Each request carries the revision of the
+pending file the user actually viewed (plus, for generated drafts, the
+source revisions and directory fingerprints the generator recorded in the
+doc); a mismatch answers 409 with the affected paths and writes nothing.
+Repeated submissions return the recorded result (receipts) instead of
+applying twice. Git snapshot outcomes are reported in the response, not
+just logged.
+
 All mutations run under the SHARED per-campaign lock (spine.campaign_lock,
-blocking — an in-flight week/generation job finishes first), and each
-success commits a canon snapshot ("campaign/<name>: approve/delete N
-pending entries").
+blocking — an in-flight week/generation job finishes first).
 """
 
+import hashlib
+import json
 import re
 import time
 from pathlib import Path, PurePosixPath
@@ -32,8 +43,10 @@ from pydantic import BaseModel
 import canon
 import engines
 import links
+import publication
 import spine
 from routers.common import require_campaign
+from routers.common import ensure_publishable_409
 
 router = APIRouter()
 
@@ -52,6 +65,10 @@ class ReviewBody(BaseModel):
     file: str
     ids: list[str] | None = None
     all: bool | None = None
+    # revision of the pending file the user actually viewed (GET review
+    # returns it per file). Absent = legacy client: the apply still runs the
+    # other guards, but a content change since the view cannot be detected.
+    expected_revision: str | None = None
 
 
 # ------------------------------------------------------------------ plumbing
@@ -261,8 +278,20 @@ def get_review(name: str):
                 "week": doc.get("week"),
                 "entries": len(entries),
                 "findings": sum(len(v) for v in per_entry.values()) + len(loose),
+                # send this back with approve/delete: the request is refused
+                # (409, nothing written) when the file changed since this view
+                "revision": publication.file_revision(path),
             })
 
+    conflicts = publication.unresolved_conflicts(name)
+    if conflicts:
+        affected = sorted({f for c in conflicts for f in c["conflicts"]})
+        notes.append(
+            "recovery conflict: a previous approval crashed and %s was "
+            "edited externally — resolve it before approving more "
+            "(affected: %s)" % (
+                ", ".join(c["transaction"] for c in conflicts),
+                ", ".join(affected) or "no files listed"))
     out = {"items": items, "files": files}
     if notes:
         out["notes"] = notes
@@ -321,12 +350,13 @@ def _existing_tnums(entries: list) -> set:
     return out
 
 
-def _append_approved(campaign_dir: Path, chosen: list) -> None:
-    """Append entries into lore/timeline.yaml, keeping ^t\\d+$ ids and
-    assigning the next free t-number to provisional ones. A batch whose
-    title+text is already in the timeline is refused (409) — that is the
-    crash-between-writes recovery path: the append landed, the pending
-    rewrite did not, and re-approving would silently duplicate."""
+def _append_approved(campaign_dir: Path, chosen: list) -> dict:
+    """The new lore/timeline.yaml document with `chosen` appended, keeping
+    ^t\\d+$ ids and assigning the next free t-number to provisional ones. A
+    batch whose title+text is already in the timeline is refused (409) —
+    that is the crash-between-writes recovery path: the append landed, the
+    pending rewrite did not, and re-approving would silently duplicate.
+    Returns the doc; the caller publishes it (no write here)."""
     doc, entries = _load_timeline(campaign_dir)
     existing = _existing_tnums(entries)
     seen = {(str(e.get("title") or ""), str(e.get("text") or ""))
@@ -362,106 +392,263 @@ def _append_approved(campaign_dir: Path, chosen: list) -> None:
     else:
         raise HTTPException(status_code=422,
                             detail="lore/timeline.yaml has an unsupported shape")
-    _timeline_path(campaign_dir).parent.mkdir(parents=True, exist_ok=True)
-    spine.write_text_atomic(
-        _timeline_path(campaign_dir),
-        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
+    return doc
 
 
-def _rewrite_pending(path: Path, doc: dict, keep: list) -> None:
-    if keep:
-        out = {k: v for k, v in doc.items() if k != "entries"}
-        out["entries"] = keep
-        spine.write_text_atomic(
-            path, yaml.safe_dump(out, sort_keys=False, allow_unicode=True, width=100))
-    else:
-        path.unlink()
+def _page_rel(entry: dict) -> str:
+    """The campaign-relative path an entry's page draft would create."""
+    filename = spine.entity_page_filename(str(entry.get("title") or ""))
+    return f"lore/entities/{filename}"
 
 
-def _approve_page_draft(d: Path, entry: dict) -> bool:
-    """Write one approved page draft into the vault (create-only). False
-    when a page of that name already exists — the hand page wins, the draft
-    is discarded."""
+def _page_write(name: str, entry: dict) -> tuple[str, str]:
+    """(rel path, exact page text) for one approved page draft. The caller
+    pins the path's absence in the publication's base revisions, so a page
+    created between the plan and the publish aborts the whole approval
+    (nothing written) instead of clobbering a hand page."""
     page = entry.get("page") or {}
-    try:
-        spine.write_entity_page(
-            d.name, str(entry.get("title") or ""),
-            {"kind": str(page.get("kind") or ""),
-             "name": str(entry.get("title") or ""),
-             "aliases": [str(a) for a in (page.get("aliases") or [])]},
-            str(entry.get("text") or ""))
-        return True
-    except (spine.CampaignError, OSError):
-        return False
+    text = spine.entity_page_text(
+        str(entry.get("title") or ""),
+        {"kind": str(page.get("kind") or ""),
+         "name": str(entry.get("title") or ""),
+         "aliases": [str(a) for a in (page.get("aliases") or [])]},
+        str(entry.get("text") or ""))
+    return _page_rel(entry), text
 
 
-def _stub_new_names(name: str, entry: dict) -> int:
+def _stub_writes(name: str, entry: dict) -> list[tuple[str, str]]:
     """Vault stage 4: approved entries stub their validated new_names as
     pages (kind 'unknown') — the graph grows with the story instead of
-    lagging it. Create-only: an existing page is never clobbered."""
-    stubbed = 0
+    lagging it. Same absence-pinning contract as page drafts: an existing
+    page is never clobbered (here: skipped, the hand page wins)."""
     title = str(entry.get("title") or "")
     when = str(entry.get("when") or "")
+    out = []
     for new in entry.get("new_names") or []:
         new = str(new).strip()
         if not new:
             continue
-        try:
-            spine.write_entity_page(
-                name, new, {"kind": "unknown", "name": new},
-                f"(Stub page — first named in '{title}' ({when}). Add lore "
-                "here, or in Obsidian.)")
-            stubbed += 1
-        except (spine.CampaignError, OSError):
-            continue
-    return stubbed
+        text = spine.entity_page_text(
+            new, {"kind": "unknown", "name": new},
+            f"(Stub page — first named in '{title}' ({when}). Add lore "
+            "here, or in Obsidian.)")
+        out.append((f"lore/entities/{spine.entity_page_filename(new)}", text))
+    return out
+
+
+def _idempotency_key(name: str, body: ReviewBody, op: str,
+                     content_fallback: str) -> str:
+    """A stable key for this exact approval request: repeating it (double
+    click, retry, restart) returns the recorded result instead of applying
+    twice. The viewed revision is part of the key — approving freshly
+    viewed content after the file changed is a NEW operation, not a
+    repeat; legacy clients (no revision) fall back to the current file
+    bytes so a blind repeat with changed content is not swallowed."""
+    payload = json.dumps(
+        [name, op, body.file, body.ids, bool(body.all),
+         body.expected_revision or content_fallback],
+        ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _prior_result(name: str, body: ReviewBody, op: str,
+                  content_fallback: str):
+    """The recorded result for this exact request, when one exists. With a
+    viewed revision the receipt is reachable even after the pending file is
+    gone (a full approval deletes it) — that retry must answer, not 404."""
+    if body.expected_revision:
+        prior = publication.receipt(
+            name, _idempotency_key(name, body, op, content_fallback))
+        if prior:
+            return {**prior, "idempotent": True}
+    return None
+
+
+def _receipt_key(name: str, body: ReviewBody, op: str,
+                 content_fallback: str) -> str:
+    return _idempotency_key(name, body, op, content_fallback)
+
+
+def _revision_conflict_409(e: publication.RevisionConflict) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail=f"stale review: {e} — refresh the review queue, re-read the "
+               f"draft, and submit again. Nothing was written.")
 
 
 @router.post("/api/campaign/{name}/review/approve")
 def post_approve(name: str, body: ReviewBody):
     d = require_campaign(name)
     with spine.campaign_lock(name):  # blocking: an in-flight job finishes first
+        ensure_publishable_409(name)
+        prior = _prior_result(name, body, "approve", "")
+        if prior:
+            return prior
         path, inside = _pending_file(d, body.file)
-        doc = _load_pending(path, inside)
-        chosen_idx = _select(doc, body)
-        chosen = [dict(doc["entries"][k]) for k in chosen_idx]
-        pages = [e for e in chosen if isinstance(e.get("page"), dict)]
-        entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
-        written, skipped = 0, 0
-        if pages:
+        try:
+            key = _receipt_key(name, body, "approve",
+                               publication.file_revision(path))
+            prior = publication.receipt(name, key)
+            if prior:
+                return {**prior, "idempotent": True}
+            doc = _load_pending(path, inside)
+            chosen_idx = _select(doc, body)
+            chosen = [dict(doc["entries"][k]) for k in chosen_idx]
+            pages = [e for e in chosen if isinstance(e.get("page"), dict)]
+            entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
+
+            writes: list[dict] = []
+            base: dict = {}
+            if body.expected_revision:
+                base[inside] = body.expected_revision
+            # a generated draft pins what its generator read (source files'
+            # byte revisions + directory fingerprints); a stale source
+            # refuses the whole approval so the DM regenerates instead of
+            # approving prose derived from superseded canon
+            for rel, rev in (doc.get("base_revisions") or {}).items():
+                base[str(rel)] = str(rev)
+            for rel, fp in (doc.get("input_fingerprints") or {}).items():
+                current = publication.fingerprint_dir(d / rel)
+                if current != fp:
+                    raise publication.RevisionConflict(
+                        f"{rel} membership changed since this draft was "
+                        f"generated (a page was created or deleted)")
+
+            written, skipped, stubbed = 0, 0, 0
             for e in pages:
-                if _approve_page_draft(d, e):
-                    written += 1
-                else:
-                    skipped += 1
-        stubbed = 0
-        if entries:
-            _append_approved(d, entries)
-            for e in entries:
-                stubbed += _stub_new_names(name, e)
-        keep = [e for k, e in enumerate(doc["entries"]) if k not in set(chosen_idx)]
-        _rewrite_pending(path, doc, keep)
+                try:
+                    rel = _page_rel(e)
+                except spine.CampaignError:
+                    skipped += 1  # a title no filename can be made from:
+                    continue      # the draft is discarded, the hand wins
+                if (d / rel).exists():
+                    skipped += 1  # the hand page wins, the draft is discarded
+                    continue
+                rel_written, text = _page_write(name, e)
+                writes.append({"path": rel_written, "text": text})
+                base[rel_written] = publication.ABSENT  # create-only, race-safe
+                written += 1
+            new_timeline = None
+            if entries:
+                new_timeline = _append_approved(d, entries)
+                writes.append({
+                    "path": "lore/timeline.yaml",
+                    "text": yaml.safe_dump(new_timeline, sort_keys=False,
+                                           allow_unicode=True, width=100)})
+                for e in entries:
+                    try:
+                        stubs = _stub_writes(name, e)
+                    except spine.CampaignError:
+                        stubs = []
+                    for rel, text in stubs:
+                        if (d / rel).exists() \
+                                or any(w["path"] == rel for w in writes):
+                            continue  # a hand page or this batch's own
+                                      # page draft wins — never double-write
+                        writes.append({"path": rel, "text": text})
+                        base[rel] = publication.ABSENT
+                        stubbed += 1
+            keep = [e for k, e in enumerate(doc["entries"])
+                    if k not in set(chosen_idx)]
+            if keep:
+                out_doc = {k: v for k, v in doc.items() if k != "entries"}
+                out_doc["entries"] = keep
+                writes.append({
+                    "path": inside,
+                    "text": yaml.safe_dump(out_doc, sort_keys=False,
+                                           allow_unicode=True, width=100)})
+            else:
+                writes.append({"path": inside, "delete": True})
+
+            pub = publication.publish(
+                name, writes,
+                operation=f"approve {len(chosen)} pending entries",
+                base_revisions=base, idempotency_key=key)
+        except publication.RevisionConflict as e:
+            raise _revision_conflict_409(e)
+        except publication.PublicationConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except HTTPException:
+            raise  # deliberate 4xx from _select/_append_approved etc.
+        except Exception as e:  # noqa: BLE001 — mid-flight publication failure
+            raise HTTPException(
+                status_code=500,
+                detail=f"the approval could not be published ({e}) — the "
+                       f"staged transaction is kept and will be recovered "
+                       f"automatically when the studio restarts")
+
+        result = {"approved": len(chosen), "entries": len(entries),
+                  "pages": written, "pages_skipped": skipped, "stubs": stubbed,
+                  "transaction": pub["transaction"]}
+        if pub["state"] == "noop":
+            result["noop"] = True
+        publication.record_receipt(name, key, result)
         msg = f"campaign/{name}: approve {len(chosen)} pending entries"
         if written or skipped:
-            msg += f" (+{written} page(s)" + (f", {skipped} skipped" if skipped else "") + ")"
+            msg += f" (+{written} page(s)" + \
+                (f", {skipped} skipped" if skipped else "") + ")"
         elif stubbed:
             msg += f" (+{stubbed} stub page(s))"
-        canon.snapshot(name, msg)
+        snap = canon.snapshot_result(name, msg)
+        publication.after_snapshot(name, pub["transaction"], snap)
+        result["snapshot"] = snap
         # "approved" counts everything chosen (entries + page drafts) so the
         # pre-vault contract ("approved: N") still reads true
-        return {"approved": len(chosen), "entries": len(entries),
-                "pages": written, "pages_skipped": skipped, "stubs": stubbed}
+        return result
 
 
 @router.post("/api/campaign/{name}/review/delete")
 def post_delete(name: str, body: ReviewBody):
     d = require_campaign(name)
     with spine.campaign_lock(name):
+        ensure_publishable_409(name)
+        prior = _prior_result(name, body, "delete", "")
+        if prior:
+            return prior
         path, inside = _pending_file(d, body.file)
-        doc = _load_pending(path, inside)
-        chosen_idx = _select(doc, body)
-        keep = [e for k, e in enumerate(doc["entries"]) if k not in set(chosen_idx)]
-        _rewrite_pending(path, doc, keep)
-        canon.snapshot(name,
-                       f"campaign/{name}: delete {len(chosen_idx)} pending entries")
-        return {"deleted": len(chosen_idx)}
+        try:
+            key = _receipt_key(name, body, "delete",
+                               publication.file_revision(path))
+            prior = publication.receipt(name, key)
+            if prior:
+                return {**prior, "idempotent": True}
+            doc = _load_pending(path, inside)
+            chosen_idx = _select(doc, body)
+            keep = [e for k, e in enumerate(doc["entries"])
+                    if k not in set(chosen_idx)]
+            base: dict = {}
+            if body.expected_revision:
+                base[inside] = body.expected_revision
+            if keep:
+                out_doc = {k: v for k, v in doc.items() if k != "entries"}
+                out_doc["entries"] = keep
+                writes = [{"path": inside, "text": yaml.safe_dump(
+                    out_doc, sort_keys=False, allow_unicode=True, width=100)}]
+            else:
+                writes = [{"path": inside, "delete": True}]
+            pub = publication.publish(
+                name, writes,
+                operation=f"delete {len(chosen_idx)} pending entries",
+                base_revisions=base, idempotency_key=key)
+        except publication.RevisionConflict as e:
+            raise _revision_conflict_409(e)
+        except publication.PublicationConflictError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except HTTPException:
+            raise
+        except Exception as e:  # noqa: BLE001 — mid-flight publication failure
+            raise HTTPException(
+                status_code=500,
+                detail=f"the delete could not be published ({e}) — the "
+                       f"staged transaction is kept and will be recovered "
+                       f"automatically when the studio restarts")
+        result = {"deleted": len(chosen_idx),
+                  "transaction": pub["transaction"]}
+        if pub["state"] == "noop":
+            result["noop"] = True
+        publication.record_receipt(name, key, result)
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: delete {len(chosen_idx)} pending entries")
+        publication.after_snapshot(name, pub["transaction"], snap)
+        result["snapshot"] = snap
+        return result

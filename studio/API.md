@@ -257,7 +257,7 @@ shapes in this document true.
   Passthrough `{"week","faction","lines":[str]}` — lines render as an indented
   causal chain.
 
-### Review (B stub → H, M4; vault stage 4)
+### Review (B stub → H, M4; vault stage 4; phase-1 publication)
 - `GET /api/campaign/{name}/review` → `{"items":[{"id","kind":
   "lore-entry|lore-page|timeline-approval|finding","source","title","body",
   "findings":[…],"file"}]}` — the union of `lore/pending-*.yaml`,
@@ -266,20 +266,47 @@ shapes in this document true.
   dangling wiki-links and name/alias collisions across entity pages,
   chronicles, and companion notes — capped at 20 per GET, with a note when
   more exist. Pending entries carrying a `page` payload surface as
-  `kind: "lore-page"` (the missing-page drafts).
-- `POST /api/campaign/{name}/review/approve` `{"file":str,"ids":[str]}` or
-  `{"file":str,"all":true}` → entries append into `lore/timeline.yaml`
+  `kind: "lore-page"` (the missing-page drafts). Each `files[]` row carries
+  `revision` (sha256 of the file's exact bytes) — send it back as
+  `expected_revision` so a change since the view is refused (409) with
+  nothing written.
+- `POST /api/campaign/{name}/review/approve` `{"file":str,"ids":[str],
+  "expected_revision"?:str}` or `{"file":str,"all":true,
+  "expected_revision"?:str}` → entries append into `lore/timeline.yaml`
   (entries keep their `source`); page drafts write into
   `lore/entities/<Title>.md` (create-only — an existing page wins and the
   draft is discarded, counted in `pages_skipped`); approved entries'
   validated `new_names` are stubbed as pages (`kind: unknown`) so the graph
   grows with the story → `{"approved":n,"entries":n,"pages":n,
-  "pages_skipped":n,"stubs":n}`. Takes the shared campaign lock
-  **blocking** (waits for an in-flight week/generation job), then commits
-  snapshot `campaign/<name>: approve N pending entries (+K page(s)/stub
-  page(s))`.
-- `POST /api/campaign/{name}/review/delete` same body → `{"deleted":n}`;
-  same lock, snapshot `campaign/<name>: delete N pending entries`.
+  "pages_skipped":n,"stubs":n,"transaction":id,"snapshot":{...}}`. The
+  whole approval (timeline + pending rewrite + pages + stubs) is ONE
+  transactional publication (studio/publication.py): staged first, applied,
+  verified; a crash leaves an open transaction that boot recovery rolls
+  forward, or parks as a conflict (409 on later publications) when a file
+  was edited externally. Generated drafts carry `base_revisions` /
+  `input_fingerprints` (what the generator read); a stale source or a
+  changed entity-pages membership refuses the approval (409, regenerate).
+  Repeating the same request returns the recorded result with
+  `"idempotent": true` instead of applying twice. Takes the shared campaign
+  lock **blocking** (waits for an in-flight week/generation job), then
+  commits snapshot `campaign/<name>: approve N pending entries
+  (+K page(s)/stub page(s))`.
+- `POST /api/campaign/{name}/review/delete` same body → `{"deleted":n,
+  "transaction":id,"snapshot":{...}}`; same lock, same transactional
+  publication and receipts.
+- `snapshot` in approve/delete/week results is
+  `{"state":"committed|no_change|unavailable|failed","commit","detail"}` —
+  `committed` is the only state with an undo point; `unavailable` (git
+  missing) and `failed` (git ran and failed) retain the publication payload
+  for a retry.
+- `POST /api/campaign/{name}/snapshot` → retries the history snapshot and
+  prunes retained publication payloads on success.
+- `POST /api/campaign/{name}/publication/resolve`
+  `{"transaction":str,"resolution":"apply"|"discard"}` → resolves a
+  conflict-parked transaction: `apply` forces the staged outcome over the
+  external edit (an explicit DM choice — recovery never does this alone),
+  `discard` abandons the transaction and keeps the live bytes. 409 while
+  the transaction is not conflict-parked.
 
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive

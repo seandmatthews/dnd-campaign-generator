@@ -58,10 +58,17 @@
     const n = resp && (path === 'approve' ? resp.approved : resp.deleted);
     S.toast((path === 'approve' ? 'Approved ' : 'Deleted ') +
       (n != null ? n : '') + (n === 1 ? ' entry' : ' entries'), 'ok');
+    const snap = resp && resp.snapshot;
+    if (snap && (snap.state === 'failed' || snap.state === 'unavailable')) {
+      // the files changed fine; only the undo-trail commit did not happen
+      S.toast('Published, but the history snapshot ' + snap.state +
+        ' — retry it from the campaign summary (POST /api/campaign/' +
+        S.state.campaign + '/snapshot)', 'error');
+    }
     S.showTab('review'); // refresh: the queue is the file state, re-read it
   }
 
-  function actionButtons(item) {
+  function actionButtons(item, revision) {
     const approveBtn = S.el('<button type="button" class="btn btn-primary review-approve">Approve</button>');
     const deleteBtn = S.el('<button type="button" class="btn btn-danger review-delete">Delete</button>');
     const inlineErr = S.el('<span class="review-inline-error" role="alert"></span>');
@@ -71,8 +78,12 @@
       approveBtn.disabled = true;
       deleteBtn.disabled = true;
       inlineErr.textContent = '';
+      // expected_revision: what this user actually viewed — the server
+      // refuses (409, nothing written) if the file changed since
+      const body = { file: item.file, ids: [String(item.id)] };
+      if (revision) body.expected_revision = revision;
       try {
-        await act(path, { file: item.file, ids: [String(item.id)] }, inlineErr);
+        await act(path, body, inlineErr);
       } catch (err) {
         inlineErr.textContent = (err && err.error) ? ('Failed: ' + err.error) : 'Failed.';
         S.toast('Review action failed' + (err && err.error ? ': ' + err.error : ''), 'error');
@@ -114,7 +125,7 @@
     return slot;
   }
 
-  function entryCard(item) {
+  function entryCard(item, revision) {
     const title = item.title || '(untitled)';
     const card = S.el(
       '<article class="card review-card">' +
@@ -130,7 +141,7 @@
     card.querySelector('.review-body').textContent = String(item.body == null ? '' : item.body);
     const slot = findingsSlot(item.findings);
     if (slot) card.appendChild(slot);
-    card.appendChild(actionButtons(item));
+    card.appendChild(actionButtons(item, item.revision));
     return card;
   }
 
@@ -191,8 +202,10 @@
       approveAll.disabled = true;
       deleteAll.disabled = true;
       inlineErr.textContent = '';
+      const body = { file: group.file, all: true };
+      if (meta && meta.revision) body.expected_revision = String(meta.revision);
       try {
-        await act(path, { file: group.file, all: true }, inlineErr);
+        await act(path, body, inlineErr);
       } catch (err) {
         inlineErr.textContent = (err && err.error) ? ('Failed: ' + err.error) : 'Failed.';
         S.toast('Review action failed' + (err && err.error ? ': ' + err.error : ''), 'error');
@@ -207,7 +220,8 @@
     });
 
     const list = panel.querySelector('.review-list');
-    group.entries.forEach((it) => list.appendChild(entryCard(it)));
+    const revision = meta && meta.revision ? String(meta.revision) : null;
+    group.entries.forEach((it) => list.appendChild(entryCard(it, revision)));
     group.findings.forEach((it) => list.appendChild(looseFindingCard(it)));
     return panel;
   }

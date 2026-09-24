@@ -110,7 +110,11 @@ def test_approve_waits_for_running_job_lock(client, tmp_spine_root):
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "simulation/pending-week-7.yaml",
                           "all": True})
-    assert r.status_code == 200 and r.json() == {
+    # Phase 1 contract: approve also returns `transaction` + `snapshot`
+    body = r.json()
+    body.pop("transaction", None)
+    body.pop("snapshot", None)
+    assert r.status_code == 200 and body == {
         "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
         "stubs": 0}
     assert time.monotonic() - started >= 0.15  # it genuinely waited

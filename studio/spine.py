@@ -414,6 +414,17 @@ def entity_pages(name: str) -> list:
     return out
 
 
+def entity_page_text(page_name: str, frontmatter: dict, body: str) -> str:
+    """The exact bytes an entity page write produces — shared by
+    write_entity_page and publication staging, so a staged after-image is
+    byte-identical to what a direct write would have made."""
+    meta = {k: v for k, v in frontmatter.items()
+            if v not in (None, "", [], {})}
+    text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
+                          default_flow_style=False).strip()
+    return f"---\n{text}\n---\n\n{body.strip()}\n" if text else f"{body.strip()}\n"
+
+
 def write_entity_page(name: str, page_name: str, frontmatter: dict,
                       body: str) -> Path:
     """Create (never overwrite) one entity page. Create-only is the point:
@@ -423,12 +434,8 @@ def write_entity_page(name: str, page_name: str, frontmatter: dict,
     path = campaign_dir(name) / "lore" / "entities" / filename
     if path.exists():
         raise CampaignExists(f"entity page already exists: {filename}")
-    meta = {k: v for k, v in frontmatter.items()
-            if v not in (None, "", [], {})}
-    text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
-                          default_flow_style=False).strip()
-    page = f"---\n{text}\n---\n\n{body.strip()}\n" if text else f"{body.strip()}\n"
-    return write_text_atomic(path, page)
+    return write_text_atomic(
+        path, entity_page_text(page_name, frontmatter, body))
 
 
 def _legacy_entities(name: str) -> list:

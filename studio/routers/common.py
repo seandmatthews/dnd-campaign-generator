@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 import canon
 import jobs
+import publication
 import spine
 
 BUSY_DETAIL = "another job is already modifying this campaign"
@@ -23,6 +24,15 @@ def require_campaign(name: str):
         raise HTTPException(status_code=404, detail=str(e))
     except spine.CampaignError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+def ensure_publishable_409(name: str) -> None:
+    """Refuse publication-path writers while the campaign has unresolved
+    recovery conflicts (409 with the affected files + how to resolve)."""
+    try:
+        publication.ensure_publishable(name)
+    except publication.PublicationConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 def ensure_entities_migrated(name: str):
