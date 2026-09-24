@@ -424,6 +424,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
         before = {p.name for p in chronicle_dir.glob("*.md")} \
             if chronicle_dir.is_dir() else set()
 
+        _copy_state_in(name)
         log("state copied into engine home (previous engine state kept as "
             "state.yaml.bak)")
         log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
@@ -715,6 +716,19 @@ def accept_proposal(name: str, pid: str):
                 status_code=409,
                 detail=f"proposal {pid} is {manifest.get('status')!r}, "
                        "not pending — refresh and check its state")
+        prior_tx = publication.transaction_for_key(name, key)
+        if prior_tx is not None:
+            # the crash window: this accept was applied and then recovered
+            # by boot (receipt never written). The staged outcome IS the
+            # original result — finish the bookkeeping and answer once.
+            result = _accept_result(manifest, bundle, prior_tx["transaction"])
+            publication.record_receipt(name, key, result)
+            proposals.set_status(name, pid, "accepted",
+                                 decided_note="published via crash recovery")
+            snap = canon.snapshot_result(name, _accept_message(name, manifest,
+                                                               None))
+            publication.after_snapshot(name, prior_tx["transaction"], snap)
+            return {**result, "idempotent": True}
         d = spine.campaign_dir(name)
 
         base = dict(manifest.get("base_revisions") or {})
@@ -758,18 +772,7 @@ def accept_proposal(name: str, pid: str):
                        f"automatically when the studio restarts")
 
         week = manifest.get("proposed_week")
-        result = {
-            "accepted": pid, "week": week,
-            "kind": manifest.get("kind") or "simulated_week",
-            "transaction": pub["transaction"],
-        }
-        if manifest.get("kind") == "session_effects":
-            diff = bundle["diff"]
-            result["events_added"] = len(diff.get("events_added") or [])
-            result["resources_changed"] = len(diff.get("resources") or {})
-        else:
-            result["chronicles"] = sorted(bundle["chronicles"])
-            result["timeline_entries"] = len(bundle["entries"])
+        result = _accept_result(manifest, bundle, pub["transaction"])
         if pub["state"] == "noop":
             result["noop"] = True
         publication.record_receipt(name, key, result)
@@ -787,6 +790,25 @@ def accept_proposal(name: str, pid: str):
         publication.after_snapshot(name, pub["transaction"], snap)
         result["snapshot"] = snap
         return result
+
+
+def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
+    """The API result for an accept — used both live and when reconstructing
+    a recovered accept's answer."""
+    result = {
+        "accepted": manifest.get("proposal_id"),
+        "week": manifest.get("proposed_week"),
+        "kind": manifest.get("kind") or "simulated_week",
+        "transaction": tx_id,
+    }
+    if manifest.get("kind") == "session_effects":
+        diff = bundle["diff"]
+        result["events_added"] = len(diff.get("events_added") or [])
+        result["resources_changed"] = len(diff.get("resources") or {})
+    else:
+        result["chronicles"] = sorted(bundle["chronicles"])
+        result["timeline_entries"] = len(bundle["entries"])
+    return result
 
 
 def _accept_operation(manifest: dict) -> str:

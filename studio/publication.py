@@ -271,8 +271,23 @@ def transactions(name: str) -> list[dict]:
                 "created": str(m.get("created") or ""),
                 "conflicts": list(m.get("conflicts") or []),
                 "snapshot": m.get("snapshot"),
+                "idempotency_key": m.get("idempotency_key"),
             })
     return out
+
+
+def transaction_for_key(name: str, key: str) -> dict | None:
+    """The COMPLETE transaction recorded under an idempotency key, if any —
+    the crash-window answer for "was this already applied?": a publication
+    that crashed after applying (receipt never written) and was recovered
+    by boot is findable here, so a repeat can return the original result
+    instead of hitting the duplicate guards."""
+    if not key:
+        return None
+    for t in transactions(name):
+        if t["status"] == "complete" and t.get("idempotency_key") == key:
+            return t
+    return None
 
 
 def unresolved_conflicts(name: str) -> list[dict]:

@@ -521,8 +521,15 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
 
     def fake_run_py(engine_root, script, *args, timeout=None, on_line=None,
                     **kw):
-        # tick writes the NEW chronicle; it must not exist before the run
-        # or the week job's before/after diff will not see it
+        # tick advances the copy-in state to week 4 (copy-in overwrote
+        # whatever the home held) and writes the NEW chronicle; it must not
+        # exist before the run or the week job's before/after diff will
+        # not see it
+        state_path = engine_root / "world" / "state.yaml"
+        live = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+        live["meta"]["clock"]["week"] = 4
+        state_path.write_text(yaml.safe_dump(live, sort_keys=False),
+                              encoding="utf-8")
         (engine_root / "chronicle" / "0004-the-toll.md").write_text(
             "# Week 4 — The Toll\n\nThe wardens counted the carts again.\n",
             encoding="utf-8")
