@@ -211,6 +211,24 @@ between calls with a clear incomplete status when it runs out — a budget
 guard, not a billing estimate; the token tally in the logs is approximate
 and never presented as the provider's exact charges.
 
+## Export and restore
+
+`python studio/export_campaign.py <campaign>` packs ONE campaign into a
+zip with a sha256 manifest of every included file. It excludes machine
+noise (recovery payloads, caches, temp/log files) and any credential file
+dropped inside the campaign; it never packages other campaigns. Stated
+plainly in the manifest and the output: **the zip does not include git
+history** (the undo trail lives in `campaigns/.git`, outside the campaign
+folder), and **a same-disk archive is an export, not a backup** — copy it
+to a separate destination yourself; nothing uploads anywhere.
+
+`python studio/export_campaign.py --restore <zip> --into DIR` restores
+into `DIR/<campaign>` and refuses an existing directory — restore never
+overwrites a real campaign by default. Every member path is validated (no
+traversal), every file is hash-verified against the manifest BEFORE
+anything is written, and the restored campaign is opened with the app's
+own loaders so a restore that cannot load fails loudly.
+
 ## The engines
 
 The studio invokes three sibling projects as headless CLIs and never
