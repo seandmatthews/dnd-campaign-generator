@@ -46,7 +46,7 @@ import links
 import publication
 import spine
 import timeline
-from routers.common import require_campaign
+from routers.common import (campaign_lock_nowait, require_campaign)
 from routers.common import ensure_publishable_409
 
 router = APIRouter()
@@ -442,7 +442,11 @@ def _revision_conflict_409(e: publication.RevisionConflict) -> HTTPException:
 @router.post("/api/campaign/{name}/review/approve")
 def post_approve(name: str, body: ReviewBody):
     d = require_campaign(name)
-    with spine.campaign_lock(name):  # blocking: an in-flight job finishes first
+    with campaign_lock_nowait(name, "approving the review items"):
+        # fast-fail, not blocking: a week job holds this lock for its whole
+        # run, and a blocking approve used to pin the HTTP request (and the
+        # browser's patience) for up to half an hour — the accept would
+        # eventually land but read as an error
         ensure_publishable_409(name)
         prior = _prior_result(name, body, "approve", "")
         if prior:
@@ -562,7 +566,7 @@ def post_approve(name: str, body: ReviewBody):
 @router.post("/api/campaign/{name}/review/delete")
 def post_delete(name: str, body: ReviewBody):
     d = require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "deleting the review items"):
         ensure_publishable_409(name)
         prior = _prior_result(name, body, "delete", "")
         if prior:

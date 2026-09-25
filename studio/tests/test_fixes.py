@@ -10,9 +10,11 @@ import urllib.error
 from pathlib import Path
 
 import pytest
+import yaml
 
 from conftest import wait_for_job
 
+import doctor
 import engines
 import llm_client
 import spine
@@ -160,6 +162,116 @@ def test_views_need_no_engine_lock(tmp_spine_root, client, monkeypatch):
     state_arg = Path(str(seen["args"][seen["args"].index("--state") + 1]))
     assert state_arg.name == "state.yaml"
     assert "testvale" in str(state_arg)
+
+
+def test_interactive_writers_fastfail_409_while_a_job_holds_the_lock(
+        tmp_spine_root, client):
+    """The regression: approve/delete, proposal accept/discard, knowledge
+    writes, publication resolve, and snapshot retry took the campaign lock
+    BLOCKING — a week job holds it for its whole run (a 30-minute ceiling),
+    so the DM's click hung the request until a browser timeout turned the
+    would-be success into an error nobody could tell from a failure.
+    Interactive writers now fast-fail with a 409 that says retrying is
+    expected."""
+    lock = spine.campaign_lock("testvale")
+    assert lock.acquire(blocking=False), "the test needs the free lock"
+    try:
+        cases = [
+            ("/api/campaign/testvale/review/approve",
+             {"file": "pending-entries-1.yaml"}),
+            ("/api/campaign/testvale/review/delete",
+             {"file": "pending-entries-1.yaml"}),
+            ("/api/campaign/testvale/simulation/proposal/p-x/accept", None),
+            ("/api/campaign/testvale/simulation/proposal/p-x/discard", None),
+            ("/api/campaign/testvale/simulation/session",
+             {"source": "session:test", "events": [{"text": "x"}]}),
+            ("/api/campaign/testvale/knowledge",
+             {"text": "the harbor master lies", "visibility": "dm_only"}),
+            ("/api/campaign/testvale/snapshot", None),
+            ("/api/campaign/testvale/publication/resolve",
+             {"transaction": "t-1", "resolution": "apply"}),
+        ]
+        for url, body in cases:
+            r = client.post(url, json=body)
+            assert r.status_code == 409, (url, r.status_code, r.text)
+            assert "retry when it finishes" in r.json()["error"], url
+    finally:
+        lock.release()
+    # lock free again: the same accept fails on its merits (no such bundle),
+    # never on the lock — the 409 above is contention, not a broken route
+    r = client.post("/api/campaign/testvale/simulation/proposal/p-x/accept")
+    assert r.status_code == 404, r.text
+
+
+def test_session_refuses_to_stage_when_canon_moves_during_prep(
+        tmp_spine_root, client, monkeypatch):
+    """The TOCTOU: post_session recorded base_revisions AFTER the engine ran
+    — a proposal accept landing in between pinned a pre-accept after-image
+    to post-accept revisions, so the accept-time staleness check passed and
+    the publish silently overwrote the accepted week. The base state and
+    its revision are now captured together under the lock, and staging
+    re-checks that the canon did not move while the engine ran."""
+    import routers.simulation as sim
+
+    camp = tmp_spine_root / "testvale"
+    state_path = camp / "simulation" / "state.yaml"
+    moved = []
+
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
+        if "--apply" in args and not moved:
+            moved.append(1)
+            doc = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+            doc["meta"]["clock"]["season"] = "midsummer (moved on)"
+            state_path.write_text(
+                yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+        return 0, ["ok"]
+
+    monkeypatch.setattr(engines, "run_py", fake_run_py)
+
+    r = client.post("/api/campaign/testvale/simulation/session", json={
+        "source": "session:test-09",
+        "events": [{"text": "the harbor master lied"}]})
+    assert r.status_code == 409, r.text
+    assert "changed while" in r.json()["error"], r.json()
+
+    # control: canon unmoved, the same request stages
+    r2 = client.post("/api/campaign/testvale/simulation/session", json={
+        "source": "session:test-10",
+        "events": [{"text": "a quiet night"}]})
+    assert r2.status_code == 202, r2.text
+
+
+def test_doctor_skips_the_simulator_probe_while_a_week_is_in_flight(
+        tmp_path, monkeypatch):
+    """The probe must never overlap a week run. In-flight is the run flag OR
+    the engine lock — the old check read only the flag, so a week in the
+    gap between flag write and lock acquire was invisible to it."""
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
+        return 0, ["usage text"]
+
+    monkeypatch.setattr(engines, "run_py", fake_run_py)
+
+    def sim_entry(checks):
+        return next(c for c in checks
+                    if c["name"] == "engine: agentic-simulator")
+
+    # control: nothing in flight, the probe runs (faked)
+    checks = doctor.check_engines()
+    assert "skipped" not in sim_entry(checks)["detail"]
+
+    # a week holds the engine lock: skip, even with no flag on disk
+    with engines.ENGINE_LOCK:
+        checks = doctor.check_engines()
+    assert "skipped" in sim_entry(checks)["detail"]
+
+    # the flag is up (crash marker, lock free): skip
+    flag = tmp_path / ".week-run-flag"
+    flag.write_text("testvale", encoding="utf-8")
+    monkeypatch.setattr(engines, "week_flag_path", lambda: flag)
+    checks = doctor.check_engines()
+    assert "skipped" in sim_entry(checks)["detail"]
 
 
 # ------------------------------------------------------------- llm_client

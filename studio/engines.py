@@ -103,6 +103,10 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
             cmd, cwd=str(cwd), env=env,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
+            # POSIX: the child gets its own process group so the timeout
+            # kill can take the whole tree (see _kill); Windows uses
+            # taskkill /T and must not pass this flag
+            start_new_session=(os.name != "nt"),
         )
     except FileNotFoundError as e:
         raise RuntimeError(f"engine not found for {' '.join(cmd[:2])}: {e}")
@@ -119,7 +123,15 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                            capture_output=True)
         else:
-            proc.kill()
+            # the child leads its own process group (start_new_session), so
+            # killpg reaches grandchildren; the old bare proc.kill() left
+            # them orphaned on the pipe, wedging ENGINE_LOCK until restart.
+            # Already-dead children race here — a lookup miss means nothing
+            # is left to kill.
+            try:
+                os.killpg(os.getpgid(proc.pid), 9)  # SIGKILL
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
 
     watchdog = threading.Timer(timeout, _kill)
     watchdog.start()

@@ -171,18 +171,29 @@ def check_engines():
     While a week run is in flight the simulator probe is skipped: tick.py's
     parting save_state replaces state.yaml, and a concurrent reader can make
     that os.replace fail on Windows (sharing violation) — losing the whole
-    week after the spend. The other engines' homes are untouched by a week,
-    so they still probe."""
+    week after the spend. In flight is detected by the run flag (the crash
+    marker written at submit) OR the engine lock — the actual
+    mutual-exclusion invariant, held for the whole run — so a week in the
+    gap between flag write and lock acquire is still seen. The other
+    engines' homes are untouched by a week, so they still probe."""
     import engines
     out = []
-    week_busy = engines.week_flag_path().is_file()
+
+    def week_in_flight() -> bool:
+        if engines.week_flag_path().is_file():
+            return True
+        got = engines.ENGINE_LOCK.acquire(blocking=False)
+        if got:
+            engines.ENGINE_LOCK.release()
+        return not got
+
     for dirname, script, fix in ENGINES:
         name = f"engine: {dirname}"
         root = PARENT / dirname
         if not root.is_dir():
             out.append(_mk(name, False, f"{root} not found", fix=fix))
             continue
-        if week_busy and root == engines.AGENTIC_SIMULATOR:
+        if root == engines.AGENTIC_SIMULATOR and week_in_flight():
             out.append(_mk(name, True,
                            "skipped — a week run is in progress; the probe "
                            "would race the engine's state save",

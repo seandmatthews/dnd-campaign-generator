@@ -5,6 +5,8 @@ The server rewrites every HTTPException/RequestValidationError body to
 here is the whole story.
 """
 
+import contextlib
+
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 
@@ -71,8 +73,9 @@ def submit_campaign_job(kind: str, name: str, job):
     The lock is acquired non-blocking here (submit time) and released in the
     worker thread when the job finishes; while it is held the route answers
     409 {"error": "another job is already modifying this campaign"} instead
-    of queueing a second mutation. Review approve/delete take the same lock
-    blocking (they wait). Never nest acquisitions of one campaign's lock."""
+    of queueing a second mutation. Short interactive writers use
+    campaign_lock_nowait (same fast-fail). Never nest acquisitions of one
+    campaign's lock."""
     lock = spine.campaign_lock(name)
     if not lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail=BUSY_DETAIL)
@@ -89,3 +92,30 @@ def submit_campaign_job(kind: str, name: str, job):
     except BaseException:  # the job never started — do not hold the lock
         lock.release()
         raise
+
+
+def busy_409(action: str) -> HTTPException:
+    """The fast-fail a DM sees when an interactive writer races a long job:
+    a 409 that says retrying is expected, not that their click failed."""
+    return HTTPException(
+        status_code=409,
+        detail=f"{action} cannot run right now: another job is already "
+               "modifying this campaign (a week run?) — retry when it "
+               "finishes. Nothing was changed.")
+
+
+@contextlib.contextmanager
+def campaign_lock_nowait(name: str, action: str):
+    """The campaign lock for a SHORT interactive writer, or 409 — never a
+    blocking acquire. A week job holds this lock for its whole run (up to
+    30 minutes); a blocking acquire used to pin the HTTP request that long,
+    and a browser or proxy timeout on the way turns the would-be success
+    into an error the DM must guess about. Fast-fail exactly like
+    submit_campaign_job, with a message that says when to retry."""
+    lock = spine.campaign_lock(name)
+    if not lock.acquire(blocking=False):
+        raise busy_409(action)
+    try:
+        yield
+    finally:
+        lock.release()

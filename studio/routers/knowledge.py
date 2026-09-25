@@ -19,7 +19,8 @@ import briefing
 import knowledge
 import publication
 import spine
-from routers.common import require_campaign, ensure_publishable_409
+from routers.common import (campaign_lock_nowait, ensure_publishable_409,
+                            require_campaign)
 
 router = APIRouter()
 
@@ -64,7 +65,7 @@ def post_knowledge(name: str, body: FactBody):
     Visibility must be explicit: dm_only, public, or a list of faction ids."""
     _require_state(name)
     try:
-        with spine.campaign_lock(name):
+        with campaign_lock_nowait(name, "recording the fact"):
             ensure_publishable_409(name)
             fact = knowledge.upsert(
                 name, fact_id=body.id, text=body.text,
@@ -85,7 +86,7 @@ def post_supersede(name: str, fact_id: str, body: SupersedeBody):
     never compiled again)."""
     _require_state(name)
     try:
-        with spine.campaign_lock(name):
+        with campaign_lock_nowait(name, "superseding the fact"):
             ensure_publishable_409(name)
             new = knowledge.supersede(
                 name, fact_id, text=body.text, visibility=body.visibility,
@@ -106,7 +107,7 @@ def post_reconcile(name: str, fact_id: str):
     recorded revision catches up to the current bytes. The approved text is
     unchanged — staleness clears, nothing else moves."""
     require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "reconciling the fact"):
         doc = knowledge.load(name)
         fact = next((f for f in doc["facts"] if f.get("id") == fact_id), None)
         if fact is None:
@@ -157,7 +158,7 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
     """Disclose one current public fact to the party — the explicit reveal
     that makes public-in-world knowledge party knowledge."""
     require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "revealing the fact"):
         week = None
         if isinstance(body, dict) and body.get("week") is not None:
             try:
@@ -177,7 +178,7 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
 def post_revoke(name: str, fact_id: str):
     """Undo a reveal (not yet at the table)."""
     require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "revoking the reveal"):
         briefing.revoke(name, fact_id)
         return {"revoked": fact_id}
 

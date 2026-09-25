@@ -7,8 +7,8 @@ from pydantic import BaseModel
 import canon
 import publication
 import spine
-from routers.common import (ensure_entities_migrated, ensure_publishable_409,
-                            require_campaign)
+from routers.common import (campaign_lock_nowait, ensure_entities_migrated,
+                            ensure_publishable_409, require_campaign)
 
 router = APIRouter()
 
@@ -67,7 +67,7 @@ def publication_resolve(name: str, body: ResolveBody):
     outcome over the external edit; 'discard' keeps the live bytes and
     abandons the transaction. Recovery never chooses by itself."""
     require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "resolving the recovery conflict"):
         try:
             return publication.resolve(name, body.transaction, body.resolution)
         except publication.PublicationError as e:
@@ -81,7 +81,7 @@ def snapshot_retry(name: str):
     finishes the bookkeeping of any retained publication payloads."""
     require_campaign(name)
     ensure_publishable_409(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "retrying the snapshot"):
         snap = canon.snapshot_result(name, f"campaign/{name}: snapshot retry")
         for t in publication.transactions(name):
             if t["status"] == "complete" and (t.get("snapshot") or {}).get(

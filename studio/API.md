@@ -41,15 +41,23 @@ change — never let them drift.
   `POST .../maps/cities`, `POST .../maps/sites`, `POST .../lore/entries`,
   `POST .../maps/world-map` — take the lock at submit time and answer
   `409 {"error": "another job is already modifying this campaign"}` while it
-  is held. Review approve/delete take the same lock blocking: they wait for
-  an in-flight job instead of failing.
+  is held. Every SHORT interactive writer — review approve/delete, proposal
+  accept/discard, `POST .../simulation/session`, knowledge writes
+  (record/supersede/reconcile/reveal/revoke), publication resolve, snapshot
+  retry, sandbox create — takes the same lock non-blocking: under contention
+  it answers `409 {"error": "<action> cannot run right now: another job is
+  already modifying this campaign (a week run?) — retry when it finishes.
+  Nothing was changed."}` instead of pinning the HTTP request behind a
+  30-minute week (a browser timeout on the way would turn the would-be
+  success into an error).
 - Shared engine home (hardening): the simulator's
   `agentic-simulator/world/state.yaml` is ONE scratch file across campaigns.
   A second, process-wide lock (`engines.ENGINE_LOCK`) serializes every
   copy-in → engine-run → copy-out sequence: the week job holds it for its
-  whole run; `GET .../simulation/views/{id}` and `POST .../simulation/why`
-  hold it around their copy-in + subprocess. Lock order: campaign lock
-  outside, engine lock inside.
+  whole run; views and why read the campaign's own canon via `--state` and
+  take no lock. Lock order: campaign lock outside, engine lock inside. The
+  doctor's simulator probe is skipped while a week is in flight (run flag OR
+  engine lock held).
 - Canon snapshots (hardening): after every successful canon mutation the
   studio commits `campaigns/<name>` to the enclosing git repo (`git add -A`
   + `git commit --only` the campaign path, list-form args) with a

@@ -44,7 +44,8 @@ import proposals
 import publication
 import spine
 import timeline
-from routers.common import require_campaign, submit_campaign_job
+from routers.common import (campaign_lock_nowait, require_campaign,
+                            submit_campaign_job)
 from routers.common import ensure_publishable_409
 
 router = APIRouter()
@@ -263,9 +264,10 @@ def post_create_state(name: str, body: CreateStateBody):
     # Hold the campaign lock across write + snapshot: without it, a week job
     # finishing for this campaign would copy its (premise-derived) state back
     # over the user's brand-new sandbox and commit on top — the replace would
-    # be silently lost to history. Blocking is right here: it's one file
-    # write plus a git commit, same as review approve/delete.
-    with spine.campaign_lock(name):
+    # be silently lost to history. Fast-fail, not blocking: it's one file
+    # write plus a git commit, but a week run holds this lock for its whole
+    # 30-minute ceiling and a blocked create reads as a hung page.
+    with campaign_lock_nowait(name, "creating the simulation sandbox"):
         spine.write_state(name, doc)
         snap = canon.snapshot_result(
             name, f"campaign/{name}: simulation "
@@ -704,7 +706,7 @@ def accept_proposal(name: str, pid: str):
     # restart) returns the recorded result instead of applying twice
     key = hashlib.sha256(
         json.dumps(["accept-proposal", name, pid]).encode("utf-8")).hexdigest()
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "accepting the proposal"):
         ensure_publishable_409(name)
         prior = publication.receipt(name, key)
         if prior:
@@ -853,7 +855,7 @@ def discard_proposal(name: str, pid: str):
     the bundle stays on disk as an audit receipt. Rejected content is never
     fed into future prompts."""
     require_campaign(name)
-    with spine.campaign_lock(name):
+    with campaign_lock_nowait(name, "discarding the proposal"):
         try:
             proposals.set_status(name, pid, "discarded",
                                  decided_note="discarded by the DM; no canon "
@@ -921,27 +923,37 @@ def post_session(name: str, body: SessionBody):
     # the engine's own validator decides — same code the standalone CLI
     # path uses (list-form args; the parent path contains `&`)
     import tempfile
-    import shutil as _shutil
     tmp_dir = Path(tempfile.mkdtemp(prefix="studio-session-"))
     try:
         record_path = tmp_dir / "session.yaml"
         record_path.write_text(
             yaml.safe_dump(record, sort_keys=False, allow_unicode=True,
                            width=100), encoding="utf-8")
-        state_path = d / "simulation" / "state.yaml"
+
+        # capture the base state and its revision TOGETHER under the lock:
+        # the after-image must be judged against the exact bytes the engine
+        # applied it to. The old order read the revision AFTER the engine
+        # ran — a proposal accept landing in between pinned a pre-accept
+        # after-image to post-accept revisions, so the accept-time staleness
+        # check passed and the publish silently overwrote the accepted week.
+        with campaign_lock_nowait(name, "recording the session"):
+            state_path = d / "simulation" / "state.yaml"
+            state_text = state_path.read_text(encoding="utf-8")
+            base_revision = publication.file_revision(state_path)
+        copy_path = tmp_dir / "state-copy.yaml"
+        copy_path.write_text(state_text, encoding="utf-8")
+
         rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/effects.py",
                                    "--check", str(record_path),
-                                   "--state", str(state_path), timeout=60)
+                                   "--state", str(copy_path), timeout=60)
         if rc != 0:
             detail = " | ".join(lines[-5:]) or "no output"
             raise HTTPException(
                 status_code=422,
                 detail=f"the engine refused this session record: {detail}")
 
-        # produce the after-image by applying to a THROWAWAY COPY of the
-        # state — the campaign is never touched here
-        copy_path = tmp_dir / "state-copy.yaml"
-        _shutil.copy2(state_path, copy_path)
+        # produce the after-image by applying to the captured copy — the
+        # campaign is never touched here
         rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/effects.py",
                                    "--apply", str(record_path),
                                    "--state", str(copy_path), timeout=60)
@@ -957,12 +969,9 @@ def post_session(name: str, body: SessionBody):
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     after_doc = yaml.safe_load(after_text) or {}
-    base_doc = spine.load_state(name)
-    base_revisions = {
-        "simulation/state.yaml": publication.file_revision(
-            d / "simulation" / "state.yaml"),
-    }
-    with spine.campaign_lock(name):
+    base_doc = yaml.safe_load(state_text) or {}
+    base_revisions = {"simulation/state.yaml": base_revision}
+    with campaign_lock_nowait(name, "staging the session proposal"):
         # re-check under the lock: the pre-route check raced the moment the
         # request thread didn't hold it (two tabs, session + week together)
         racing = proposals.find_pending(name)
@@ -972,6 +981,19 @@ def post_session(name: str, body: SessionBody):
                 detail=f"a proposal appeared while this session was being "
                        f"prepared ({racing.get('proposal_id')}) — accept or "
                        f"discard it first; nothing was staged")
+        # and the state the engine validated against must still be canon:
+        # an accept (or sandbox replace) during the engine run means this
+        # after-image was derived from a state that no longer exists —
+        # staging it would publish over that change
+        current = publication.file_revision(
+            d / "simulation" / "state.yaml")
+        if current != base_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="simulation/state.yaml changed while this session "
+                       "was being prepared (another proposal was accepted?) "
+                       "— re-record the session against the current state; "
+                       "nothing was staged")
         pid = proposals.create(
             name, kind="session_effects",
             base_week=_clock_week(base_doc), proposed_week=_clock_week(base_doc),

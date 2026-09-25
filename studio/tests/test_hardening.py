@@ -94,7 +94,13 @@ def test_world_gen_409_while_campaign_lock_held(client, tmp_spine_root):
     assert spine.campaign_lock("testvale").acquire(blocking=False)
 
 
-def test_approve_waits_for_running_job_lock(client, tmp_spine_root):
+def test_approve_fastfails_while_a_job_holds_the_lock(client, tmp_spine_root):
+    """The Phase 1 contract (approve BLOCKS until the running job's lock
+    frees) became the bug: a week job holds the lock for its whole run — a
+    30-minute ceiling — and a browser or proxy timeout on the way turned the
+    eventual success into an error the DM had to guess about. Approve now
+    fast-fails 409 under contention (the UI retries when the job ends) and
+    approves normally once the lock is free."""
     pending = tmp_spine_root / "testvale" / "simulation" / "pending-week-7.yaml"
     pending.parent.mkdir(parents=True, exist_ok=True)
     pending.write_text(json.dumps({"entries": [
@@ -104,20 +110,26 @@ def test_approve_waits_for_running_job_lock(client, tmp_spine_root):
 
     lock = spine.campaign_lock("testvale")
     lock.acquire()
-    threading.Timer(0.2, lock.release).start()  # "the job finishes"
-
     started = time.monotonic()
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "simulation/pending-week-7.yaml",
                           "all": True})
-    # Phase 1 contract: approve also returns `transaction` + `snapshot`
+    assert r.status_code == 409, r.text
+    assert "retry when it finishes" in r.json()["error"]
+    assert time.monotonic() - started < 0.15, "it must not wait on the job"
+
+    # the job finishes: the same approve goes through on its merits
+    lock.release()
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "simulation/pending-week-7.yaml",
+                          "all": True})
+    # approve also returns `transaction` + `snapshot`
     body = r.json()
     body.pop("transaction", None)
     body.pop("snapshot", None)
     assert r.status_code == 200 and body == {
         "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
         "stubs": 0}
-    assert time.monotonic() - started >= 0.15  # it genuinely waited
 
 
 def test_lock_registry_returns_one_lock_per_campaign():
