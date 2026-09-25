@@ -374,14 +374,16 @@ def test_replay_same_seed_same_outcomes():
 
 
 def test_save_replay_and_replay_verify_round_trip():
-    """save_replay persists seed + normalized proposals + rule version;
-    replay_verify re-resolves offline and confirms the record (and refuses
-    a foreign rule version instead of comparing apples to bolts)."""
+    """save_replay persists seed + normalized proposals + rule version + the
+    base-state hash; replay_verify re-resolves offline and confirms the
+    record (and refuses a foreign rule version instead of comparing apples
+    to bolts)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     try:
+        import hashlib as _hashlib
         import yaml as _yaml
         state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
                  "factions": [{"id": "a", "resources": {"muscle": "low"}},
@@ -393,8 +395,8 @@ def test_save_replay_and_replay_verify_round_trip():
                       "risk_acceptance": "medium"}]
         resolve.set_rng(777)
         outcomes = resolve.resolve_tick(proposals, state)
-        path = tick.save_replay(4, 777, proposals, outcomes,
-                                "deadbeef" * 8)
+        base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+        path = tick.save_replay(4, 777, proposals, outcomes, base_sha)
         ok, message = tick.replay_verify(path)
         assert ok, message
         doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -405,6 +407,140 @@ def test_save_replay_and_replay_verify_round_trip():
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
     print("  replay trail: save -> verify reproduces; version mismatch refuses  OK")
+
+
+def test_replay_verify_refuses_a_changed_base_state():
+    """The regression: replay_verify recorded base_state_sha256 but never
+    checked it, so it 'verified' against whatever state exists NOW — after
+    later weeks or DM edits, the outcomes were judged against data the week
+    never saw. A hash mismatch must refuse the comparison outright."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-stale-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import hashlib as _hashlib
+        import yaml as _yaml
+        state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                 "factions": [{"id": "a", "resources": {"muscle": "low"}},
+                              {"id": "b", "resources": {}}],
+                 "events": []}
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        proposals = [{"actor": "a", "action": "a acts", "target": "b",
+                      "resources_committed": {"coin": "medium"},
+                      "risk_acceptance": "medium"}]
+        resolve.set_rng(777)
+        outcomes = resolve.resolve_tick(proposals, state)
+        base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+        path = tick.save_replay(4, 777, proposals, outcomes, base_sha)
+        # the world moved on: a later week ran (or the DM hand-edited)
+        state["meta"]["clock"]["week"] = 9
+        state["events"].append({"week": 9, "actor": "a", "text": "later history"})
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        ok, message = tick.replay_verify(path)
+        assert not ok, "a changed base state must not 'verify'"
+        assert "changed" in message and "hash" in message, \
+            f"the refusal names the cause: {message}"
+        # and the honest record still verifies: untouched state round-trips
+        state["meta"]["clock"]["week"] = 4
+        state["events"] = []
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        ok, message = tick.replay_verify(path)
+        assert ok, message
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+    print("  replay trail: a changed base state refuses to verify  OK")
+
+
+def test_live_refuses_a_state_without_events_before_any_spend():
+    """The regression: a state missing `events` passed the old pre-flight,
+    spent the faction calls, then died in apply_mechanical's
+    state['events'].append — a week's provider cost burned on a crash."""
+    s = state(4, [faction("mint"), faction("rival")])
+    del s["events"]
+
+    def boom(*a, **k):
+        raise AssertionError("llm.propose must not be reached")
+
+    tick.llm.propose = boom
+    try:
+        tick.run_live(s)
+    except SystemExit as e:
+        assert e.code == 2
+    else:
+        raise AssertionError("run_live must refuse a state without events")
+    print("  live: a state without events is refused before any spend  OK")
+
+
+def test_budget_exhaustion_aborts_the_week_before_any_canon_write():
+    """The regression: BudgetExceeded used to be swallowed per faction as
+    'HOLDS (proposal failed)' and the all-holds week saved as canon with
+    exit 0 — a spent-out run indistinguishable from a quiet one. Now the
+    week aborts: WeekAborted out of run_live, exit 3 from main, and NOTHING
+    on disk — clock not advanced, no chronicle, no replay."""
+    import contextlib as _cl
+    import io as _io
+    import yaml as _yaml
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-budget-"))
+    saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
+             tick.llm.propose, tick.llm.narrate_week, tick.save_state,
+             tick.load_state)
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    tick.CHRONICLE_DIR = root / "chronicle"
+    real_save_state = tick.save_state
+    tick.save_state = lambda doc, path=None: real_save_state(
+        doc, path or tick.STATE_FILE)
+    # both factions activate (week 4 touched both) so the first proposal
+    # actually runs and meets the ceiling
+    s = state(4, [faction("mint"), faction("rival")])
+    s["events"] = [{"week": 4, "actor": "mint", "text": "mint moved on rival",
+                    "contested": True, "vs": "rival", "outcome": "succeeded",
+                    "margin": 1}]
+    tick.STATE_FILE.write_text(_yaml.safe_dump(s), encoding="utf-8")
+
+    def spent(*a, **k):
+        raise tick.llm.BudgetExceeded("per-run LLM ceiling reached (2 calls)")
+
+    tick.llm.propose = spent
+    try:
+        buf = _io.StringIO()
+        try:
+            with _cl.redirect_stdout(buf):
+                tick.run_live(s)
+        except tick.WeekAborted as e:
+            message = str(e)
+        else:
+            raise AssertionError("budget exhaustion must abort the week")
+        assert "ceiling" in message and "NOT written" in message, \
+            f"the abort names the cause and the nothing-written guarantee: {message}"
+        after = _yaml.safe_load(tick.STATE_FILE.read_text(encoding="utf-8"))
+        assert after["meta"]["clock"]["week"] == 4, "the clock never advanced"
+        assert after["events"] == s["events"], "no outcomes were applied"
+        assert not list(tick.CHRONICLE_DIR.glob("*.md")), "no chronicle"
+        assert not (root / "world" / "replay").exists() or \
+            not list((root / "world" / "replay").glob("*.yaml")), "no replay"
+        # and main() maps the abort to a distinct non-zero exit the studio
+        # refuses to stage from. A fresh state: the first run_live bumped
+        # this dict's clock in memory, which would make both factions hold
+        # and never reach the ceiling.
+        s2 = state(4, [faction("mint"), faction("rival")])
+        s2["events"] = [{"week": 4, "actor": "mint",
+                         "text": "mint moved on rival", "contested": True,
+                         "vs": "rival", "outcome": "succeeded", "margin": 1}]
+        tick.load_state = lambda: s2
+        try:
+            with _cl.redirect_stdout(buf):
+                rc = tick.main(["--live"])
+        finally:
+            tick.load_state = saved[6]
+        assert rc == 3, f"main must exit 3 on a budget abort; got {rc}"
+        assert "WEEK ABORTED" in buf.getvalue()
+    finally:
+        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
+            tick.llm.narrate_week, tick.save_state, tick.load_state = saved
+    print("  live: budget exhaustion aborts the week, canon untouched  OK")
 
 
 if __name__ == "__main__":
@@ -420,11 +556,14 @@ if __name__ == "__main__":
         test_chronicle_survives_narrator_failure,
         test_live_refuses_cityless_state_before_any_spend,
         test_live_refuses_a_float_week_before_any_spend,
+        test_live_refuses_a_state_without_events_before_any_spend,
         test_run_live_happy_path_writes_state_chronicle_and_replay,
         test_run_live_held_faction_format_is_the_studio_contract,
+        test_budget_exhaustion_aborts_the_week_before_any_canon_write,
         test_chronicle_slug_is_capped,
         test_replay_same_seed_same_outcomes,
         test_save_replay_and_replay_verify_round_trip,
+        test_replay_verify_refuses_a_changed_base_state,
     ]:
         fn()
     print("all tick tests passed")

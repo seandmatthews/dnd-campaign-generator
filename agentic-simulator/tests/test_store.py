@@ -11,7 +11,7 @@ import tempfile
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
-from store import load_state, save_state
+from store import load_state, save_state, validate_state
 
 
 def test_save_load_round_trip():
@@ -21,6 +21,39 @@ def test_save_load_round_trip():
         save_state(doc, path)
         assert load_state(path) == doc
     print("  store: save/load round trip  OK")
+
+
+def test_validate_state_accepts_a_spendable_state():
+    doc = {"meta": {"clock": {"week": 4, "season": "spring"}},
+           "city": {"name": "Testburg"}, "factions": [{"id": "a"}],
+           "events": [], "rumors": []}
+    validate_state(doc)  # must not raise
+    print("  validate: a spendable state passes  OK")
+
+
+def test_validate_state_names_the_first_missing_piece():
+    """Each of these used to crash AFTER the faction calls' spend: events
+    (apply_mechanical's append), the clock (write_chronicle's f-string),
+    the city (faction_view), factions/ids (scheduler + apply_outcomes)."""
+    base = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+            "factions": [{"id": "a"}], "events": []}
+    cases = [
+        (None, "not a mapping"),
+        ({**base, "city": {}}, "city.name"),
+        ({**base, "meta": {"clock": {"week": 4.0}}}, "not an integer"),
+        ({**base, "meta": {}}, "not an integer"),
+        ({**base, "factions": []}, "factions"),
+        ({**base, "factions": [{"goal": "no id"}]}, "id"),
+        ({**base, "events": None}, "events"),
+    ]
+    for doc, expected in cases:
+        try:
+            validate_state(doc)
+        except ValueError as e:
+            assert expected in str(e), f"{expected!r} not named in: {e}"
+        else:
+            raise AssertionError(f"validate_state accepted {doc!r}")
+    print("  validate: each gap is refused with the piece named  OK")
 
 
 def test_save_state_retries_a_windows_sharing_violation():
@@ -82,6 +115,8 @@ def test_save_state_never_truncates_on_permanent_failure():
 if __name__ == "__main__":
     for fn in [
         test_save_load_round_trip,
+        test_validate_state_accepts_a_spendable_state,
+        test_validate_state_names_the_first_missing_piece,
         test_save_state_retries_a_windows_sharing_violation,
         test_save_state_never_truncates_on_permanent_failure,
     ]:

@@ -32,10 +32,13 @@ outcome still reaches the chronicle table.
 Semantic consequences (knowledge gained, dispositions shifted) are NOT
 applied by code — they land in the chronicle for human review (M4's loop).
 
-Robustness: a faction whose LLM proposal fails holds instead of aborting the
-week; a narrator failure leaves the ledger as the record. Dice roll from a
-per-week seeded RNG recorded in meta.rng_seeds — a week is replayable by
-seeding resolve with that number.
+Robustness: a faction whose LLM proposal fails holds instead of aborting
+the week; per-run budget exhaustion (LLM_MAX_CALLS) is different — it
+aborts the whole week BEFORE anything is written (exit 3, no state, no
+chronicle, no replay), because an all-holds week saved as canon would be
+indistinguishable from a quiet week. A narrator failure leaves the ledger
+as the record. Dice roll from a per-week seeded RNG recorded in
+meta.rng_seeds — a week is replayable by seeding resolve with that number.
 """
 
 import hashlib
@@ -52,7 +55,7 @@ import rumors
 import scheduler
 import consistency
 import resolve
-from store import STATE_FILE, load_state, save_state
+from store import STATE_FILE, load_state, save_state, validate_state
 from why import why_cli
 from views import faction_view
 from resolve import resolve_tick
@@ -62,6 +65,12 @@ TEMPLATE_FILE = ROOT / "agents" / "faction.md"
 CHRONICLE_DIR = ROOT / "chronicle"
 
 _LEVELS = ("none", "low", "medium", "high")
+
+
+class WeekAborted(RuntimeError):
+    """The week stopped before any canon write — currently only per-run
+    budget exhaustion. main() maps it to exit 3; the studio refuses to
+    stage a proposal from a non-zero tick run."""
 
 
 def step_resource(resources, committed, direction):
@@ -138,24 +147,20 @@ def apply_outcomes(state, outcomes, proposals):
 
 
 def run_live(state):
-    # fail before anything expensive: views.py and write_chronicle both read
-    # city.name — a city-less state would crash after proposals (spend) ran
-    if not (state.get("city") or {}).get("name"):
-        print("error: state has no city — set city.name in state.yaml "
-              "before running a week")
-        sys.exit(2)
-    # same fail-fast contract for a non-integer clock: a float week (a hand
-    # edit, a bad merge) would crash f"{week:04d}" in write_chronicle AFTER
-    # the faction calls' spend, and re-crash on every retry
-    prev_week = state.get("meta", {}).get("clock", {}).get("week")
-    if not isinstance(prev_week, int) or isinstance(prev_week, bool):
-        print(f"error: meta.clock.week is {prev_week!r}, not an integer — "
-              "fix state.yaml before running a week")
+    # fail before anything expensive: a hand-edited or partial state used to
+    # crash AFTER the faction calls' spend (apply_mechanical's events
+    # append, write_chronicle's city/faction reads) — validate_state names
+    # the missing piece instead
+    try:
+        validate_state(state)
+    except ValueError as e:
+        print(f"error: {e} — fix state.yaml before running a week")
         sys.exit(2)
     act = scheduler.activation(state)          # "last week" = the clock as-is
     held = scheduler.holds(state, act)
     # the just-completed week, for consistency's "last week" contract — the
     # bump below makes clock.week the week being simulated, not the past one
+    prev_week = state["meta"]["clock"]["week"]
     week = prev_week + 1
     state["meta"]["clock"]["week"] = week
     template = TEMPLATE_FILE.read_text(encoding="utf-8")
@@ -168,7 +173,12 @@ def run_live(state):
     seed = random.SystemRandom().getrandbits(31)
     resolve.set_rng(seed)
     state.setdefault("meta", {}).setdefault("rng_seeds", {})[str(week)] = seed
-    llm.begin_run()  # explicit per-run call ceiling: stop between calls
+    # explicit per-run call ceiling, checked between calls: LLM_MAX_CALLS
+    # when set, else a default that scales with the roster — a week is ~2
+    # calls per faction (proposal + one validation retry) plus narration,
+    # and the old flat 24 exhausted itself mid-week on a large roster
+    llm.begin_run(limit=llm.env_limit()
+                  or max(24, 2 * len(state["factions"]) + 4))
 
     rumors.spread(state, state.get("rumors", []))   # rumors move before actions do
 
@@ -183,6 +193,20 @@ def run_live(state):
         views.append(view)
         try:
             p = llm.propose(view, template, faction["id"])
+        except llm.BudgetExceeded:
+            # exhaustion is not a dead agent: swallowing it would save an
+            # all-holds week as canon (exit 0, clock advanced) — a spent-out
+            # run indistinguishable from a quiet one. Abort instead: nothing
+            # has been written yet (clock bump and rumor spread live only in
+            # memory), and the non-zero exit keeps the studio from staging
+            # the half-run week as a proposal.
+            usage = llm.run_usage()
+            raise WeekAborted(
+                f"per-run LLM ceiling reached ({usage['calls']} calls, "
+                f"~{usage['tokens']} tokens metered) while proposing for "
+                f"{faction['id']} — the week was NOT written: no state, no "
+                "chronicle, no replay; raise LLM_MAX_CALLS and re-run"
+            ) from None
         except Exception as e:  # noqa: BLE001 — one dead agent must not lose the week
             print(f"  {faction['id']:<14} HOLDS (proposal failed: {e})")
             continue
@@ -203,9 +227,14 @@ def run_live(state):
 
     state["rumors"] = state.get("rumors", []) + rumors.spawn_from_events(state)
 
-    chronicle = write_chronicle(state, week, outcomes, held)
+    # write order: the state is the canon commit point — save it first, then
+    # the replay trail, then the chronicle prose. A crash after the state
+    # write loses only derived artifacts (a re-run re-copies canon and
+    # re-proposes); the old order (chronicle first) could leave a chronicle
+    # for a week the state never recorded.
     save_state(state)
     save_replay(week, seed, proposals, outcomes, base_state_sha)
+    chronicle = write_chronicle(state, week, outcomes, held)
     print(f"week {week} written (rng seed {seed}); chronicle: {chronicle.name}")
 
 
@@ -237,11 +266,23 @@ def replay_verify(path):
     """Re-resolve a saved week from its replay file — fixed seed, stored
     proposals, no model — and compare against the recorded outcomes.
     Returns (ok, message). A rule_version mismatch refuses the comparison:
-    the rules changed, so sameness would be meaningless."""
+    the rules changed, so sameness would be meaningless. A base-state hash
+    mismatch refuses too: the state file has moved on since the week ran,
+    so the re-resolution would judge the outcomes against data the week
+    never saw (later weeks, DM edits) — 'verified' would be a lie."""
     doc = yaml.safe_load(open(path, encoding="utf-8"))
     if doc.get("rule_version") != resolve.RULE_VERSION:
         return False, (f"replay file is rule version {doc.get('rule_version')}, "
                        f"resolver is {resolve.RULE_VERSION} — not comparable")
+    base_sha = doc.get("base_state_sha256")
+    if base_sha:
+        current_sha = hashlib.sha256(
+            pathlib.Path(STATE_FILE).read_bytes()).hexdigest()
+        if current_sha != base_sha:
+            return False, (f"week {doc.get('week')} cannot be verified: "
+                           "world/state.yaml has changed since the week ran "
+                           "(base-state hash mismatch) — the outcomes were "
+                           "resolved against a state that no longer exists")
     state = load_state(STATE_FILE)
     resolve.set_rng(doc["seed"])
     recomputed = resolve_tick(doc["proposals"], state)
@@ -319,9 +360,20 @@ def main(argv=None):
         ok, message = replay_verify(argv[i + 1])
         print(message)
         return 0 if ok else 1
-    state = load_state()
+    try:
+        state = load_state()
+    except yaml.YAMLError as e:
+        # a corrupt state file (a hand edit, a bad merge) must not surface
+        # as a raw traceback — and certainly not after a spend
+        print(f"error: world/state.yaml does not parse as YAML: {e}",
+              file=sys.stderr)
+        return 2
     if "--live" in argv:
-        run_live(state)
+        try:
+            run_live(state)
+        except WeekAborted as e:
+            print(f"WEEK ABORTED: {e}")
+            return 3
         return 0
     if "--why" in argv:
         i = argv.index("--why")

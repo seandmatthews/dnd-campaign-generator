@@ -228,6 +228,52 @@ def test_propose_fails_loudly_twice():
     print("  propose: double failure raises with context  OK")
 
 
+def test_propose_budget_exceeded_is_neither_retried_nor_laundered():
+    """BudgetExceeded must escape propose() with its type intact and no
+    retry: the ceiling is re-checked before every POST, so a retry can only
+    meet it again — and run_live's abort-the-week path depends on the type
+    surviving this loop instead of becoming 'failed twice: BudgetExceeded'
+    (which the old all-holds-canon behavior swallowed per faction)."""
+    calls = []
+    def spent(prompt):
+        calls.append(prompt)
+        raise llm.BudgetExceeded("per-run LLM ceiling reached (24 calls)")
+    saved = llm.complete
+    llm.complete = spent
+    try:
+        try:
+            propose(view(), "t", "me")
+            raise AssertionError("expected BudgetExceeded")
+        except llm.BudgetExceeded:
+            pass
+        except RuntimeError as e:
+            raise AssertionError(
+                f"the budget type was laundered into {type(e).__name__}: {e}")
+    finally:
+        llm.complete = saved
+    assert len(calls) == 1, f"no retry after budget exhaustion; got {len(calls)}"
+    print("  budget: propose neither retries nor launders exhaustion  OK")
+
+
+def test_env_limit_unset_or_garbage_yields_to_the_caller():
+    saved = os.environ.get("LLM_MAX_CALLS")
+    try:
+        os.environ.pop("LLM_MAX_CALLS", None)
+        assert llm.env_limit() is None, "unset means 'caller decides'"
+        os.environ["LLM_MAX_CALLS"] = "not-a-number"
+        assert llm.env_limit() is None, "garbage means 'caller decides'"
+        os.environ["LLM_MAX_CALLS"] = "7"
+        assert llm.env_limit() == 7
+        os.environ["LLM_MAX_CALLS"] = "0"
+        assert llm.env_limit() == 1, "clamped positive, as before"
+    finally:
+        if saved is None:
+            os.environ.pop("LLM_MAX_CALLS", None)
+        else:
+            os.environ["LLM_MAX_CALLS"] = saved
+    print("  budget: env_limit parses LLM_MAX_CALLS or yields  OK")
+
+
 def test_render_prompt_fills_placeholders():
     out = render_prompt("You are {{FACTION_NAME}} — {{LEADER}}:\n{{FACTION_VIEW}}",
                         view())
@@ -395,6 +441,8 @@ if __name__ == "__main__":
         test_validate_accepts_district_targets,
         test_propose_retries_then_succeeds,
         test_propose_fails_loudly_twice,
+        test_propose_budget_exceeded_is_neither_retried_nor_laundered,
+        test_env_limit_unset_or_garbage_yields_to_the_caller,
         test_render_prompt_fills_placeholders,
         test_post_json_retries_transient_http_errors,
         test_post_json_hard_errors_become_readable_runtimeerrors,

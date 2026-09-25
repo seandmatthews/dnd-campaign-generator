@@ -25,6 +25,36 @@ def load_state(path=None):
         return yaml.safe_load(f)
 
 
+def validate_state(state):
+    """The shape a week spends against — checked BEFORE any LLM call, because
+    every one of these gaps used to crash after the spend: a missing
+    `events` list died in apply_mechanical's append, a float or absent clock
+    died in write_chronicle's f"{week:04d}", a city-less state died in
+    faction_view. The state file is hand-edited by design, so a partial
+    edit must be refused with the missing piece named, not bought with a
+    week's provider spend. Raises ValueError."""
+    if not isinstance(state, dict):
+        raise ValueError("state is not a mapping (empty or corrupt file?)")
+    city = state.get("city")
+    if not isinstance(city, dict) or not str(city.get("name") or "").strip():
+        raise ValueError("city.name is missing or empty — set city.name")
+    meta = state.get("meta")
+    clock = meta.get("clock") if isinstance(meta, dict) else None
+    week = clock.get("week") if isinstance(clock, dict) else None
+    if not isinstance(week, int) or isinstance(week, bool):
+        raise ValueError(f"meta.clock.week is {week!r}, not an integer")
+    factions = state.get("factions")
+    if not isinstance(factions, list) or not factions:
+        raise ValueError("factions is missing or empty — a week needs at "
+                         "least one faction")
+    for f in factions:
+        if not isinstance(f, dict) or not str(f.get("id") or "").strip():
+            raise ValueError("every faction needs a non-empty id")
+    if not isinstance(state.get("events"), list):
+        raise ValueError("events is missing or not a list — resolved weeks "
+                         "append to it")
+
+
 def save_state(state, path=None):
     path = pathlib.Path(path or STATE_FILE)
     tmp = path.with_name(path.name + ".tmp")

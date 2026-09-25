@@ -175,13 +175,18 @@ class BudgetExceeded(RuntimeError):
 # LLM_MAX_CALLS, default 24 — a week is ~2 calls per faction plus
 # narration) and an approximate token tally. Estimates, never the
 # provider's exact charges; the ceiling is the budget, the tally is the log.
-def _env_limit():
+def env_limit():
+    """LLM_MAX_CALLS as a positive int, or None when unset or not a number —
+    the caller decides the fallback (tick scales the default with the
+    roster size, so a 20-faction week does not exhaust a 5-faction ceiling
+    mid-run)."""
+    raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
     try:
-        return max(1, int(os.environ.get("LLM_MAX_CALLS") or 24))
+        return max(1, int(raw))
     except ValueError:
-        return 24
+        return None
 
-_BUDGET = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+_BUDGET = {"calls": 0, "tokens": 0, "limit": env_limit() or 24}
 
 
 def begin_run(limit=None):
@@ -345,6 +350,10 @@ def propose(view, template_text, actor_id):
             raw = complete(prompt + ("\n\nReply with the YAML block ONLY." if attempt else ""))
             p = _validate(_extract_yaml(raw), actor_id, actual, known_ids, districts)
             return p
+        except BudgetExceeded:
+            raise  # the ceiling is checked before every POST, so a retry can
+            # only meet it again — and run_live's abort depends on the type
+            # surviving this loop instead of becoming "failed twice"
         except Exception as e:  # noqa: BLE001 — network, parse, and validation
             # failures all retry once
             last_error = e
