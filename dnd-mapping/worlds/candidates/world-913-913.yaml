@@ -11,6 +11,7 @@ summary:
   religions: 23
   major_landmasses: 4
   rivers: 136
+  river_settlements: nearby settlements per river, most populous first
 nations:
 - id: castablesia-18
   name: Castablesia
@@ -433,22 +434,23 @@ rivers:
   discharge: 876
   length: 98.5
   settlements:
+  - Sigendum
   - Aesoscto
-  - Callegul
   - Catarora
   - Hadria
-  - Lurila
-  - Sigendum
+  - Callegul
+  - Victum
+  settlements_note: top 6 of 7 nearby by population
 - name: Oredolica
   discharge: 759
   length: 182.8
   settlements:
-  - Anaquenares
-  - Dosbartue
   - Negra
   - Parges
-  - Sovillaligo
+  - Anaquenares
+  - Dosbartue
   - Torrerani
+  - Sovillaligo
 - name: Vinhado
   discharge: 500
   length: 55.1
@@ -458,58 +460,59 @@ rivers:
   discharge: 479
   length: 63.8
   settlements:
-  - Manamixas
   - Odicao
+  - Manamixas
 - name: Yajing
   discharge: 427
   length: 134.9
   settlements:
+  - Yangyang
   - Ninganhai
   - Puzhou
-  - Xinchang
-  - Yangyang
   - Yingzhou
+  - Xinchang
 - name: Rafais
   discharge: 399
   length: 165.1
   settlements:
-  - Caves
-  - Lague
-  - Lormoes
-  - Ocais
-  - Santalhao
   - Tortirao
+  - Lormoes
+  - Caves
+  - Ocais
+  - Tropo
+  - Santalhao
+  settlements_note: top 6 of 7 nearby by population
 - name: Soury
   discharge: 395
   length: 62.8
   settlements:
-  - Durada
   - Laille
+  - Durada
   - Parguil
 - name: Mantiobundo
   discharge: 378
   length: 77.2
   settlements:
-  - Aeronona
   - Castrix
+  - Aeronona
   - Tungrandum
 - name: Qerfarssat
   discharge: 341
   length: 163.2
   settlements:
-  - Ludora
   - Qerlernaarsuk
   - Riroeiras
-  - Saavissuarsuaq
-  - Seirasiros
   - Tabuera
+  - Seirasiros
+  - Saavissuarsuaq
+  - Ludora
 - name: Aventiari
   discharge: 310
   length: 51.7
   settlements:
-  - Cannstaiec
-  - Castia
   - Sorcurum
+  - Castia
+  - Cannstaiec
 - name: Wihulney
   discharge: 281
   length: 16.2
@@ -518,12 +521,12 @@ rivers:
   discharge: 275
   length: 85.8
   settlements:
-  - Chalbiamia
-  - Dorysthergy
   - Gymatos
   - Kimna
-  - Lekha
+  - Chalbiamia
+  - Dorysthergy
   - Naurion
+  - Lekha
 - name: Stanstow
   discharge: 274
   length: 91.5
@@ -541,22 +544,24 @@ rivers:
   discharge: 257
   length: 107.9
   settlements:
-  - Agusaigost
-  - Bytropolisa
-  - Desmos
-  - Gorgan
   - Mantion
+  - Gorgan
+  - Polissarat
   - Pallcopa
+  - Agusaigost
+  - Yawallo
+  settlements_note: top 6 of 8 nearby by population
 - name: Tungripina
   discharge: 228
   length: 233.4
   settlements:
-  - Drunumpei
-  - Falinatum
-  - Geboviagu
-  - Hergencum
-  - Linium
+  - Veventavica
+  - Oliromata
+  - Silaligonis
   - Lourolida
+  - Hergencum
+  - Geboviagu
+  settlements_note: top 6 of 9 nearby by population
 - name: Prebabipon
   discharge: 228
   length: 44.8
@@ -574,10 +579,10 @@ rivers:
   discharge: 216
   length: 56.5
   settlements:
-  - Morerajala
   - Pigola
   - Pornallones
   - Saura
+  - Morerajala
 - name: Magrakoucia
   discharge: 197
   length: 41.3
@@ -599,10 +604,10 @@ rivers:
   settlements:
   - Ilsas
   - Namorea
+  - Sintralha
+  - Ridalenares
   - Panco
   - Pinda
-  - Ridalenares
-  - Sintralha
 - name: Chang
   discharge: 169
   length: 103.3
@@ -620,9 +625,9 @@ rivers:
   discharge: 157
   length: 44.1
   settlements:
-  - Aetos
   - Lekrolis
   - Tateaion
+  - Aetos
 - name: Corejarreda
   discharge: 149
   length: 35.7
@@ -649,8 +654,8 @@ rivers:
   discharge: 139
   length: 48.6
   settlements:
-  - Confluenda
   - Vicaraula
+  - Confluenda
 - name: Puullit
   discharge: 135
   length: 44.8

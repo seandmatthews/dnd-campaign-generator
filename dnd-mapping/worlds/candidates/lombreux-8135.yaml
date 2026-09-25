@@ -10,11 +10,14 @@ summary:
   cultures: 8
   religions: 17
   major_landmasses: 2
+  rivers: 51
+  river_settlements: not computed — export lacks graph arrays
 nations:
 - id: zepatia-5
   name: Zepatia
   kind: Nomadic
   capital: Rakzib
+  culture: Carthaginian
   form_of_government: Republic
   burgs: 246
   provinces: 54
@@ -28,6 +31,7 @@ nations:
   name: Pisia
   kind: Generic
   capital: Rhithercy
+  culture: Hellenic
   form_of_government: Empire
   burgs: 197
   provinces: 45
@@ -41,6 +45,7 @@ nations:
   name: Ragusia
   kind: Generic
   capital: Corum
+  culture: Roman
   form_of_government: Empire
   burgs: 89
   provinces: 21
@@ -53,6 +58,7 @@ nations:
   name: Calerania
   kind: Generic
   capital: Plaventia
+  culture: Roman
   form_of_government: Holy State
   burgs: 99
   provinces: 23
@@ -66,6 +72,7 @@ nations:
   name: Eleurionia
   kind: Generic
   capital: Penalia
+  culture: Hellenic
   form_of_government: Kingdom
   burgs: 84
   provinces: 21
@@ -79,6 +86,7 @@ nations:
   name: Confluenia
   kind: Generic
   capital: Bovianum
+  culture: Roman
   form_of_government: Theocracy
   burgs: 76
   provinces: 22
@@ -93,6 +101,7 @@ nations:
   name: Yemungaza
   kind: Nomadic
   capital: Ginerytim
+  culture: Carthaginian
   form_of_government: Kingdom
   burgs: 92
   provinces: 22
@@ -108,6 +117,7 @@ nations:
   name: Agosnach
   kind: River
   capital: Trevenvera
+  culture: Celtic
   form_of_government: See
   burgs: 89
   provinces: 21
@@ -123,6 +133,7 @@ nations:
   name: Cuirabercia
   kind: River
   capital: Aberkuno
+  culture: Celtic
   form_of_government: Principality
   burgs: 45
   provinces: 13
@@ -135,6 +146,7 @@ nations:
   name: Arcyria
   kind: River
   capital: Kepidea
+  culture: Hellenic
   form_of_government: Principality
   burgs: 47
   provinces: 11
@@ -147,6 +159,7 @@ nations:
   name: Geticalia
   kind: Generic
   capital: Empetedio
+  culture: Roman
   form_of_government: Grand Duchy
   burgs: 20
   provinces: 5
@@ -158,6 +171,7 @@ nations:
   name: Alaw
   kind: River
   capital: Alodunum
+  culture: Celtic
   form_of_government: Federation
   burgs: 36
   provinces: 9
@@ -170,6 +184,7 @@ nations:
   name: Akeia
   kind: River
   capital: Hordhlaber
+  culture: Celtic
   form_of_government: Duchy
   burgs: 9
   provinces: 2
@@ -181,6 +196,7 @@ nations:
   name: Kurudavia
   kind: Nomadic
   capital: Finevus
+  culture: Carthaginian
   form_of_government: Duchy
   burgs: 6
   provinces: 3
@@ -192,6 +208,7 @@ nations:
   name: Vinomati
   kind: Nomadic
   capital: Vinomati
+  culture: Roman
   form_of_government: Diocese
   burgs: 5
   provinces: 2
@@ -204,6 +221,7 @@ nations:
   name: Inverlechia
   kind: River
   capital: Infilor
+  culture: Celtic
   form_of_government: Duchy
   burgs: 1
   provinces: 0
@@ -357,3 +375,164 @@ major_settlements:
   kind: Generic
   x: 1107.0
   y: 393.0
+rivers:
+- name: Treaberbarda
+  discharge: 268
+  length: 99
+  settlements: []
+- name: Surolymnos
+  discharge: 220
+  length: 39.1
+  settlements: []
+- name: Belorium
+  discharge: 216
+  length: 227.7
+  settlements: []
+- name: Lidaros
+  discharge: 168
+  length: 188
+  settlements: []
+- name: Inverbanc
+  discharge: 162
+  length: 51.7
+  settlements: []
+- name: At Za
+  discharge: 156
+  length: 233.6
+  settlements: []
+- name: Sorgolisip
+  discharge: 155
+  length: 56.0
+  settlements: []
+- name: Baal
+  discharge: 145
+  length: 66.2
+  settlements: []
+- name: Agripimie
+  discharge: 142
+  length: 50.5
+  settlements: []
+- name: Aususca
+  discharge: 124
+  length: 55.2
+  settlements: []
+- name: Delphidria
+  discharge: 117
+  length: 45.2
+  settlements: []
+- name: Lara
+  discharge: 117
+  length: 42.4
+  settlements: []
+- name: Dinn
+  discharge: 113
+  length: 35.6
+  settlements: []
+- name: Chaliris
+  discharge: 112
+  length: 36.5
+  settlements: []
+- name: Tzor
+  discharge: 103
+  length: 47.5
+  settlements: []
+- name: Linticos
+  discharge: 100
+  length: 15.4
+  settlements: []
+- name: Myrgan
+  discharge: 98
+  length: 26.1
+  settlements: []
+- name: Krakeram
+  discharge: 97
+  length: 26.9
+  settlements: []
+- name: Theorhad
+  discharge: 96
+  length: 40.4
+  settlements: []
+- name: Isioriacodu
+  discharge: 94
+  length: 14.7
+  settlements: []
+- name: Irnah
+  discharge: 90
+  length: 95.2
+  settlements: []
+- name: Cordum
+  discharge: 86
+  length: 25.8
+  settlements: []
+- name: Saberkenna
+  discharge: 86
+  length: 16.6
+  settlements: []
+- name: Laionti
+  discharge: 81
+  length: 26.7
+  settlements: []
+- name: Oles
+  discharge: 79
+  length: 33.6
+  settlements: []
+- name: Vamium
+  discharge: 74
+  length: 27.6
+  settlements: []
+- name: Ricodubin
+  discharge: 74
+  length: 17.8
+  settlements: []
+- name: Treruroio
+  discharge: 74
+  length: 18.8
+  settlements: []
+- name: Setuhad
+  discharge: 73
+  length: 14.4
+  settlements: []
+- name: Dediobonia
+  discharge: 73
+  length: 49.2
+  settlements: []
+- name: Unudimas
+  discharge: 71
+  length: 41.4
+  settlements: []
+- name: Aron
+  discharge: 68
+  length: 19.4
+  settlements: []
+- name: Senmouth
+  discharge: 67
+  length: 25.5
+  settlements: []
+- name: Olissos
+  discharge: 66
+  length: 51.9
+  settlements: []
+- name: Ventia
+  discharge: 65
+  length: 27.0
+  settlements: []
+- name: Prepidito
+  discharge: 63
+  length: 26.1
+  settlements: []
+- name: Tamaselo
+  discharge: 62
+  length: 30.6
+  settlements: []
+- name: Heart
+  discharge: 61
+  length: 21.1
+  settlements: []
+- name: Aberdagona
+  discharge: 60
+  length: 11.7
+  settlements: []
+- name: Hordh
+  discharge: 58
+  length: 22.4
+  settlements: []

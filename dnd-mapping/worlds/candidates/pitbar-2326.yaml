@@ -10,11 +10,14 @@ summary:
   cultures: 13
   religions: 28
   major_landmasses: 2
+  rivers: 310
+  river_settlements: not computed — export lacks graph arrays
 nations:
 - id: bethamia-10
   name: Bethamia
   kind: Generic
   capital: Betham
+  culture: Angshire
   form_of_government: Empire
   burgs: 94
   provinces: 23
@@ -31,6 +34,7 @@ nations:
   name: Abros
   kind: Generic
   capital: Siporea
+  culture: Elladan
   form_of_government: Empire
   burgs: 138
   provinces: 33
@@ -47,6 +51,7 @@ nations:
   name: Sylia
   kind: Generic
   capital: Orchope
+  culture: Elladan
   form_of_government: Empire
   burgs: 137
   provinces: 30
@@ -63,6 +68,7 @@ nations:
   name: Ougy
   kind: Generic
   capital: Cogent
+  culture: Luari
   form_of_government: Kingdom
   burgs: 133
   provinces: 31
@@ -77,6 +83,7 @@ nations:
   name: Sirospiania
   kind: Generic
   capital: Tydondos
+  culture: Elladan
   form_of_government: Kingdom
   burgs: 83
   provinces: 19
@@ -89,6 +96,7 @@ nations:
   name: Nesiameria
   kind: River
   capital: Marcino
+  culture: Tallian
   form_of_government: Kingdom
   burgs: 63
   provinces: 17
@@ -102,6 +110,7 @@ nations:
   name: Hitcland
   kind: Generic
   capital: Grantham
+  culture: Angshire
   form_of_government: Kingdom
   burgs: 50
   provinces: 11
@@ -117,6 +126,7 @@ nations:
   name: Torchgia
   kind: Nomadic
   capital: Mtsen
+  culture: Slovan
   form_of_government: Tsardom
   burgs: 50
   provinces: 13
@@ -129,6 +139,7 @@ nations:
   name: Kohturikmaa
   kind: Generic
   capital: Muvepaja
+  culture: Soumi
   form_of_government: Kingdom
   burgs: 64
   provinces: 15
@@ -140,6 +151,7 @@ nations:
   name: Mtsen
   kind: Nomadic
   capital: Rzhis
+  culture: Slovan
   form_of_government: Tsardom
   burgs: 42
   provinces: 11
@@ -154,6 +166,7 @@ nations:
   name: Seichery
   kind: Generic
   capital: Courte
+  culture: Luari
   form_of_government: Principality
   burgs: 35
   provinces: 9
@@ -169,6 +182,7 @@ nations:
   name: Hirvia
   kind: Generic
   capital: Porvijar
+  culture: Soumi
   form_of_government: Principality
   burgs: 21
   provinces: 6
@@ -182,6 +196,7 @@ nations:
   name: Nanconesia
   kind: Generic
   capital: Ondroy
+  culture: Luari
   form_of_government: Principality
   burgs: 45
   provinces: 9
@@ -195,6 +210,7 @@ nations:
   name: Musisia
   kind: Generic
   capital: Myolis
+  culture: Elladan
   form_of_government: Despotate
   burgs: 37
   provinces: 9
@@ -209,6 +225,7 @@ nations:
   name: Mukenia
   kind: Generic
   capital: Byblos
+  culture: Elladan
   form_of_government: Principality
   burgs: 34
   provinces: 8
@@ -224,6 +241,7 @@ nations:
   name: Gatbury
   kind: Generic
   capital: Casthe
+  culture: Angshire
   form_of_government: Grand Duchy
   burgs: 23
   provinces: 7
@@ -237,6 +255,7 @@ nations:
   name: Delphelia
   kind: Generic
   capital: Thupakros
+  culture: Elladan
   form_of_government: Republic
   burgs: 25
   provinces: 6
@@ -251,6 +270,7 @@ nations:
   name: Westlia
   kind: Generic
   capital: Wihulton
+  culture: Angshire
   form_of_government: Grand Duchy
   burgs: 16
   provinces: 4
@@ -264,6 +284,7 @@ nations:
   name: Charcil
   kind: Generic
   capital: Pory
+  culture: Luari
   form_of_government: Marches
   burgs: 12
   provinces: 4
@@ -278,6 +299,7 @@ nations:
   name: Leonia
   kind: Generic
   capital: Leon
+  culture: Elladan
   form_of_government: Despotate
   burgs: 9
   provinces: 3
@@ -290,6 +312,7 @@ nations:
   name: Rolisesia
   kind: Generic
   capital: Bouve
+  culture: Luari
   form_of_government: Duchy
   burgs: 4
   provinces: 2
@@ -458,3 +481,164 @@ major_settlements:
   kind: Generic
   x: 756.0
   y: 183.0
+rivers:
+- name: Caris
+  discharge: 5002
+  length: 383.9
+  settlements: []
+- name: Barre
+  discharge: 2401
+  length: 329.6
+  settlements: []
+- name: Armaines
+  discharge: 1458
+  length: 241.4
+  settlements: []
+- name: Totham
+  discharge: 1058
+  length: 383.1
+  settlements: []
+- name: Kourilelea
+  discharge: 1050
+  length: 241.8
+  settlements: []
+- name: Ostvin
+  discharge: 992
+  length: 269.2
+  settlements: []
+- name: Schenhodeck
+  discharge: 966
+  length: 268.4
+  settlements: []
+- name: Golcos
+  discharge: 929
+  length: 211.5
+  settlements: []
+- name: Dexandros
+  discharge: 836
+  length: 158.6
+  settlements: []
+- name: Baury
+  discharge: 680
+  length: 216.0
+  settlements: []
+- name: Panvillonnes
+  discharge: 678
+  length: 163.6
+  settlements: []
+- name: Chetnia
+  discharge: 651
+  length: 245.1
+  settlements: []
+- name: Chalbia
+  discharge: 637
+  length: 195.6
+  settlements: []
+- name: Helea
+  discharge: 594
+  length: 119.5
+  settlements: []
+- name: Ludavik
+  discharge: 564
+  length: 77.5
+  settlements: []
+- name: Cythi
+  discharge: 543
+  length: 89.4
+  settlements: []
+- name: Niimaa
+  discharge: 539
+  length: 161.3
+  settlements: []
+- name: Vigrandonnes
+  discharge: 525
+  length: 89.6
+  settlements: []
+- name: Izmatin
+  discharge: 513
+  length: 175.9
+  settlements: []
+- name: Cleolissos
+  discharge: 505
+  length: 175.9
+  settlements: []
+- name: Hinoton
+  discharge: 494
+  length: 140.1
+  settlements: []
+- name: Perinsk
+  discharge: 467
+  length: 106.2
+  settlements: []
+- name: Memeaion
+  discharge: 444
+  length: 110.0
+  settlements: []
+- name: Picea
+  discharge: 437
+  length: 135.8
+  settlements: []
+- name: Eleurion
+  discharge: 436
+  length: 161.1
+  settlements: []
+- name: Bobkiku
+  discharge: 421
+  length: 236.3
+  settlements: []
+- name: Ceroy
+  discharge: 393
+  length: 174.8
+  settlements: []
+- name: Svishin
+  discharge: 375
+  length: 201.9
+  settlements: []
+- name: Lodingnan
+  discharge: 373
+  length: 92.9
+  settlements: []
+- name: Podugus
+  discharge: 373
+  length: 55.2
+  settlements: []
+- name: Lenduostad
+  discharge: 356
+  length: 72.9
+  settlements: []
+- name: Nonains
+  discharge: 339
+  length: 128.3
+  settlements: []
+- name: Esetrand
+  discharge: 328
+  length: 98.7
+  settlements: []
+- name: Dorvil
+  discharge: 302
+  length: 94.5
+  settlements: []
+- name: Felceston
+  discharge: 289
+  length: 108.7
+  settlements: []
+- name: Yeoneton
+  discharge: 277
+  length: 104.8
+  settlements: []
+- name: Ozelsk
+  discharge: 275
+  length: 150.7
+  settlements: []
+- name: Apingmo
+  discharge: 274
+  length: 98.1
+  settlements: []
+- name: Stymphina
+  discharge: 273
+  length: 80.0
+  settlements: []
+- name: Povech
+  discharge: 268
+  length: 72.0
+  settlements: []

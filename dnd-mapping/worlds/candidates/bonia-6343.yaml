@@ -10,11 +10,14 @@ summary:
   cultures: 11
   religions: 13
   major_landmasses: 3
+  rivers: 207
+  river_settlements: not computed — export lacks graph arrays
 nations:
 - id: eneki-12
   name: Eneki
   kind: Naval
   capital: Eneki
+  culture: Turchian
   form_of_government: Khaganate
   burgs: 118
   provinces: 37
@@ -28,6 +31,7 @@ nations:
   name: Hdia
   kind: Generic
   capital: Qsen
+  culture: Berberan
   form_of_government: Caliphate
   burgs: 85
   provinces: 24
@@ -43,6 +47,7 @@ nations:
   name: Kuiz Guo
   kind: Generic
   capital: Xingz
+  culture: Hantzu
   form_of_government: Theocracy
   burgs: 63
   provinces: 20
@@ -55,6 +60,7 @@ nations:
   name: Bagaligia
   kind: Generic
   capital: Afzalika
+  culture: Carnatic
   form_of_government: Kingdom
   burgs: 42
   provinces: 12
@@ -68,6 +74,7 @@ nations:
   name: Tuda
   kind: Generic
   capital: Tizougba
+  culture: Berberan
   form_of_government: Kingdom
   burgs: 39
   provinces: 11
@@ -80,6 +87,7 @@ nations:
   name: Mudgudia
   kind: Generic
   capital: Hebikar
+  culture: Carnatic
   form_of_government: Kingdom
   burgs: 33
   provinces: 11
@@ -92,6 +100,7 @@ nations:
   name: Mulireria
   kind: Generic
   capital: Rarapaga
+  culture: Carnatic
   form_of_government: Kingdom
   burgs: 21
   provinces: 7
@@ -105,6 +114,7 @@ nations:
   name: Quangia
   kind: River
   capital: Hue
+  culture: Vietic
   form_of_government: Kingdom
   burgs: 25
   provinces: 7
@@ -116,6 +126,7 @@ nations:
   name: Boeli
   kind: Naval
   capital: Kart
+  culture: Turchian
   form_of_government: United Provinces
   burgs: 23
   provinces: 8
@@ -128,6 +139,7 @@ nations:
   name: Tanan Guo
   kind: Generic
   capital: Tanan
+  culture: Hantzu
   form_of_government: Theocracy
   burgs: 16
   provinces: 5
@@ -140,6 +152,7 @@ nations:
   name: Ganz Guo
   kind: Generic
   capital: Tongc
+  culture: Hantzu
   form_of_government: Theocracy
   burgs: 15
   provinces: 5
@@ -153,6 +166,7 @@ nations:
   name: Bjed
   kind: Generic
   capital: Skhiwin
+  culture: Berberan
   form_of_government: Principality
   burgs: 19
   provinces: 6
@@ -165,6 +179,7 @@ nations:
   name: Shadia
   kind: River
   capital: Mish
+  culture: Tehrani
   form_of_government: Republic
   burgs: 19
   provinces: 7
@@ -179,6 +194,7 @@ nations:
   name: Xin Guo
   kind: Generic
   capital: Antaoy
+  culture: Hantzu
   form_of_government: Theocracy
   burgs: 15
   provinces: 5
@@ -191,6 +207,7 @@ nations:
   name: Harcifza
   kind: Generic
   capital: Aelelmou
+  culture: Berberan
   form_of_government: Theocracy
   burgs: 5
   provinces: 3
@@ -201,6 +218,7 @@ nations:
   name: Esa
   kind: Generic
   capital: Dar
+  culture: Berberan
   form_of_government: Theocracy
   burgs: 8
   provinces: 4
@@ -212,6 +230,7 @@ nations:
   name: Harehia
   kind: River
   capital: Hareh
+  culture: Tehrani
   form_of_government: Satrapy
   burgs: 10
   provinces: 3
@@ -225,6 +244,7 @@ nations:
   name: Koria
   kind: Generic
   capital: Akhouch
+  culture: Berberan
   form_of_government: Theocracy
   burgs: 10
   provinces: 3
@@ -386,3 +406,164 @@ major_settlements:
   kind: Generic
   x: 410.1
   y: 263.1
+rivers:
+- name: Harbat
+  discharge: 1369
+  length: 152.9
+  settlements: []
+- name: Hahar
+  discharge: 939
+  length: 222.8
+  settlements: []
+- name: Bilpozopuz
+  discharge: 793
+  length: 125.9
+  settlements: []
+- name: Yevapurkal
+  discharge: 763
+  length: 172.4
+  settlements: []
+- name: Oujdir
+  discharge: 596
+  length: 108.0
+  settlements: []
+- name: Lang Mon
+  discharge: 583
+  length: 118.9
+  settlements: []
+- name: Oued
+  discharge: 558
+  length: 77.0
+  settlements: []
+- name: Phan
+  discharge: 449
+  length: 89.7
+  settlements: []
+- name: Ayazkaya
+  discharge: 403
+  length: 107.2
+  settlements: []
+- name: Haspetval
+  discharge: 401
+  length: 62.0
+  settlements: []
+- name: Tagh
+  discharge: 354
+  length: 100.1
+  settlements: []
+- name: Anh Nghia
+  discharge: 339
+  length: 89.5
+  settlements: []
+- name: Seong
+  discharge: 336
+  length: 58.0
+  settlements: []
+- name: Majan
+  discharge: 275
+  length: 55.5
+  settlements: []
+- name: Tan
+  discharge: 275
+  length: 68.8
+  settlements: []
+- name: Assort
+  discharge: 270
+  length: 63.4
+  settlements: []
+- name: Sakachiwai
+  discharge: 255
+  length: 69.9
+  settlements: []
+- name: Bourar
+  discharge: 247
+  length: 60.3
+  settlements: []
+- name: Souimilch
+  discharge: 247
+  length: 37.9
+  settlements: []
+- name: Vinh Chau
+  discharge: 228
+  length: 46.2
+  settlements: []
+- name: Duy Duc
+  discharge: 223
+  length: 45.7
+  settlements: []
+- name: Oigawasuga
+  discharge: 222
+  length: 48.3
+  settlements: []
+- name: Athnadyar
+  discharge: 213
+  length: 35.5
+  settlements: []
+- name: Lianzhou
+  discharge: 209
+  length: 53.2
+  settlements: []
+- name: Hegalurga
+  discharge: 207
+  length: 81.6
+  settlements: []
+- name: Hwangyeon
+  discharge: 205
+  length: 23.3
+  settlements: []
+- name: Uluoguz
+  discharge: 184
+  length: 57.6
+  settlements: []
+- name: Mamet
+  discharge: 182
+  length: 100.6
+  settlements: []
+- name: Telawaksut
+  discharge: 181
+  length: 81.7
+  settlements: []
+- name: Malnatikoli
+  discharge: 180
+  length: 50.8
+  settlements: []
+- name: Shush
+  discharge: 176
+  length: 55.9
+  settlements: []
+- name: Longkiu
+  discharge: 173
+  length: 29.6
+  settlements: []
+- name: Bajpena
+  discharge: 171
+  length: 13.9
+  settlements: []
+- name: Hotena
+  discharge: 169
+  length: 21.8
+  settlements: []
+- name: Shibeianan
+  discharge: 168
+  length: 36.8
+  settlements: []
+- name: Kawaksut
+  discharge: 166
+  length: 32.9
+  settlements: []
+- name: Kokuyagi
+  discharge: 165
+  length: 76.7
+  settlements: []
+- name: Arka
+  discharge: 165
+  length: 19
+  settlements: []
+- name: Yelensuya
+  discharge: 164
+  length: 95.6
+  settlements: []
+- name: Bozkaboy
+  discharge: 161
+  length: 74.4
+  settlements: []

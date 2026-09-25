@@ -11,6 +11,12 @@ no timestamps at all (seed + fmg_version are the provenance), so
 re-importing an unchanged file is byte-stable — a wall-clock or mtime stamp
 permanently dirtied tracked derivatives on every regeneration.
 
+Provenance caveat: every tracked candidate's raw dump is expected in
+worlds/raw/ so `--all` can regenerate it — EXCEPT the seed-913 world
+(world-913-913.yaml), whose raw export lives in the campaigns repo as
+campaigns/sable-ford/world/source.json (the campaign imported it before
+the raw/ convention was settled).
+
 Usage:
   python src/import_fmg.py <path-to-.map-or-.json> [more paths...]
   python src/import_fmg.py --all          # everything in worlds/raw/
@@ -114,26 +120,43 @@ def slugify(name):
 
 # Rivers: FMG names every river and gives its course as a cell-id polyline.
 # Lore grounding wants names and which settlements they touch, not geometry:
-# each river lists the burgs within RIVER_NEAR map units of its course
-# (cell centers), capped, and only the RIVER_LIMIT biggest by discharge are
-# kept so the file stays terse (the summary still counts them all).
+# each river lists the most POPULOUS burgs within RIVER_NEAR map units of
+# its course (cell centers), capped — alphabetical order would silently
+# drop capitals for alphabet soup (found 2026-09-25: 4 of 40 rivers on seed
+# 913 lost real settlements) — and only the RIVER_LIMIT biggest by
+# discharge are kept so the file stays terse (the summary still counts
+# them all). River names are NOT disambiguated from burg names in the YAML
+# ("the river Chang" vs "the town Chang"): the lore prompt reads the text
+# as-is and the ambiguity is accepted.
 RIVER_LIMIT = 40
 RIVER_NEAR = 5.0  # map units on the FMG grid (maps are typically 1280x720)
+RIVER_SETTLEMENTS_CAP = 6
 
 
-def _river_settlements(pack, burgs, rivers):
-    """{river_index: [burg names within RIVER_NEAR of the course]}.
-    Needs the graph arrays (cells.v, vertices.p) — full JSON exports have
-    them; a .map-section import gracefully yields no settlement lists."""
+def _has_graph_arrays(pack):
+    """True when the export carries the graph arrays the settlement
+    grounding needs (full JSON exports do; .map-section imports never)."""
     cells = pack.get("cells")
     vertices = pack.get("vertices")
     cells_v = cells.get("v") if isinstance(cells, dict) else None
     verts_p = vertices.get("p") if isinstance(vertices, dict) else None
-    if not cells_v or not verts_p:
+    return bool(cells_v and verts_p)
+
+
+def _river_settlements(pack, burgs, rivers):
+    """{river_index: [burg dicts within RIVER_NEAR of the course]}.
+    Needs the graph arrays (cells.v, vertices.p) — full JSON exports have
+    them; a .map-section import gracefully yields no settlement lists."""
+    if not _has_graph_arrays(pack):
         return {}
+    cells = pack.get("cells")
+    vertices = pack.get("vertices")
+    cells_v = cells["v"]
+    verts_p = vertices["p"]
     centers = []
     for vlist in cells_v:
-        pts = [verts_p[j] for j in vlist if 0 <= j < len(verts_p)]
+        pts = [verts_p[j] for j in vlist if isinstance(j, int)
+               and 0 <= j < len(verts_p)]
         if pts:
             centers.append((sum(p[0] for p in pts) / len(pts),
                             sum(p[1] for p in pts) / len(pts)))
@@ -145,15 +168,20 @@ def _river_settlements(pack, burgs, rivers):
         bx, by = b.get("x", 0), b.get("y", 0)
         best = None
         for r in rivers:
+            ri = r.get("i")
+            if not isinstance(ri, int):
+                continue  # a river without an index cannot be keyed
             for ci in r.get("cells", []):
-                c = centers[ci] if isinstance(ci, int) and ci < len(centers) else None
+                c = centers[ci] if (isinstance(ci, int)
+                                    and not isinstance(ci, bool)
+                                    and 0 <= ci < len(centers)) else None
                 if c is None:
                     continue
                 d2 = (c[0] - bx) ** 2 + (c[1] - by) ** 2
                 if d2 <= near_limit and (best is None or d2 < best[0]):
-                    best = (d2, r["i"])
+                    best = (d2, ri)
         if best is not None:
-            out.setdefault(best[1], []).append(b["name"])
+            out.setdefault(best[1], []).append(b)
     return out
 
 
@@ -172,7 +200,8 @@ def summarize(info, pack):
     burgs_by_state = {}
     for b in burgs:
         burgs_by_state.setdefault(b.get("state"), []).append(b)
-    culture_by_id = {c["i"]: c["name"] for c in cultures}
+    culture_by_id = {c["i"]: c["name"] for c in cultures
+                     if isinstance(c.get("i"), int) and c.get("name")}
 
     def burg_name(i):
         return next((b["name"] for b in burgs if b.get("i") == i), None)
@@ -215,15 +244,32 @@ def summarize(info, pack):
         "y": round(b.get("y", 0), 1),
     } for b in settlements]
 
-    rivers_all = [r for r in pack.get("rivers", []) if isinstance(r, dict)]
+    rivers_all = [r for r in pack.get("rivers", [])
+                  if isinstance(r, dict) and isinstance(r.get("i"), int)]
     on_river = _river_settlements(pack, burgs, rivers_all)
-    rivers = [{
-        "name": r.get("name") or f"river-{r.get('i')}",
-        "discharge": round(r.get("discharge", 0), 1),
-        "length": round(r.get("length", 0), 1),
-        "settlements": sorted(set(on_river.get(r["i"], [])))[:6],
-    } for r in sorted(rivers_all, key=lambda r: -r.get("discharge", 0))
-        [:RIVER_LIMIT]]
+    rivers = []
+    for r in sorted(rivers_all, key=lambda r: -r.get("discharge", 0))[
+            :RIVER_LIMIT]:
+        nearby = on_river.get(r["i"], [])
+        # most POPULOUS first (deterministic name tiebreak), deduped; the
+        # cap is declared when it bites, never silently
+        ranked, seen = [], set()
+        for b in sorted(nearby, key=lambda b: (-b.get("population", 0),
+                                               b["name"])):
+            if b["name"] not in seen:
+                seen.add(b["name"])
+                ranked.append(b)
+        kept = ranked[:RIVER_SETTLEMENTS_CAP]
+        entry = {
+            "name": r.get("name") or f"river-{r['i']}",
+            "discharge": round(r.get("discharge", 0), 1),
+            "length": round(r.get("length", 0), 1),
+            "settlements": [b["name"] for b in kept],
+        }
+        if len(ranked) > len(kept):
+            entry["settlements_note"] = (
+                f"top {len(kept)} of {len(ranked)} nearby by population")
+        rivers.append(entry)
 
     return {
         "meta": {
@@ -240,6 +286,12 @@ def summarize(info, pack):
             "religions": len(religions),
             "major_landmasses": len(features),
             "rivers": len(rivers_all),
+            # distinguish "no settlements computed" (.map section import,
+            # no graph arrays) from "rivers with truly none nearby"
+            "river_settlements": ("nearby settlements per river, most "
+                                  "populous first"
+                                  if _has_graph_arrays(pack) else
+                                  "not computed — export lacks graph arrays"),
         },
         "nations": nations,
         "cultures": [{

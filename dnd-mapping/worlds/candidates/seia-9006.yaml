@@ -10,11 +10,14 @@ summary:
   cultures: 16
   religions: 26
   major_landmasses: 7
+  rivers: 209
+  river_settlements: not computed — export lacks graph arrays
 nations:
 - id: shatharb-4
   name: Shatharb
   kind: Nomadic
   capital: Kizad
+  culture: Khazadur (Dwarven)
   form_of_government: See
   burgs: 252
   provinces: 59
@@ -28,6 +31,7 @@ nations:
   name: Scorcrosia
   kind: Generic
   capital: Scorcros
+  culture: Dail (Human)
   form_of_government: Empire
   burgs: 136
   provinces: 37
@@ -43,6 +47,7 @@ nations:
   name: Srurd
   kind: Nomadic
   capital: Cielb
+  culture: Kobold (Goblin)
   form_of_government: Empire
   burgs: 87
   provinces: 21
@@ -56,6 +61,7 @@ nations:
   name: Aymar
   kind: Generic
   capital: Obethlumye
+  culture: Quenian (Elfish)
   form_of_government: Republic
   burgs: 133
   provinces: 33
@@ -69,6 +75,7 @@ nations:
   name: Hethlindra
   kind: Nomadic
   capital: Raule
+  culture: Lothian (Dark Elfish)
   form_of_government: Kingdom
   burgs: 67
   provinces: 18
@@ -84,6 +91,7 @@ nations:
   name: Khiz
   kind: Generic
   capital: Shathiz
+  culture: Yotunn (Giants)
   form_of_government: Kingdom
   burgs: 153
   provinces: 38
@@ -96,6 +104,7 @@ nations:
   name: Tumunz
   kind: Nomadic
   capital: Shizdus
+  culture: Khazadur (Dwarven)
   form_of_government: Kingdom
   burgs: 65
   provinces: 17
@@ -108,6 +117,7 @@ nations:
   name: Umelule
   kind: Nomadic
   capital: Ghron
+  culture: Lothian (Dark Elfish)
   form_of_government: Kingdom
   burgs: 71
   provinces: 20
@@ -123,6 +133,7 @@ nations:
   name: Mosefia
   kind: Generic
   capital: Faypostle
+  culture: Anor (Human)
   form_of_government: Kingdom
   burgs: 115
   provinces: 32
@@ -135,6 +146,7 @@ nations:
   name: Raunyueg
   kind: Generic
   capital: Raunyueg
+  culture: Quenian (Elfish)
   form_of_government: Kingdom
   burgs: 130
   provinces: 32
@@ -149,6 +161,7 @@ nations:
   name: Ir-Ug
   kind: Nomadic
   capital: Kaz
+  culture: Ugluk (Orkish)
   form_of_government: Kingdom
   burgs: 48
   provinces: 12
@@ -161,6 +174,7 @@ nations:
   name: Galg
   kind: Generic
   capital: Galg
+  culture: Yotunn (Giants)
   form_of_government: Republic
   burgs: 87
   provinces: 23
@@ -173,6 +187,7 @@ nations:
   name: Galtsenmu
   kind: Nomadic
   capital: Gogodlon
+  culture: Dulandir (Human)
   form_of_government: Ulus
   burgs: 50
   provinces: 12
@@ -185,6 +200,7 @@ nations:
   name: Asete
   kind: Generic
   capital: Malian
+  culture: Quenian (Elfish)
   form_of_government: Theocracy
   burgs: 55
   provinces: 16
@@ -198,6 +214,7 @@ nations:
   name: Anaqua
   kind: Generic
   capital: Liriatheas
+  culture: Quenian (Elfish)
   form_of_government: Grand Duchy
   burgs: 59
   provinces: 16
@@ -211,6 +228,7 @@ nations:
   name: Brur
   kind: Nomadic
   capital: Brur
+  culture: Ugluk (Orkish)
   form_of_government: Grand Duchy
   burgs: 36
   provinces: 8
@@ -222,6 +240,7 @@ nations:
   name: Mythsarant
   kind: Generic
   capital: Mithtaset
+  culture: Quenian (Elfish)
   form_of_government: Duchy
   burgs: 44
   provinces: 11
@@ -235,6 +254,7 @@ nations:
   name: Smotia
   kind: Generic
   capital: Bearguard
+  culture: Anor (Human)
   form_of_government: Theocracy
   burgs: 33
   provinces: 10
@@ -246,6 +266,7 @@ nations:
   name: Unerilelha
   kind: Generic
   capital: Vinlurth
+  culture: Quenian (Elfish)
   form_of_government: Theocracy
   burgs: 26
   provinces: 7
@@ -257,6 +278,7 @@ nations:
   name: Grataph
   kind: River
   capital: Makese
+  culture: Aj'Snaga (Serpents)
   form_of_government: Duchy
   burgs: 15
   provinces: 5
@@ -268,6 +290,7 @@ nations:
   name: Hlurthin
   kind: Generic
   capital: Tlind
+  culture: Quenian (Elfish)
   form_of_government: Duchy
   burgs: 18
   provinces: 5
@@ -447,3 +470,164 @@ major_settlements:
   kind: Naval
   x: 1090.0
   y: 653.4
+rivers:
+- name: Nazurji
+  discharge: 980
+  length: 223.6
+  settlements: []
+- name: Khathad
+  discharge: 672
+  length: 71.4
+  settlements: []
+- name: Inlurthsa
+  discharge: 655
+  length: 75.0
+  settlements: []
+- name: Af Ainelana
+  discharge: 435
+  length: 43.4
+  settlements: []
+- name: Ullenya
+  discharge: 425
+  length: 22.8
+  settlements: []
+- name: Drauluindylla
+  discharge: 416
+  length: 90.4
+  settlements: []
+- name: Cryspire
+  discharge: 363
+  length: 193.5
+  settlements: []
+- name: Sprinwell
+  discharge: 356
+  length: 106.7
+  settlements: []
+- name: Gloomber
+  discharge: 346
+  length: 157.8
+  settlements: []
+- name: Nursoraghlo
+  discharge: 340
+  length: 124.0
+  settlements: []
+- name: Jarbulagniud
+  discharge: 327
+  length: 128.1
+  settlements: []
+- name: Nymalabadris
+  discharge: 324
+  length: 143.8
+  settlements: []
+- name: Grurrugh
+  discharge: 302
+  length: 29.3
+  settlements: []
+- name: Slofboif
+  discharge: 287
+  length: 52.7
+  settlements: []
+- name: Domalyeluma
+  discharge: 269
+  length: 152.2
+  settlements: []
+- name: Meethelelt
+  discharge: 260
+  length: 60.4
+  settlements: []
+- name: Lostshites
+  discharge: 249
+  length: 58.9
+  settlements: []
+- name: Talangol
+  discharge: 248
+  length: 109.9
+  settlements: []
+- name: Enillahashin
+  discharge: 237
+  length: 88.2
+  settlements: []
+- name: Shunzaddzar
+  discharge: 225
+  length: 97.9
+  settlements: []
+- name: Trireta
+  discharge: 219
+  length: 91.8
+  settlements: []
+- name: Eahomarithva
+  discharge: 214
+  length: 78.2
+  settlements: []
+- name: Korkraz
+  discharge: 210
+  length: 77.2
+  settlements: []
+- name: Lyanillune
+  discharge: 208
+  length: 65.2
+  settlements: []
+- name: Dreghei
+  discharge: 204
+  length: 50.4
+  settlements: []
+- name: Alsyari
+  discharge: 195
+  length: 39.9
+  settlements: []
+- name: Clearcairn
+  discharge: 192
+  length: 55.4
+  settlements: []
+- name: Bhirkug
+  discharge: 187
+  length: 77.5
+  settlements: []
+- name: Nuragz
+  discharge: 185
+  length: 56.5
+  settlements: []
+- name: Deadford
+  discharge: 182
+  length: 68.8
+  settlements: []
+- name: Yeth Inemye
+  discharge: 178
+  length: 51.3
+  settlements: []
+- name: Uthinn
+  discharge: 175
+  length: 30.3
+  settlements: []
+- name: Baram
+  discharge: 171
+  length: 118.6
+  settlements: []
+- name: Chaggausthmor
+  discharge: 171
+  length: 82
+  settlements: []
+- name: Stryt
+  discharge: 167
+  length: 47.8
+  settlements: []
+- name: Ty'athasheri
+  discharge: 161
+  length: 56.9
+  settlements: []
+- name: Zilarakzig
+  discharge: 157
+  length: 67.7
+  settlements: []
+- name: Eldraquen
+  discharge: 147
+  length: 79.8
+  settlements: []
+- name: Hlurthanafet
+  discharge: 144
+  length: 20.1
+  settlements: []
+- name: Clifrost
+  discharge: 141
+  length: 42.1
+  settlements: []

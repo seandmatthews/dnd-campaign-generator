@@ -13,6 +13,9 @@ agentic-simulator/world/state.yaml.bak
 agentic-simulator/world/.week-run-flag
 # scratch
 dnd-mapping/out-gen-city-smoke/
+# battlemap engine home: scratch, regenerated on demand (battlemap.py gen,
+# seed defaults to crc32(slug)); canon copies live in the campaigns repos
+dnd-mapping/worlds/sites/
 
 # session-local scratch (ZCode automations) and the engine home chronicle
 # output dir — restored from the campaign on every week run

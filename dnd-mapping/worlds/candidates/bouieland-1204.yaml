@@ -10,11 +10,14 @@ summary:
   cultures: 7
   religions: 18
   major_landmasses: 1
+  rivers: 214
+  river_settlements: not computed — export lacks graph arrays
 nations:
 - id: posia-1
   name: Posia
   kind: Generic
   capital: Escuecalo
+  culture: Astellian
   form_of_government: Empire
   burgs: 140
   provinces: 43
@@ -31,6 +34,7 @@ nations:
   name: Fjerduria
   kind: Generic
   capital: Bygland
+  culture: Norse
   form_of_government: Holy State
   burgs: 37
   provinces: 13
@@ -46,6 +50,7 @@ nations:
   name: Riftaberia
   kind: Generic
   capital: Riftaber
+  culture: Norse
   form_of_government: Empire
   burgs: 51
   provinces: 17
@@ -58,6 +63,7 @@ nations:
   name: Tavilbia
   kind: Generic
   capital: Tavilba
+  culture: Astellian
   form_of_government: Kingdom
   burgs: 74
   provinces: 22
@@ -72,6 +78,7 @@ nations:
   name: Cinilbania
   kind: Generic
   capital: Sautandi
+  culture: Astellian
   form_of_government: Holy State
   burgs: 47
   provinces: 17
@@ -86,6 +93,7 @@ nations:
   name: Hofjordia
   kind: Generic
   capital: Reitera
+  culture: Norse
   form_of_government: Kingdom
   burgs: 44
   provinces: 15
@@ -100,6 +108,7 @@ nations:
   name: Nutangia
   kind: Generic
   capital: Uquedomin
+  culture: Astellian
   form_of_government: Kingdom
   burgs: 38
   provinces: 12
@@ -114,6 +123,7 @@ nations:
   name: Sena
   kind: Generic
   capital: Sena
+  culture: Astellian
   form_of_government: Kingdom
   burgs: 25
   provinces: 10
@@ -130,6 +140,7 @@ nations:
   name: Pedadia
   kind: Generic
   capital: Pedada
+  culture: Astellian
   form_of_government: Kingdom
   burgs: 30
   provinces: 9
@@ -144,6 +155,7 @@ nations:
   name: Thingenia
   kind: Generic
   capital: Krist
+  culture: Norse
   form_of_government: Principality
   burgs: 29
   provinces: 10
@@ -156,6 +168,7 @@ nations:
   name: Synes
   kind: Generic
   capital: Flugar
+  culture: Norse
   form_of_government: Kingdom
   burgs: 55
   provinces: 18
@@ -170,6 +183,7 @@ nations:
   name: Fjerna
   kind: Generic
   capital: Bakholen
+  culture: Norse
   form_of_government: Theocracy
   burgs: 12
   provinces: 5
@@ -185,6 +199,7 @@ nations:
   name: Nansia
   kind: Naval
   capital: Hordh
+  culture: Keltan
   form_of_government: Union
   burgs: 24
   provinces: 7
@@ -198,6 +213,7 @@ nations:
   name: Krugar
   kind: Generic
   capital: Krugar
+  culture: Norse
   form_of_government: Grand Duchy
   burgs: 28
   provinces: 9
@@ -210,6 +226,7 @@ nations:
   name: Hofsosia
   kind: Generic
   capital: Beisfjor
+  culture: Norse
   form_of_government: Grand Duchy
   burgs: 19
   provinces: 6
@@ -223,6 +240,7 @@ nations:
   name: Aronsania
   kind: Naval
   capital: Aronsan
+  culture: Keltan
   form_of_government: Republic
   burgs: 16
   provinces: 6
@@ -238,6 +256,7 @@ nations:
   name: Casterue
   kind: Generic
   capital: Fuensa
+  culture: Astellian
   form_of_government: Free Territory
   burgs: 15
   provinces: 6
@@ -250,6 +269,7 @@ nations:
   name: Insia
   kind: Naval
   capital: Arden
+  culture: Keltan
   form_of_government: Republic
   burgs: 6
   provinces: 2
@@ -262,6 +282,7 @@ nations:
   name: Alaia
   kind: Generic
   capital: Alaredo
+  culture: Astellian
   form_of_government: Marches
   burgs: 9
   provinces: 3
@@ -274,6 +295,7 @@ nations:
   name: Inveria
   kind: Naval
   capital: Inver
+  culture: Keltan
   form_of_government: Duchy
   burgs: 8
   provinces: 3
@@ -286,6 +308,7 @@ nations:
   name: Castilzia
   kind: Generic
   capital: Olcaucil
+  culture: Astellian
   form_of_government: Duchy
   burgs: 2
   provinces: 2
@@ -436,3 +459,164 @@ major_settlements:
   kind: Naval
   x: 680.5
   y: 238.8
+rivers:
+- name: Drierozorea
+  discharge: 1840
+  length: 338.3
+  settlements: []
+- name: Borismeurle
+  discharge: 1800
+  length: 112.3
+  settlements: []
+- name: Nutan
+  discharge: 1343
+  length: 101.3
+  settlements: []
+- name: Hormo
+  discharge: 785
+  length: 122.4
+  settlements: []
+- name: Infart
+  discharge: 750
+  length: 171.8
+  settlements: []
+- name: Hitajofrio
+  discharge: 621
+  length: 100.7
+  settlements: []
+- name: Quindiejar
+  discharge: 583
+  length: 23.7
+  settlements: []
+- name: Alfjor
+  discharge: 579
+  length: 249.7
+  settlements: []
+- name: Herzosove
+  discharge: 556
+  length: 106.2
+  settlements: []
+- name: Laureyrar
+  discharge: 554
+  length: 157.4
+  settlements: []
+- name: Gimsbak
+  discharge: 530
+  length: 102.6
+  settlements: []
+- name: Sorea
+  discharge: 528
+  length: 131.4
+  settlements: []
+- name: Hugeraven
+  discharge: 528
+  length: 135.6
+  settlements: []
+- name: Krududurey
+  discharge: 449
+  length: 199.5
+  settlements: []
+- name: Utsos
+  discharge: 435
+  length: 92.9
+  settlements: []
+- name: Hertue
+  discharge: 412
+  length: 71.4
+  settlements: []
+- name: Rejon
+  discharge: 406
+  length: 117.8
+  settlements: []
+- name: Huerzuejar
+  discharge: 400
+  length: 173.6
+  settlements: []
+- name: Sorvipones
+  discharge: 395
+  length: 66.8
+  settlements: []
+- name: Flaleloy
+  discharge: 394
+  length: 87.3
+  settlements: []
+- name: Pargas
+  discharge: 355
+  length: 128.7
+  settlements: []
+- name: Aberkip
+  discharge: 311
+  length: 101.3
+  settlements: []
+- name: Iubh
+  discharge: 297
+  length: 99.6
+  settlements: []
+- name: Hvamsey
+  discharge: 276
+  length: 49.8
+  settlements: []
+- name: Invernesws
+  discharge: 257
+  length: 128.8
+  settlements: []
+- name: Ciruegas
+  discharge: 234
+  length: 64.7
+  settlements: []
+- name: Nelatey
+  discharge: 221
+  length: 45.3
+  settlements: []
+- name: Estrie
+  discharge: 217
+  length: 40.7
+  settlements: []
+- name: Perolias
+  discharge: 216
+  length: 75.9
+  settlements: []
+- name: Chozastilza
+  discharge: 211
+  length: 81.0
+  settlements: []
+- name: Gorestad
+  discharge: 208
+  length: 79.9
+  settlements: []
+- name: Banos
+  discharge: 203
+  length: 63.3
+  settlements: []
+- name: Llan
+  discharge: 203
+  length: 33.3
+  settlements: []
+- name: Utskar
+  discharge: 202
+  length: 122.7
+  settlements: []
+- name: Huerde
+  discharge: 201
+  length: 61.7
+  settlements: []
+- name: Tolaverue
+  discharge: 201
+  length: 76.7
+  settlements: []
+- name: Hornaldea
+  discharge: 196
+  length: 37.3
+  settlements: []
+- name: Ucejos
+  discharge: 192
+  length: 57.2
+  settlements: []
+- name: Treabercly
+  discharge: 191
+  length: 47.9
+  settlements: []
+- name: Kravon
+  discharge: 190
+  length: 44.2
+  settlements: []

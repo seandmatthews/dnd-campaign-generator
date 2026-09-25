@@ -1,4 +1,4 @@
-# Atlas candidates — five generated worlds
+# Atlas candidates — generated worlds
 
 **CHOSEN 2026-09-21: candidate 3, Bonia.** The sandbox (Varn premise) is
 anchored to **Ruravaqan**, a non-capital port of Shadia (merchant republic,
@@ -22,6 +22,15 @@ seed is entered through real UI input.
 | 3 | Bonia | 878636343 | 18 | 566 | 11 | Oriental archipelago — Enekian Khaganate, Hdian Caliphate, Kuiz Guo; island chains, naval flavor. |
 | 4 | Lombreux | 985178135 | 16 | 1141 | 8 | Mediterranean, Antique cultures — Ragusian Empire, Holy State of Calerania, Republic of Zepatia; inland sea, few large powers. |
 | 5 | Bouieland | 137451204 | 21 | 709 | 7 | High Island (one big continent) — Posian Empire, Holy State of Fjerduria; frontier seas, mixed Nordic/other phonologies. |
+
+## Later worlds (not from the batch above)
+
+| World | Seed | Raw source | Notes |
+|-------|------|------------|-------|
+| world-913 (Tasospon) | 913 | `campaigns/sable-ford/world/source.json` (full JSON export) | The Sable Ford campaign world. Re-imported with the river/culture schema 2026-09-25; the raw stays in the campaign repo, so `--all` does not regenerate this one. |
+| world-607942 | 7942 | none tracked | Imported with the river/culture schema 2026-09-25. |
+| world-24601 | 4601 | none tracked | Imported before the raw/ convention was settled; no raw dump exists, so it cannot be regenerated. Still on the pre-river/culture schema. |
+| world-424242 | 4242 | none tracked | Same as world-24601: no raw, not regenerable, old schema. |
 
 ## Review notes
 
