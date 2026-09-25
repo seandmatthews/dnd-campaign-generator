@@ -199,6 +199,41 @@ def test_index_collision_finding(tmp_spine_root):
     assert "links/collision" in {f["rule"] for f in links.findings("testvale")}
 
 
+def test_build_index_caches_until_the_vault_changes(tmp_spine_root, monkeypatch):
+    """The whole-vault parse ran on every review GET, page view, and
+    missing-pages check — the review queue is polled at ~1 s and the cost
+    is O(vault), compounding one chronicle per week. build_index memoizes
+    on a stat-only fingerprint and rebuilds only when a scanned file
+    actually changes (new mtime even with identical bytes, or membership)."""
+    builds = {"n": 0}
+    real_build = links._build_index
+
+    def counting(campaign):
+        builds["n"] += 1
+        return real_build(campaign)
+
+    monkeypatch.setattr(links, "_build_index", counting)
+    first = links.build_index("testvale")
+    assert links.build_index("testvale") is first, \
+        "the second call serves the cached index"
+    assert builds["n"] == 1
+
+    # identical bytes at a new mtime still invalidate: rewrite a chronicle
+    chron = next((tmp_spine_root / "testvale"
+                  / "simulation" / "chronicle").glob("*.md"))
+    chron.write_text(chron.read_text(encoding="utf-8"), encoding="utf-8")
+    links.build_index("testvale")
+    assert builds["n"] == 2, "an mtime change rebuilds even with same bytes"
+
+    # new content is visible immediately: a fresh page's dangling link appears
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "New Page.md",
+           "---\nname: New Page\n---\npoints at [[Nowhere At All]]\n")
+    idx = links.build_index("testvale")
+    assert builds["n"] == 3
+    assert idx is not first
+    assert any(d["target"] == "Nowhere At All" for d in idx["dangling"])
+
+
 def test_page_route_backlinks_and_review_findings(client, tmp_spine_root):
     _linker_page(tmp_spine_root, "Kestra",
                  "[[Alweric Tealeaf]] taught me the ferry. "

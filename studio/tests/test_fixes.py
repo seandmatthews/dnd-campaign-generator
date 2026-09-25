@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import threading
+import time
 import urllib.error
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from conftest import wait_for_job
 
 import doctor
 import engines
+import jobs
 import llm_client
 import spine
 
@@ -272,6 +274,60 @@ def test_doctor_skips_the_simulator_probe_while_a_week_is_in_flight(
     monkeypatch.setattr(engines, "week_flag_path", lambda: flag)
     checks = doctor.check_engines()
     assert "skipped" in sim_entry(checks)["detail"]
+
+
+# -------------------------------------------------------- bounded transcripts
+
+
+def test_engine_run_transcript_is_bounded(tmp_path):
+    """engines._run kept EVERY output line of a run in RAM — a chatty
+    30-minute engine pinned its whole transcript (doubled by the job log).
+    The run list is capped at RUN_LINE_CAP; the head is dropped with an
+    honest marker, and tails still read correctly."""
+    n = engines.RUN_LINE_CAP + 500
+    rc, lines = engines.run_py(
+        tmp_path, "-c",
+        "import sys\n"
+        f"for i in range({n}): print(f'line {{i}}')\n",
+        timeout=60)
+    assert rc == 0
+    assert len(lines) == engines.RUN_LINE_CAP + 1, "cap + the dropped marker"
+    assert lines[0] == (f"[studio] 500 earlier engine lines dropped "
+                        f"(kept the last {engines.RUN_LINE_CAP})")
+    assert lines[-1] == f"line {n - 1}", "the tail survives the cap"
+
+
+def test_job_log_is_bounded_during_the_run():
+    """The job's DURING-the-run log was an append-everything list trimmed
+    only when the job finished; a 30-minute week pinned every engine line
+    in RAM while the API only ever served the 40-line tail. The ring keeps
+    the same tail live throughout, with bounded memory behind it."""
+    release = threading.Event()
+
+    def noisy(log):
+        for i in range(500):
+            log(f"line {i}")
+        release.wait(timeout=5)
+        return {"ok": True}
+
+    jid = jobs.submit("test-noisy", noisy)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        rec = jobs.get(jid)
+        if rec["log_tail"] and rec["log_tail"][-1] == "line 499":
+            break
+        time.sleep(0.02)
+    assert rec["status"] == "running", rec
+    assert len(rec["log_tail"]) == jobs.LOG_CAP, "bounded mid-run, not after"
+    assert rec["log_tail"][0] == f"line {500 - jobs.LOG_CAP}"
+    release.set()
+    deadline = time.time() + 5
+    while time.time() < deadline and jobs.get(jid)["status"] != "done":
+        time.sleep(0.02)
+    rec = jobs.get(jid)
+    assert rec["status"] == "done" and rec["result"] == {"ok": True}
+    assert len(rec["log_tail"]) == jobs.LOG_CAP
+    assert rec["log_tail"][-1] == "line 499"
 
 
 # ------------------------------------------------------------- llm_client

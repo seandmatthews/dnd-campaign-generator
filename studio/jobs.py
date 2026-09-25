@@ -7,6 +7,7 @@ UI to poll at ~1 s via GET /api/jobs/{id}. Jobs are ephemeral on purpose —
 canon lives on disk only (guardrail 2).
 """
 
+import collections
 import datetime
 import logging
 import threading
@@ -52,7 +53,11 @@ def submit(kind: str, fn) -> str:
         "result": None,
         "error": None,
         "started": _now(),
-        "_log_all": [],
+        # the DURING-the-run log is a ring: a 30-minute week logs every
+        # engine line, and the old append-everything list pinned the whole
+        # transcript in RAM until the finally-trim (the API only ever
+        # served the 40-line tail, so nothing observable changes)
+        "_log_all": collections.deque(maxlen=LOG_CAP),
     }
     with _LOCK:
         _JOBS[job_id] = job
@@ -61,7 +66,7 @@ def submit(kind: str, fn) -> str:
         line = str(line).rstrip("\n")
         with _LOCK:
             job["_log_all"].append(line)
-            job["log_tail"] = job["_log_all"][-LOG_CAP:]
+            job["log_tail"] = list(job["_log_all"])
         _log.info("[job %s] %s", job_id, line)
 
     def run():
@@ -79,11 +84,11 @@ def submit(kind: str, fn) -> str:
                 job["status"] = "error"
             _log.error("job %s (%s) failed: %s", job_id, job["kind"], e)
         finally:
-            # GC: the full log is dead weight once the job is over (the tail
-            # stays), and the dict itself grows without bound on a long-lived
-            # server — keep only the newest JOB_CAP records.
+            # GC: the ring is dead weight once the job is over (the tail
+            # stays), and the dict itself grows without bound on a
+            # long-lived server — keep only the newest JOB_CAP records.
             with _LOCK:
-                job["_log_all"] = job["log_tail"]
+                job["_log_all"] = None
                 if len(_JOBS) > JOB_CAP:
                     finished = [j for j in _JOBS.values()
                                 if j["status"] in ("done", "error")]

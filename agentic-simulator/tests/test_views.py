@@ -90,6 +90,68 @@ def test_facts_visibility_public_restricted_and_dm_only():
     assert "facts_you_know" not in views.faction_view(bare, "mint")
 
 
+def test_rumors_window_keeps_recent_and_counts_the_omitted():
+    """The prompt-growth fix: the view carries rumors heard inside
+    RUMOR_WINDOW_WEEKS plus an honest `older_rumors_not_shown` count (the
+    briefing-cap pattern). state.yaml keeps everything — spread, why, and
+    the studio's rumor board read the full record; only the prompt shrinks."""
+    state = mini_state()
+    state["meta"]["clock"]["week"] = 20
+    state["rumors"] = [
+        {   # heard long ago (origin saw it at birth): outside the window
+            "id": "rumor_0001", "born_week": 4, "origin": "mint",
+            "claim": "An old claim, long stale.",
+            "truth": True, "fidelity": "dead",
+            "transmissions": [], "heard_by": ["mint"],
+        },
+        {   # heard last week: news, stays
+            "id": "rumor_0002", "born_week": 19, "origin": "reliquary",
+            "claim": "A fresh claim still circulating.",
+            "truth": True, "fidelity": "eyewitness",
+            "transmissions": [], "heard_by": ["mint", "reliquary"],
+        },
+    ]
+    view = faction_view(state, "mint")
+    claims = [r["claim"] for r in view["rumors_you_have_heard"]]
+    assert claims == ["A fresh claim still circulating."], \
+        f"only in-window rumors ride in the view: {claims}"
+    assert view["older_rumors_not_shown"] == 1, \
+        "the view says how many rumors were left out"
+    assert len(state["rumors"]) == 2, "state keeps the full record"
+
+    # nothing truncated -> no omission key at all (a young world is unchanged)
+    young = faction_view(mini_state(), "mint")
+    assert "older_rumors_not_shown" not in young
+    assert [r["claim"] for r in young["rumors_you_have_heard"]] == \
+        ["The Mint bought the harbor debt."]
+    print("  window: stale rumors leave the view; the omitted count is honest  OK")
+
+
+def test_rumors_window_boundary_week_still_rides():
+    """The boundary is inclusive: a rumor heard at week - window + 1 (the
+    oldest week inside the window) is still in the view; one week older
+    drops out and increments the omitted count."""
+    state = mini_state()
+    week = 20
+    state["meta"]["clock"]["week"] = week
+    edge = week - views.RUMOR_WINDOW_WEEKS + 1
+    state["rumors"] = [{
+        "id": "rumor_0001", "born_week": edge, "origin": "mint",
+        "claim": "Heard at the window's oldest week.",
+        "truth": True, "fidelity": "hearsay",
+        "transmissions": [], "heard_by": ["mint"],
+    }]
+    view = faction_view(state, "mint")
+    assert [r["heard_week"] for r in view["rumors_you_have_heard"]] == [edge]
+    assert "older_rumors_not_shown" not in view
+    # one week older and it drops out with the count
+    state["rumors"][0]["born_week"] = edge - 1
+    view = faction_view(state, "mint")
+    assert "rumors_you_have_heard" not in view
+    assert view["older_rumors_not_shown"] == 1
+    print("  window: the oldest in-window week rides; one older drops  OK")
+
+
 def temp_state_file(state, directory):
     path = pathlib.Path(directory) / "state.yaml"
     with open(path, "w", encoding="utf-8") as f:
@@ -173,6 +235,8 @@ if __name__ == "__main__":
         test_cli_usage_and_missing_state_errors,
         test_state_default_points_at_project_root,
         test_facts_visibility_public_restricted_and_dm_only,
+        test_rumors_window_keeps_recent_and_counts_the_omitted,
+        test_rumors_window_boundary_week_still_rides,
     ]:
         fn()
     print("all views tests passed")

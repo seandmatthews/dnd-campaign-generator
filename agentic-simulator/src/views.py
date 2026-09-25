@@ -32,6 +32,28 @@ _OUTSIDER_STRENGTH = {
     "none": "negligible",
 }
 
+# The prompt carries a rumor while it is still news: heard inside this many
+# weeks. Older claims stay in state.yaml (rumors.spread, why.py, and the
+# studio's rumor board read the full record) — they just stop riding in
+# every faction prompt, where ~3 new claims a week compounded linearly: a
+# week-50 faction re-sent ~150 stale lines (dead ones included) each week,
+# multiplying token cost and diluting attention on the current week.
+# Fidelity needs no filter of its own: spread() never adds a listener at
+# "dead", so a dead-as-heard entry cannot exist, and a rumor heard recently
+# at high fidelity is news even if it has since decayed elsewhere.
+RUMOR_WINDOW_WEEKS = 8
+
+
+def _recent_rumors(state, faction_id):
+    """faction_id's rumors heard inside the window, oldest first, plus the
+    honest omitted count (the briefing-cap pattern): the view says what was
+    left out instead of silently shrinking the world."""
+    week = state["meta"]["clock"]["week"]
+    cutoff = week - RUMOR_WINDOW_WEEKS + 1
+    heard = rumors.heard(state, faction_id)
+    recent = [r for r in heard if r["heard_week"] >= cutoff]
+    return recent, len(heard) - len(recent)
+
 
 def facts_for(state, faction_id):
     """The approved facts this faction may see: `public` facts (public in
@@ -88,9 +110,11 @@ def faction_view(state, faction_id):
         "you": deepcopy(me),
         "others": others,
     }
-    heard = rumors.heard(state, faction_id)
-    if heard:
-        view["rumors_you_have_heard"] = heard
+    recent_rumors, omitted = _recent_rumors(state, faction_id)
+    if recent_rumors:
+        view["rumors_you_have_heard"] = recent_rumors
+    if omitted:
+        view["older_rumors_not_shown"] = omitted
     facts = facts_for(state, faction_id)
     if facts:
         view["facts_you_know"] = facts

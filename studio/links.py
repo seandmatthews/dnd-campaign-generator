@@ -18,6 +18,7 @@ the scanner runs over the raw page text, frontmatter included.
 """
 
 import re
+import threading
 from pathlib import Path
 
 import spine
@@ -55,8 +56,58 @@ def _read(path: Path) -> str:
         return ""  # an unreadable file is skipped, never a failed index
 
 
+# The whole-vault index is rebuilt on every review GET, page view, and
+# missing-pages check — the review queue is polled at ~1 s, and the parse
+# cost is O(vault size), compounding as chronicles accumulate one file per
+# week. The cache keys on a stat-only fingerprint (paths + mtime_ns + size
+# of exactly the files build_index reads): rebuilds happen only when a
+# scanned file actually changed, and the fingerprint walk never parses.
+_CACHE_LOCK = threading.Lock()
+_CACHE: dict = {}          # resolved campaign dir -> {"fp": tuple, "index": dict}
+_CACHE_CAMPAIGNS = 8       # a studio tour of many campaigns must not pin every vault
+
+
+def _fingerprint(campaign: Path) -> tuple:
+    """(relpath, mtime_ns, size) for every file _build_index reads — kept
+    in lockstep with its three scans (entities, chronicles, map companion
+    notes). Stat only: no frontmatter parsing, no page reads."""
+    out = []
+
+    def add_dir(rel_dir: str) -> None:
+        d = campaign / rel_dir
+        if not d.is_dir():
+            return
+        for f in sorted(d.glob("*.md")):
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            out.append((f.relative_to(campaign).as_posix(),
+                        st.st_mtime_ns, st.st_size))
+
+    def add_map_notes(rel_dir: str) -> None:
+        base = campaign / rel_dir
+        if not base.is_dir():
+            return
+        for slug_dir in sorted(base.iterdir()):
+            note = slug_dir / f"{slug_dir.name}.md" if slug_dir.is_dir() else None
+            if note is not None and note.is_file():
+                try:
+                    st = note.stat()
+                except OSError:
+                    continue
+                out.append((note.relative_to(campaign).as_posix(),
+                            st.st_mtime_ns, st.st_size))
+
+    add_dir("lore/entities")
+    add_dir("simulation/chronicle")
+    add_map_notes("maps/cities")
+    add_map_notes("maps/sites")
+    return tuple(sorted(out))
+
+
 def build_index(name: str) -> dict:
-    """The vault index for one campaign:
+    """The vault index for one campaign, cached until the vault changes:
 
     pages      every entity page (spine.entity_pages shape) + chronicles,
                each with `kind` ("entity" | "chronicle") and `key`
@@ -66,19 +117,38 @@ def build_index(name: str) -> dict:
     dangling   [{file, line, target}] — targets resolving to nothing
     collisions [{key, files}] — one key claiming two pages
 
+    The returned index is shared between callers until the vault changes:
+    treat it as read-only (annotate copies, as lore.py's page view does).
     A page whose frontmatter does not parse raises CampaignFileError
-    (readable 422 via the server handler) — same contract as the loaders.
+    (readable 422 via the server handler) — same contract as the loaders;
+    failures are never cached.
     """
     campaign = spine.require_campaign(name)
+    fp = _fingerprint(campaign)
+    key = str(campaign)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+        if hit is not None and hit["fp"] == fp:
+            return hit["index"]
+        index = _build_index(campaign)
+        _CACHE[key] = {"fp": fp, "index": index}
+        while len(_CACHE) > _CACHE_CAMPAIGNS:
+            _CACHE.pop(next(iter(_CACHE)))
+        return index
+
+
+def _build_index(campaign: Path) -> dict:
+    """The uncached index build (build_index holds the cache around it)."""
     # `source` is the index's discriminator (entity page vs chronicle); a
     # page's own freeform `kind` (banking house, place, district…) stays
-    # untouched — it is the DM's data, not the index's.
-    pages = [dict(p, source="entity") for p in spine.entity_pages(name)]
+    # untouched — it is the DM's data, not the index's. (The spine loaders
+    # take the campaign NAME; the path's final segment is exactly that.)
+    pages = [dict(p, source="entity") for p in spine.entity_pages(campaign.name)]
 
     chron_dir = campaign / "simulation" / "chronicle"
     chronicles = []
     if chron_dir.is_dir():
-        for c in spine.chronicles(name):
+        for c in spine.chronicles(campaign.name):
             chronicles.append({
                 "source": "chronicle",
                 "kind": "",

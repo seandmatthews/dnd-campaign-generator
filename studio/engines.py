@@ -10,6 +10,7 @@ Engine roots resolve relative to the studio parent — studio is a fourth
 sibling of dnd-mapping / agentic-simulator / verification (D1).
 """
 
+import collections
 import json
 import os
 import shutil
@@ -94,6 +95,14 @@ def engine_chronicle_dir() -> Path:
     return AGENTIC_SIMULATOR / "chronicle"
 
 
+# The per-run transcript cap: week staging re-parses the whole run output
+# for HOLDS lines (a week prints dozens), error paths read the tail — but a
+# chatty node worldgen used to pin its ENTIRE transcript in RAM for the
+# run's duration, doubled by the job log. Past the cap, lines are dropped
+# from the head and a marker says so.
+RUN_LINE_CAP = 4000
+
+
 def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple:
     if env:
         # merge over the parent env (PATH etc. must survive); never mutate it
@@ -111,7 +120,8 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
     except FileNotFoundError as e:
         raise RuntimeError(f"engine not found for {' '.join(cmd[:2])}: {e}")
 
-    lines: list = []
+    lines = collections.deque(maxlen=RUN_LINE_CAP)
+    dropped = 0
     timed_out = threading.Event()
 
     def _kill():
@@ -138,6 +148,8 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
     try:
         for raw in proc.stdout:
             line = raw.rstrip("\n")
+            if len(lines) == RUN_LINE_CAP:
+                dropped += 1
             lines.append(line)
             if on_line is not None:
                 on_line(line)
@@ -152,7 +164,11 @@ def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple
         lines.append(f"[studio] engine killed after {timeout}s timeout")
         if rc == 0:  # a killed child usually exits nonzero; 0 still means timeout
             rc = 124
-    return rc, lines
+    out = list(lines)
+    if dropped:
+        out.insert(0, f"[studio] {dropped} earlier engine lines dropped "
+                      f"(kept the last {RUN_LINE_CAP})")
+    return rc, out
 
 
 def copy_file(src: Path, dst: Path) -> Path:
