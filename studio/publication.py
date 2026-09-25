@@ -586,6 +586,17 @@ def _cap_receipts(receipts: Path) -> None:
             pass
 
 
+def transaction_snapshot(name: str, tx_id: str | None) -> dict | None:
+    """The snapshot bookkeeping recorded for a published transaction (its
+    manifest's `snapshot`), or None. Read-only: replayed accepts use it to
+    answer with the same snapshot field the live path returned."""
+    if not tx_id:
+        return None
+    m = _load_manifest(spine.campaign_dir(name) / TX_DIR_NAME / tx_id)
+    snap = m.get("snapshot") if isinstance(m, dict) else None
+    return snap if isinstance(snap, dict) else None
+
+
 def after_snapshot(name: str, tx_id: str | None, snap: dict) -> None:
     """The route's snapshot bookkeeping after a published transaction:
     committed/no_change prunes the staging; failed/unavailable retains it

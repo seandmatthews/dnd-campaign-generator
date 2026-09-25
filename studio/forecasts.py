@@ -17,6 +17,8 @@ Discarded forecasts are never fed into future prompts.
 
 import datetime
 import pathlib
+import re
+import shutil
 
 import yaml
 
@@ -25,12 +27,20 @@ from proposals import new_id
 
 SCHEMA_VERSION = 1
 
+# same id discipline proposals._bundle uses: a forecast id arrives from a
+# URL path, and on Windows a drive-absolute or .. id would escape the
+# forecasts root entirely (Path join replaces the base)
+_ID_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*")
+
 
 def _root(d: pathlib.Path) -> pathlib.Path:
     return d / "simulation" / "forecasts"
 
 
 def _bundle(name: str, forecast_id: str) -> pathlib.Path:
+    if (not forecast_id or not _ID_RE.fullmatch(forecast_id)
+            or ".." in forecast_id):
+        raise ForecastError(f"invalid forecast id: {forecast_id!r}")
     bdir = _root(spine.campaign_dir(name)) / forecast_id
     if not bdir.is_dir() or not (bdir / "manifest.yaml").is_file():
         raise ForecastError(f"no such forecast: {forecast_id}")
@@ -43,29 +53,38 @@ class ForecastError(Exception):
 
 def create(name: str, *, base_week, weeks: list, run_record: dict) -> str:
     """Stage a forecast bundle. weeks: [{week, title, markdown, diff}].
-    Caller holds the campaign lock."""
-    bdir = _root(spine.campaign_dir(name)) / new_id()
-    bdir.mkdir(parents=True)
-    manifest = {
-        "schema_version": SCHEMA_VERSION,
-        "forecast_id": bdir.name,
-        "kind": "forecast",
-        "status": "active",
-        "base_week": base_week,
-        "weeks_planned": len(weeks),
-        "created": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(timespec="seconds"),
-        "run_record": run_record,
-    }
-    for w in weeks:
-        fn = f"week-{int(w['week']):04d}.yaml"
-        (bdir / fn).write_text(
-            yaml.safe_dump(w, sort_keys=False, allow_unicode=True, width=100),
-            encoding="utf-8")
-        manifest.setdefault("artifacts", {})[f"week-{w['week']}"] = fn
-    spine.write_text_atomic(bdir / "manifest.yaml", yaml.safe_dump(
-        manifest, sort_keys=False, allow_unicode=True, width=100))
-    return bdir.name
+    Built in a .staging sibling and renamed in at the end: a crash mid-
+    write leaves (at worst) an ignored staging dir, never a manifest-less
+    orphan bundle pretending to be a forecast. Caller holds the campaign
+    lock."""
+    root = _root(spine.campaign_dir(name))
+    bdir = root / new_id()
+    tmp = root / (bdir.name + ".staging")
+    tmp.mkdir(parents=True)
+    try:
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "forecast_id": bdir.name,
+            "kind": "forecast",
+            "status": "active",
+            "base_week": base_week,
+            "weeks_planned": len(weeks),
+            "created": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+            "run_record": run_record,
+        }
+        for w in weeks:
+            fn = f"week-{int(w['week']):04d}.yaml"
+            (tmp / fn).write_text(
+                yaml.safe_dump(w, sort_keys=False, allow_unicode=True,
+                               width=100), encoding="utf-8")
+            manifest.setdefault("artifacts", {})[f"week-{w['week']}"] = fn
+        spine.write_text_atomic(tmp / "manifest.yaml", yaml.safe_dump(
+            manifest, sort_keys=False, allow_unicode=True, width=100))
+        tmp.rename(bdir)  # same volume: the bundle appears complete or not
+        return bdir.name
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)  # no-op once renamed
 
 
 def _load_manifest(bdir: pathlib.Path) -> dict | None:

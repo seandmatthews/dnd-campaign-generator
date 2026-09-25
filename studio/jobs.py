@@ -11,6 +11,7 @@ import collections
 import datetime
 import logging
 import threading
+import time
 import uuid
 
 _LOCK = threading.Lock()
@@ -105,3 +106,20 @@ def get(job_id: str):
     with _LOCK:
         job = _JOBS.get(job_id)
         return _public(job) if job else None
+
+
+def wait_all(timeout: float = 30.0) -> bool:
+    """Block until no submitted job is queued or running. Test quiescence:
+    force-releasing a lock a live job thread still holds breaks mutual
+    exclusion mid-suite (its finally then releases an unlocked lock), so
+    teardown must wait for the workers to finish BEFORE touching locks.
+    True when quiet, False on timeout."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with _LOCK:
+            busy = any(j["status"] in ("queued", "running")
+                       for j in _JOBS.values())
+        if not busy:
+            return True
+        time.sleep(0.02)
+    return False

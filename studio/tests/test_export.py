@@ -292,7 +292,10 @@ def test_export_excludes_every_documented_noise_pattern(client,
     """excluded() is the whole privacy story — pin every pattern."""
     _make_campaigns(tmp_spine_root, monkeypatch)
     for rel in ("x.log", "x.bak", "x.tmp", "x.pyc", "sub/__pycache__/m.pyc",
-                ".git/HEAD", ".gitignore", "llm.env", "llm.env.example"):
+                ".git/HEAD", ".gitignore", "llm.env", "llm.env.example",
+                "simulation/forecasts/20260925T120000-ab12cd34/manifest.yaml",
+                "simulation/forecasts/20260925T120000-ab12cd34/week-0004.yaml"):
         assert export_campaign.excluded(rel), f"{rel} must be excluded"
-    for rel in ("campaign.yaml", "simulation/state.yaml", "notes.md"):
+    for rel in ("campaign.yaml", "simulation/state.yaml", "notes.md",
+                "simulation/proposals/p1/proposal.yaml"):
         assert not export_campaign.excluded(rel), f"{rel} must ride along"

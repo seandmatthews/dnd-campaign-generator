@@ -106,16 +106,13 @@ def _validate_visibility(visibility, faction_ids) -> str | list:
         "visibility must be 'dm_only', 'public', or a list of faction ids")
 
 
-def upsert(name: str, *, fact_id: str | None = None, text: str,
-           visibility, source_file: str = "", subjects=None,
-           source_revision: str | None = None) -> dict:
-    """Create or update one fact. Creating records the source file's
-    CURRENT revision as approved (when a source file is given); updates
-    that change text/visibility re-approve against the current revision
-    too. Caller holds the campaign lock."""
-    doc = load(name)
-    state = spine.load_state(name)
-    faction_ids = {f.get("id") for f in (state.get("factions") or [])}
+def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
+                  text, visibility, source_file: str = "", subjects=None,
+                  source_revision: str | None = None) -> dict:
+    """upsert's validation + mutation on a caller-owned (unsaved) doc.
+    Shared by upsert (direct save) and the transactional record/supersede
+    flows (the save rides the publication that also commits the compiled
+    state)."""
     vis = _validate_visibility(visibility, faction_ids)
     text = str(text or "").strip()
     if not text:
@@ -142,6 +139,24 @@ def upsert(name: str, *, fact_id: str | None = None, text: str,
         fact["stale"] = False
     fact["approved"] = datetime.datetime.now(
         datetime.timezone.utc).isoformat(timespec="seconds")
+    return fact
+
+
+def upsert(name: str, *, fact_id: str | None = None, text: str,
+           visibility, source_file: str = "", subjects=None,
+           source_revision: str | None = None) -> dict:
+    """Create or update one fact, saving the store directly. Creating
+    records the source file's CURRENT revision as approved (when a source
+    file is given); updates that change text/visibility re-approve against
+    the current revision too. Caller holds the campaign lock. (The studio's
+    record/supersede routes use the transactional variants below — this
+    direct save is the standalone path.)"""
+    doc = load(name)
+    state = spine.load_state(name)
+    faction_ids = {f.get("id") for f in (state.get("factions") or [])}
+    fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
+                         visibility=visibility, source_file=source_file,
+                         subjects=subjects, source_revision=source_revision)
     _save(name, doc)
     return fact
 
@@ -149,21 +164,77 @@ def upsert(name: str, *, fact_id: str | None = None, text: str,
 def supersede(name: str, old_id: str, *, text: str, visibility,
               source_file: str = "", subjects=None) -> dict:
     """Approve a corrected fact and flip the old one to superseded (kept
-    for provenance, never compiled again)."""
+    for provenance, never compiled again). Direct-save variant; the
+    studio's route uses supersede_fact_tx."""
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
     if old is None:
         raise KnowledgeError(f"no such fact: {old_id}")
-    new = upsert(name, text=text, visibility=visibility,
-                 source_file=source_file, subjects=subjects)
-    # upsert re-loaded and saved the store — reload before mutating the old
-    # record, or this save would clobber the new fact (lost update)
-    doc = load(name)
-    old = next(f for f in doc["facts"] if f.get("id") == old_id)
+    state = spine.load_state(name)
+    faction_ids = {f.get("id") for f in (state.get("factions") or [])}
+    new = _apply_upsert(name, doc, faction_ids, text=text,
+                        visibility=visibility, source_file=source_file,
+                        subjects=subjects)
+    # _apply_upsert mutated OUR doc — mark the old record on the same
+    # object, one save, no lost-update window
     old["status"] = "superseded"
     old["superseded_by"] = new["id"]
     _save(name, doc)
     return new
+
+
+def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
+                   visibility, source_file: str = "", subjects=None) -> tuple:
+    """Record a fact AND compile the visible slice in ONE publication
+    transaction: the store save and the compiled state commit are two
+    writes of the same publish — a crash leaves neither or both, never a
+    recorded fact the engine state never saw (the old two-step order left
+    exactly that window, self-healing only on the next knowledge write).
+    Caller holds the campaign lock. Returns (fact, publication result)."""
+    doc = load(name)
+    state = spine.load_state(name)
+    faction_ids = {f.get("id") for f in (state.get("factions") or [])}
+    fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
+                         visibility=visibility, source_file=source_file,
+                         subjects=subjects)
+    return fact, _publish_store_and_state(name, doc, state,
+                                          operation="record knowledge fact")
+
+
+def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
+                      source_file: str = "", subjects=None) -> tuple:
+    """supersede + compile in one publication transaction (same reasoning
+    as record_fact_tx). Returns (new fact, publication result)."""
+    doc = load(name)
+    old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
+    if old is None:
+        raise KnowledgeError(f"no such fact: {old_id}")
+    state = spine.load_state(name)
+    faction_ids = {f.get("id") for f in (state.get("factions") or [])}
+    new = _apply_upsert(name, doc, faction_ids, text=text,
+                        visibility=visibility, source_file=source_file,
+                        subjects=subjects)
+    old["status"] = "superseded"
+    old["superseded_by"] = new["id"]
+    return new, _publish_store_and_state(
+        name, doc, state, operation="supersede knowledge fact")
+
+
+def _publish_store_and_state(name: str, doc: dict, state: dict,
+                             operation: str) -> dict:
+    """One transactional publish carrying BOTH the knowledge store and the
+    state with the freshly compiled section."""
+    state = dict(state or {})
+    state["knowledge"] = compile_state_section(name, doc=doc)
+    result = publication.publish(name, [
+        {"path": KNOWLEDGE_FILE,
+         "text": yaml.safe_dump(doc, sort_keys=False, allow_unicode=True,
+                                width=100)},
+        {"path": "simulation/state.yaml",
+         "text": yaml.safe_dump(state, sort_keys=False, allow_unicode=True,
+                                width=100)},
+    ], operation=operation)
+    return result
 
 
 def reconcile(name: str, fact_id: str) -> dict:
@@ -182,12 +253,13 @@ def reconcile(name: str, fact_id: str) -> dict:
     return fact
 
 
-def compile_state_section(name: str) -> list:
+def compile_state_section(name: str, doc: dict | None = None) -> list:
     """The engine-side knowledge list: current, non-superseded facts only,
     compiled to the explicit contract views.py reads:
       {id, text, visibility: "public"|"restricted", known_to: [ids]}
-    dm_only and superseded facts never reach the engine."""
-    doc = load(name)
+    dm_only and superseded facts never reach the engine. `doc` skips the
+    reload when the caller holds the store it just mutated."""
+    doc = doc if doc is not None else load(name)
     out = []
     for fact in doc.get("facts", []):
         if fact.get("status") not in (None, "current"):

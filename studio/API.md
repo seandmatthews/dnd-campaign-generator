@@ -271,11 +271,14 @@ shapes in this document true.
   "status","base_week","proposed_week","created","run_record",
   "base_revisions","input_set_revisions"},"diff":{clock,resources,fields,
   events_added,rumors_added,timeline_entries},"entries":[...],
-  "updates":[...],"chronicles":[{file,title,markdown}]}`. `kind` is
-  `simulated_week` | `session_effects` | `goal_updates`; `updates` is the
-  goal-update list on a goal_updates bundle; `diff.fields` carries
+  "updates":[...],"findings":[...],"chronicles":[{file,title,markdown}]}`.
+  `kind` is `simulated_week` | `session_effects` | `goal_updates`;
+  `updates` is the goal-update list on a goal_updates bundle and
+  `findings` the validation findings (updates the engine cut and why —
+  also persisted on zero-update runs); `diff.fields` carries
   `{faction:{goal|kind|secret:{before,after}}}` for any set_field change.
-  Reads disk, so review survives a restart.
+  A damaged bundle answers 422 naming the bundle (discard still works) —
+  not a raw 500. Reads disk, so review survives a restart.
 - `POST /api/campaign/{name}/simulation/proposal/{pid}/accept` → publishes
   the WHOLE week (state, chronicles, timeline entries) as one transactional
   publication validated against the base revisions recorded at generation
@@ -318,7 +321,8 @@ shapes in this document true.
   as one sourced audit event (source `goal-review:week-N`) and writes
   `simulation/state.yaml` only.
 - `POST /api/campaign/{name}/simulation/forecast` `{"confirm":true,
-  "weeks":2|3}` → 202 job. **Forecast: propose-and-discard, never canon.**
+  "weeks":2|3}` → 202 job. `confirm` must be exactly `true` (422 otherwise
+  — same expensive-button gate as a week). **Forecast: propose-and-discard, never canon.**
   Runs the REAL engine forward N weeks on scratch data (copy-in, then
   `src/tick.py --live` N times under the engine lock; the same
   interrupted-run flag/backup recovery as a week). Per projected week the
@@ -331,7 +335,11 @@ shapes in this document true.
   proposal exists (the forecast reads the canon that proposal would
   change), while another forecast is active, or the engine home is busy.
   Result `{"forecast_id","status":"active","base_week","weeks":[{week,
-  title,markdown,diff}]}`.
+  title,markdown,diff}]}`. `GET .../forecast` answers 422 naming a damaged
+  bundle (discard still works) instead of a raw 500. Two queued engine
+  jobs (a week behind a forecast) share the run flag safely: each clears
+  only its own marker, so a crash during the second run still boots into a
+  restore.
 - `GET /api/campaign/{name}/simulation/forecast` → `{"forecast":null}` or
   `{"forecast":{forecast_id,status,base_week,created,run_record},
   "weeks":[{week,title,markdown,diff}]}` (reads disk — survives a

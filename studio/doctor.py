@@ -232,22 +232,25 @@ def check_tool_trees():
 
 
 def check_week_run(path=None):
-    """NEW: is a week run in progress (or left over from a crash)?
+    """NEW: is an engine run in progress (or left over from a crash)?
 
     Reports whether agentic-simulator/world/.week-run-flag exists. Absence
     is fine. Presence is informational (required=False): the engine home is
     scratch and is re-copied from the campaign on the next week/boot — a
     crashed run never corrupts a campaign, because copy-back only happens
-    on success."""
+    on success. (The flag is shared by week runs AND forecasts, so the
+    label stays engine-generic.)"""
     import engines
     flag = path or engines.week_flag_path()  # call-time seam: tests relocate it
     if flag.exists():
-        return _mk("week run", False, f"in progress or interrupted ({flag})",
+        return _mk("week run", False,
+                   f"an engine run (week or forecast) is in progress or was "
+                   f"interrupted ({flag})",
                   fix="let it finish if it is still running; otherwise just "
                       "boot — the engine home is restored from the campaign "
                       "(copy-back only happens on a successful week)",
                   required=False)
-    return _mk("week run", True, "no week run in progress", required=False)
+    return _mk("week run", True, "no engine run in progress", required=False)
 
 
 def check_vale():

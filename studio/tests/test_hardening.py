@@ -31,9 +31,14 @@ BUSY = {"error": "another job is already modifying this campaign"}
 @pytest.fixture(autouse=True)
 def _no_leaked_campaign_locks():
     """Locks are process-global: a test that leaves one held would deadlock
-    the next test's blocking acquire. threading.Lock has no owner thread,
-    so release() clears it from here even when the test thread held it."""
+    the next test's blocking acquire. Wait for the jobs registry to QUIESCE
+    first — releasing a lock a live job thread still holds breaks mutual
+    exclusion mid-suite (the leaked week job in test_forecast once ran the
+    real engine into every later test), and only then clear anything a
+    failed test left behind. threading.Lock has no owner thread, so
+    release() clears it from here even when the test thread held it."""
     yield
+    jobs.wait_all(timeout=30.0)
     for lock in list(spine._CAMPAIGN_LOCKS.values()):
         try:
             lock.release()

@@ -64,18 +64,17 @@ def get_knowledge(name: str):
 def post_knowledge(name: str, body: FactBody):
     """Record/approve a fact and compile the visible slice into the state.
     Visibility must be explicit: dm_only, public, or a list of faction ids.
-    The write lands as a history snapshot like every canon change (the
-    store save + the compiled state commit together; found skipped
-    2026-09-25)."""
+    The store save and the compiled state commit are two writes of the ONE
+    publication transaction — a crash can no longer leave a fact recorded
+    but never compiled."""
     _require_state(name)
     try:
         with campaign_lock_nowait(name, "recording the fact"):
             ensure_publishable_409(name)
-            fact = knowledge.upsert(
+            fact, pub = knowledge.record_fact_tx(
                 name, fact_id=body.id, text=body.text,
                 visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects)
-            pub = knowledge.compile_into_state(name)
             snap = canon.snapshot_result(
                 name, f"campaign/{name}: record fact {fact['id']}")
             publication.after_snapshot(name, pub["transaction"], snap)
@@ -90,15 +89,15 @@ def post_knowledge(name: str, body: FactBody):
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/supersede")
 def post_supersede(name: str, fact_id: str, body: SupersedeBody):
     """Approve a corrected fact and retire the old one (provenance kept,
-    never compiled again)."""
+    never compiled again). Store save + compiled state commit in one
+    publication transaction, like record."""
     _require_state(name)
     try:
         with campaign_lock_nowait(name, "superseding the fact"):
             ensure_publishable_409(name)
-            new = knowledge.supersede(
+            new, pub = knowledge.supersede_fact_tx(
                 name, fact_id, text=body.text, visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects)
-            pub = knowledge.compile_into_state(name)
             snap = canon.snapshot_result(
                 name, f"campaign/{name}: supersede fact {fact_id}")
             publication.after_snapshot(name, pub["transaction"], snap)

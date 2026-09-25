@@ -25,6 +25,7 @@ where every faction call failed are job errors, not proposals. A genuinely
 quiet scheduler-held week is valid.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
@@ -64,6 +65,26 @@ _log = logging.getLogger("studio.simulation")
 # guards only what actually mutates the shared home (week copy-in/copy-out).
 _HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
 _WEEK_TIMEOUT = 1800  # a live week is minutes of LLM calls
+
+
+@contextlib.contextmanager
+def _engine_lock_logged(log, why: str):
+    """The engine home is one shared scratch across campaigns: jobs that
+    passed the submit-time courtesy check can still queue here behind
+    another campaign's run. Log the wait so a slow run is never silent,
+    and bound it (a run aborted by its own watchdog eventually releases)."""
+    deadline = 3 * (_WEEK_TIMEOUT + 60)
+    if not engines.ENGINE_LOCK.acquire(timeout=5.0):
+        log(f"waiting for the engine home — {why} is in flight; this run "
+            "starts when it finishes (the job log goes quiet meanwhile)")
+        if not engines.ENGINE_LOCK.acquire(timeout=deadline):
+            raise RuntimeError(
+                f"the engine home stayed busy for over {deadline // 60} "
+                f"minutes — giving up without running anything")
+    try:
+        yield
+    finally:
+        engines.ENGINE_LOCK.release()
 # clause/sentence punctuation that may end a proposed timeline title
 # (apostrophes and quotes deliberately excluded — possessives are not cuts)
 _CLAUSE_PUNCT_RE = re.compile(r"[—–,;:.!?()\[\]]")
@@ -88,6 +109,14 @@ class ForecastBody(BaseModel):
     occupying the pending-proposal slot. N× a week's API spend."""
     confirm: StrictBool
     weeks: int = 2
+
+    @field_validator("confirm")
+    @classmethod
+    def _confirm_is_true(cls, v):
+        if v is not True:
+            raise ValueError("confirm must be exactly true — this runs a "
+                             "real forecast: it spends N weeks of API credits")
+        return v
 
     @field_validator("weeks")
     @classmethod
@@ -410,7 +439,7 @@ def post_week(name: str, body: WeekBody):
         # whole copy-in -> tick sequence is a critical section
         # (engines.ENGINE_LOCK). Lock order: campaign lock (held by this job)
         # outside, engine lock inside — views/why take only the engine lock.
-        with engines.ENGINE_LOCK:
+        with _engine_lock_logged(log, "a week run or forecast"):
             return _run_week_proposal(name, d, log)
 
     return submit_campaign_job("sim-week", name, job)
@@ -418,6 +447,15 @@ def post_week(name: str, body: WeekBody):
 
 def _clock_week(doc: dict):
     return ((doc.get("meta") or {}).get("clock") or {}).get("week")
+
+
+def _state_snapshot(state_path: Path) -> tuple[str, str]:
+    """The state text and its revision from ONE read. Two separate reads
+    (text, then revision) let an external hand edit land in between and pin
+    an after-image to revisions it was never derived from — the staleness
+    check would then pass at accept time and publish over the edit."""
+    data = state_path.read_bytes()
+    return data.decode("utf-8"), hashlib.sha256(data).hexdigest()
 
 
 def _run_week_proposal(name: str, d: Path, log) -> dict:
@@ -448,10 +486,12 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
                 d / "lore" / "entities"),
         }
         chronicle_dir = engines.engine_chronicle_dir()
-        before = {p.name for p in chronicle_dir.glob("*.md")} \
-            if chronicle_dir.is_dir() else set()
 
         _copy_state_in(name)
+        # capture AFTER copy-in: the copy clears the home's run outputs, so
+        # this is the clean baseline every new chronicle is diffed against
+        before = {p.name for p in chronicle_dir.glob("*.md")} \
+            if chronicle_dir.is_dir() else set()
         log("state copied into engine home (previous engine state kept as "
             "state.yaml.bak)")
         log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
@@ -556,7 +596,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             "diff": diff,
         }
     finally:
-        clear_week_flag()
+        clear_week_flag(name)
 
 
 def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
@@ -642,6 +682,8 @@ def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
         run_record = {
             "engine": f"agentic-simulator/src/tick.py --live x{n_weeks} "
                       "(scratch forecast)",
+            # no seed/rule_version (week bundles carry them): a projection
+            # is not replayable by design — each tick re-asks the model
             "model": None, "base_url": None,
         }
         try:
@@ -658,7 +700,7 @@ def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
         return {"forecast_id": fid, "status": "active", "base_week": base_week,
                 "weeks": weeks_out}
     finally:
-        clear_week_flag()
+        clear_week_flag(name)
 
 
 def _chronicle_meta(filenames: list) -> dict | None:
@@ -707,9 +749,22 @@ def write_week_flag(name: str) -> None:
     }, indent=2), encoding="utf-8")
 
 
-def clear_week_flag() -> None:
+def clear_week_flag(name: str | None = None) -> None:
+    """Clear the in-flight flag. With a campaign name, only clear the flag
+    THIS campaign wrote: the flag is one shared file, and two queued engine
+    jobs (a week behind a forecast) both write it — the first finisher must
+    not delete the second's marker, or a crash during the second run skips
+    boot restore entirely."""
+    flag = engines.week_flag_path()
+    if name is not None:
+        try:
+            doc = json.loads(flag.read_text(encoding="utf-8"))
+            if not (isinstance(doc, dict) and doc.get("campaign") == name):
+                return  # a later run's flag — leave it alone
+        except (OSError, ValueError):
+            pass  # unreadable/absent: the unlink below settles it
     try:
-        engines.week_flag_path().unlink()
+        flag.unlink()
     except FileNotFoundError:
         pass
 
@@ -795,7 +850,15 @@ def get_proposal(name: str):
     if not pending:
         return {"proposal": None}
     pid = str(pending.get("proposal_id"))
-    bundle = proposals.load(name, pid)
+    try:
+        bundle = proposals.load(name, pid)
+    except proposals.ProposalError as e:
+        # a damaged bundle must not 500 every poll: name it and point at
+        # the exit (discard still works — it flips status only)
+        raise HTTPException(
+            status_code=422,
+            detail=f"the proposal bundle {pid} is damaged and cannot be "
+                   f"shown ({e}) — discard it and prepare a fresh one")
     return {
         "proposal": {
             "proposal_id": pid,
@@ -811,6 +874,7 @@ def get_proposal(name: str):
         "diff": bundle["diff"],
         "entries": bundle["entries"],
         "updates": bundle["updates"],
+        "findings": bundle.get("findings") or [],
         "chronicles": [
             {"file": f"simulation/chronicle/{fn}", "title": fn,
              "markdown": text}
@@ -847,6 +911,11 @@ def accept_proposal(name: str, pid: str):
                                                       "the accept receipt")
             except proposals.ProposalError:
                 pass  # bundle gone or damaged: the receipt still answers
+            if "snapshot" not in prior:  # older receipts predate the field
+                snap = publication.transaction_snapshot(
+                    name, prior.get("transaction"))
+                if snap is not None:
+                    prior = {**prior, "snapshot": snap}
             return {**prior, "idempotent": True}
         try:
             bundle = proposals.load(name, pid)
@@ -870,7 +939,7 @@ def accept_proposal(name: str, pid: str):
             snap = canon.snapshot_result(name, _accept_message(name, manifest,
                                                                None))
             publication.after_snapshot(name, prior_tx["transaction"], snap)
-            return {**result, "idempotent": True}
+            return {**result, "snapshot": snap, "idempotent": True}
         d = spine.campaign_dir(name)
 
         base = dict(manifest.get("base_revisions") or {})
@@ -1071,8 +1140,7 @@ def post_session(name: str, body: SessionBody):
         # check passed and the publish silently overwrote the accepted week.
         with campaign_lock_nowait(name, "recording the session"):
             state_path = d / "simulation" / "state.yaml"
-            state_text = state_path.read_text(encoding="utf-8")
-            base_revision = publication.file_revision(state_path)
+            state_text, base_revision = _state_snapshot(state_path)
         copy_path = tmp_dir / "state-copy.yaml"
         copy_path.write_text(state_text, encoding="utf-8")
 
@@ -1144,7 +1212,11 @@ def post_session(name: str, body: SessionBody):
     }
 
 
-_GOAL_REVIEW_TIMEOUT = 900  # one bounded LLM pass + the effects CLI runs
+# one bounded LLM pass + the effects CLI runs. complete()'s honest worst
+# case is 3 attempts x 300s x 3 passes (base + two length extensions) plus
+# backoff ~= 2700s: a slow-but-working provider must not get the tree
+# killed and every retry re-spent, so the watchdog sits just above it.
+_GOAL_REVIEW_TIMEOUT = 2800
 
 
 @router.post("/api/campaign/{name}/simulation/goal-review", status_code=202)
@@ -1179,8 +1251,7 @@ def post_goal_review(name: str):
                 f"({racing.get('proposal_id')}) — nothing was run or spent; "
                 "accept or discard it first")
         state_path = d / "simulation" / "state.yaml"
-        state_text = state_path.read_text(encoding="utf-8")
-        base_revision = publication.file_revision(state_path)
+        state_text, base_revision = _state_snapshot(state_path)
         base_doc = yaml.safe_load(state_text) or {}
 
         import tempfile
@@ -1292,7 +1363,7 @@ def post_goal_review(name: str):
             base_revisions={"simulation/state.yaml": base_revision},
             input_set_revisions={},
             artifacts={"state": after_text, "chronicles": {}, "entries": [],
-                       "updates": found},
+                       "updates": found, "findings": list(findings)},
             run_record=run_record, before_state=base_doc)
         diff = proposals.diff_states(base_doc, after_doc, [])
         log(f"staged {len(found)} proposed goal update(s) ({pid}) — nothing "
@@ -1356,7 +1427,7 @@ def post_forecast(name: str, body: ForecastBody):
         write_week_flag(name)
         log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
-        with engines.ENGINE_LOCK:
+        with _engine_lock_logged(log, "a week run or forecast"):
             return _run_forecast(name, d, body.weeks, log)
 
     return submit_campaign_job("forecast", name, job)
@@ -1372,7 +1443,13 @@ def get_forecast(name: str):
     if not active:
         return {"forecast": None}
     fid = str(active.get("forecast_id"))
-    bundle = forecasts.load(name, fid)
+    try:
+        bundle = forecasts.load(name, fid)
+    except forecasts.ForecastError as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"the forecast bundle {fid} is damaged and cannot be "
+                   f"shown ({e}) — discard it to clear the slot")
     return {
         "forecast": {
             "forecast_id": fid,
@@ -1455,10 +1532,22 @@ def post_why(name: str, body: WhyBody):
 
 def _copy_state_in(name: str) -> None:
     """D4: campaign state.yaml -> engine home, backing up the engine's
-    previous state first. The engine reads a fixed world/state.yaml."""
+    previous state first, and clearing the home's run OUTPUTS (chronicles,
+    replay trails). The home is shared scratch: leftover projection files
+    from a discarded forecast would collide with a real week's chronicle
+    names (-2 suffixes) and a stale replay/week-N.yaml would ride into an
+    unrelated campaign's proposal as its replay trail."""
     src = spine.campaign_dir(name) / "simulation" / "state.yaml"
     engine_state = engines.engine_state_path()
     engine_state.parent.mkdir(parents=True, exist_ok=True)
     if engine_state.is_file():
         engines.copy_file(engine_state, engines.engine_state_backup_path())
+    chronicle_dir = engines.engine_chronicle_dir()
+    if chronicle_dir.is_dir():
+        for p in chronicle_dir.glob("*.md"):
+            p.unlink(missing_ok=True)
+    replay_dir = engines.engine_replay_path(0).parent
+    if replay_dir.is_dir():
+        for p in replay_dir.glob("week-*.yaml"):
+            p.unlink(missing_ok=True)
     engines.copy_file(src, engine_state)

@@ -174,17 +174,22 @@ class BudgetExceeded(RuntimeError):
 # unchecked while A's remaining calls flipped B into a spurious
 # BudgetExceeded. Each thread meters its own run.
 def _env_limit():
+    """LLM_MAX_CALLS as a positive int; None when unset OR invalid, so the
+    caller applies its own fallback — same semantics as the engine's
+    llm.env_limit() (the twins drifted here once: an invalid value gave the
+    engine a scaled ceiling and the studio a flat 24)."""
+    raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
     try:
-        return max(1, int(os.environ.get("LLM_MAX_CALLS") or 24))
+        return max(1, int(raw))
     except ValueError:
-        return 24
+        return None
 _local = threading.local()
 
 
 def _budget():
     b = getattr(_local, "budget", None)
     if b is None:
-        b = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+        b = {"calls": 0, "tokens": 0, "limit": _env_limit() or 24}
         _local.budget = b
     return b
 

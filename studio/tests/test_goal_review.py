@@ -108,6 +108,9 @@ def test_goal_review_stages_a_proposal_and_touches_nothing(
     assert bundle["manifest"]["kind"] == "goal_updates"
     assert bundle["manifest"]["status"] == "pending"
     assert len(bundle["updates"]) == 2
+    # the dropped-update findings ride INTO the bundle — they used to live
+    # only in the ephemeral job log, lost after a restart
+    assert bundle["findings"] == UPDATES["findings"]
     assert bundle["manifest"]["run_record"]["kind"] == "goal-review"
     # the diff carries the old->new goals the review UI renders
     fields = bundle["diff"]["fields"]["wardens"]["goal"]
@@ -123,6 +126,7 @@ def test_goal_review_surfaces_findings_and_goal_changes_in_get_proposal(
     p = r.json()["proposal"]
     assert p["proposal_id"] == pid and p["kind"] == "goal_updates"
     assert len(r.json()["updates"]) == 2
+    assert r.json()["findings"] == UPDATES["findings"]
     wardens = r.json()["diff"]["fields"]["wardens"]["goal"]
     assert wardens["after"].startswith("hold the bridge")
 

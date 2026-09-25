@@ -74,10 +74,15 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
            input_set_revisions: dict, artifacts: dict, run_record: dict,
            before_state: dict, kind: str = "simulated_week") -> str:
     """Stage a new pending bundle from in-memory artifact texts. artifacts:
-    {"state": text, "chronicles": {filename: text}, "entries": [dicts]}.
-    kind: "simulated_week" or "session_effects". Returns the proposal id.
+    {"state": text, "chronicles": {filename: text}, "entries": [dicts],
+    "updates": [dicts], "findings": [str]}. kind: "simulated_week",
+    "session_effects", or "goal_updates". Returns the proposal id.
     Caller holds the campaign lock."""
     d = spine.campaign_dir(name)
+    if not (d / "campaign.yaml").is_file():
+        # mkdir(parents=True) below would happily mint a junk campaign tree
+        # for a stale/unknown name — refuse instead
+        raise ProposalError(f"unknown campaign: {name}")
     pid = new_id()
     bdir = _root(d) / pid
     (bdir / "artifacts" / "chronicle").mkdir(parents=True)
@@ -117,6 +122,11 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
         yaml.safe_dump(updates, sort_keys=False, allow_unicode=True,
                        width=100), encoding="utf-8")
     manifest["artifacts"]["goal_updates"] = "artifacts/goal-updates.yaml"
+    findings = artifacts.get("findings") or []
+    (bdir / "artifacts" / "findings.yaml").write_text(
+        yaml.safe_dump(findings, sort_keys=False, allow_unicode=True,
+                       width=100), encoding="utf-8")
+    manifest["artifacts"]["findings"] = "artifacts/findings.yaml"
     replay_text = artifacts.get("replay")
     if replay_text:
         (bdir / "artifacts" / "replay.yaml").write_text(
@@ -213,6 +223,13 @@ def load(name: str, proposal_id: str) -> dict:
             out["updates"] = updates if isinstance(updates, list) else []
         else:
             out["updates"] = []
+        findings_path = arts / "findings.yaml"
+        if findings_path.is_file():
+            findings = yaml.safe_load(
+                findings_path.read_text(encoding="utf-8"))
+            out["findings"] = findings if isinstance(findings, list) else []
+        else:
+            out["findings"] = []
         diff = json.loads((arts / "diff.json").read_text(encoding="utf-8"))
         out["diff"] = diff if isinstance(diff, dict) else {}
     except (OSError, yaml.YAMLError, ValueError) as e:

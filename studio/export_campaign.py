@@ -50,6 +50,9 @@ MANIFEST = "manifest.json"
 CAMPAIGN_PREFIX = "campaign/"
 EXCLUDES = [
     ".studio-transactions/*",  # publication recovery payloads, not canon
+    "simulation/forecasts/*",  # projections are not canon and not undo-
+    # trail material (campaigns/.gitignore) — and a restored stale ACTIVE
+    # forecast would block new forecasts until someone finds and discards it
     "__pycache__/*",
     "*.pyc",
     "*.tmp",
