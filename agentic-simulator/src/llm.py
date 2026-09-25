@@ -269,10 +269,31 @@ def render_prompt(template_text, faction):
     )
 
 
+class _FlatLoader(yaml.SafeLoader):
+    """SafeLoader minus aliases: a model reply can anchor a small node and
+    alias it exponentially (a few hundred bytes expanding to unbounded
+    memory), and no legitimate reply needs an alias. Anchors without an
+    alias expand to the node itself and stay legal."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise yaml.constructor.ConstructorError(
+                None, None, "aliases are not accepted in model replies",
+                self.peek_event().start_mark)
+        return super().compose_node(parent, index)
+
+
 def _extract_yaml(text):
+    """The first fenced block (or the bare text) as YAML — None when it
+    does not parse. A malformed reply is 'no proposal', never a crash:
+    callers turn None into a validation failure (propose retries, goal
+    review records a finding)."""
     match = re.search(r"```(?:ya?ml|json)?\s*(.*?)```", text, re.DOTALL)
     block = match.group(1) if match else text
-    return yaml.safe_load(block)
+    try:
+        return yaml.load(block, Loader=_FlatLoader)
+    except yaml.YAMLError:
+        return None
 
 
 def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=()):

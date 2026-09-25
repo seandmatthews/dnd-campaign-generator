@@ -94,8 +94,14 @@ def digest(state):
     }
 
 
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def _clean(text):
-    return re.sub(r"\s+", " ", str(text or "").strip())
+    """Collapse whitespace and strip control characters (tabs, nulls,
+    escapes) — a goal is one readable line that must survive the state
+    file, every faction prompt, and the UI JSON."""
+    return re.sub(r"\s+", " ", _CTRL.sub(" ", str(text or "").strip()))
 
 
 def propose_updates(state, ask):
@@ -137,7 +143,11 @@ def propose_updates(state, ask):
         if not goal:
             findings.append(f"update {i + 1} ({fid}): empty goal — dropped")
             continue
-        if "\n" in str(item.get("goal") or ""):
+        if not isinstance(item.get("goal"), str):
+            findings.append(f"update {i + 1} ({fid}): goal is not text "
+                            "— dropped")
+            continue
+        if "\n" in item["goal"]:
             findings.append(f"update {i + 1} ({fid}): goal is multi-line "
                             "(a goal is one line) — dropped")
             continue
@@ -150,7 +160,11 @@ def propose_updates(state, ask):
             findings.append(f"update {i + 1} ({fid}): goal is unchanged "
                             "— dropped")
             continue
-        reason = _clean(item.get("reason"))
+        if not isinstance(item.get("reason"), str):
+            findings.append(f"update {i + 1} ({fid}): reason is not text "
+                            "— dropped")
+            continue
+        reason = _clean(item["reason"])
         if not reason:
             findings.append(f"update {i + 1} ({fid}): missing reason (the "
                             "DM must see what justifies this) — dropped")
@@ -202,6 +216,9 @@ def main(argv):
     except BudgetExceeded as e:
         print(f"goals.py: {e}", file=sys.stderr)
         return 3
+    except Exception as e:  # noqa: BLE001 — one clean line, not a traceback
+        print(f"goals.py: goal review failed: {e}", file=sys.stderr)
+        return 1
     for f in findings:
         print(f"  [goals] finding: {f}", file=sys.stderr)
     out = pathlib.Path(out_path)
