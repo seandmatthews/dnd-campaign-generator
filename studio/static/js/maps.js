@@ -259,28 +259,33 @@
 
   async function refreshCities() {
     if (!grid) return;
-    grid.innerHTML = '';
-    grid.appendChild(S.loading('Loading city maps…'));
+    const myGrid = grid, mySites = sitesGrid;
+    myGrid.innerHTML = '';
+    myGrid.appendChild(S.loading('Loading city maps…'));
     let data;
     try {
       data = await S.api(S.campUrl('/maps'));
     } catch (err) {
-      grid.innerHTML = '';
-      grid.appendChild(S.errorPanel(err, 'The maps listing could not be loaded.'));
-      if (sitesGrid) {
-        sitesGrid.innerHTML = '';
-        sitesGrid.appendChild(S.emptyState('Sites unavailable — the maps listing failed.'));
+      myGrid.innerHTML = '';
+      myGrid.appendChild(S.errorPanel(err, 'The maps listing could not be loaded.'));
+      if (mySites) {
+        mySites.innerHTML = '';
+        mySites.appendChild(S.emptyState('Sites unavailable — the maps listing failed.'));
       }
       return;
     }
-    grid.innerHTML = '';
+    // the fetch outlived this view (campaign switched, tab re-rendered):
+    // rendering the old campaign's world into the new grid is a wrong-world
+    // map set — drop the stale response instead
+    if (myGrid !== grid || mySites !== sitesGrid) return;
+    myGrid.innerHTML = '';
     const cities = (data && Array.isArray(data.cities)) ? data.cities : [];
     if (!cities.length) {
-      grid.appendChild(S.emptyState('No city maps yet — map a burg below and it will appear here.'));
+      myGrid.appendChild(S.emptyState('No city maps yet — map a burg below and it will appear here.'));
     }
     cities.forEach((c) => {
       const label = c.label || c.slug || '(city)';
-      grid.appendChild(artifactCard(label, citySvgUrl(c)));
+      myGrid.appendChild(artifactCard(label, citySvgUrl(c)));
     });
     renderSites(data);
   }

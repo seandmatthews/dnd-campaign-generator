@@ -1402,3 +1402,9 @@ li.backlink-item[style] { cursor: pointer; }
   background: var(--paper-bright); border-radius: var(--radius-sm);
   padding: 10px 14px; margin-bottom: 14px;
 }
+
+.held-banner {
+  border: 1px solid var(--line-strong); border-left: 4px solid var(--amber);
+  background: var(--paper-bright); border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-bottom: 14px;
+}

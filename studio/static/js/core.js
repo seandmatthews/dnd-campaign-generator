@@ -72,41 +72,64 @@
     // A wedged job (engine killed, LLM hanging) must not tick forever: after
     // timeoutMs (default 31 min = the week job's 1800 s engine cap + slack)
     // polling gives up with a readable error. The job itself keeps running
-    // server-side; reload the tab to re-attach to it.
+    // server-side; reopen this tab after it finishes to see the result.
     const giveUpAfter = timeoutMs || (31 * 60 * 1000);
     return new Promise((resolve, reject) => {
       // The server's log_tail is a rotating 40-line window (jobs.py LOG_CAP):
       // consume it through StudioLogTail, which anchors on the last emitted
       // line's text — an index alone freezes once the window fills.
       let logCursor = { seen: 0, last: null };
+      let failures = 0;           // one hiccup must not kill a 30-minute watch
+      let inFlight = false;       // slow polls must not overlap and double-log
+      let settled = false;        // resolve/reject exactly once
       const startedAt = Date.now();
+      const finish = (fn, arg) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(timer);
+        fn(arg);
+      };
       const tick = async () => {
-        if (Date.now() - startedAt > giveUpAfter) {
-          clearInterval(timer);
-          reject({
+        if (!settled && Date.now() - startedAt > giveUpAfter) {
+          finish(reject, {
             status: 504,
             error: 'Gave up waiting for the job after ' + Math.round(giveUpAfter / 60000)
-              + ' minutes (the job may still be running server-side — reload to re-attach)'
+              + ' minutes (the job keeps running server-side — reopen this '
+              + 'tab in a few minutes to see the result)'
           });
           return;
         }
-        let job;
+        if (inFlight || settled) return;
+        inFlight = true;
         try {
-          job = await api('/api/jobs/' + encodeURIComponent(id));
+          let job;
+          try {
+            job = await api('/api/jobs/' + encodeURIComponent(id));
+            failures = 0;
+          } catch (err) {
+            // a gone job (404/410: restart wiped the in-memory registry) is
+            // final; a transient hiccup gets a few more ticks
+            if (err && (err.status === 404 || err.status === 410)) throw err;
+            failures += 1;
+            if (failures > 15) {
+              throw { status: 0, error: 'Lost contact with the studio server '
+                + 'while waiting for the job — it may still finish; reopen '
+                + 'this tab later to see the result' };
+            }
+            return;
+          }
+          const merged = StudioLogTail.mergeLogTail(job.log_tail, logCursor);
+          logCursor = merged.cursor;
+          if (typeof onLog === 'function') merged.lines.forEach((line) => onLog(line));
+          if (job.status === 'done') {
+            finish(resolve, job.result);
+          } else if (job.status === 'error') {
+            finish(reject, { status: 500, error: job.error || 'Job failed' });
+          }
         } catch (err) {
-          clearInterval(timer);
-          reject(err);
-          return;
-        }
-        const merged = StudioLogTail.mergeLogTail(job.log_tail, logCursor);
-        logCursor = merged.cursor;
-        if (typeof onLog === 'function') merged.lines.forEach((line) => onLog(line));
-        if (job.status === 'done') {
-          clearInterval(timer);
-          resolve(job.result);
-        } else if (job.status === 'error') {
-          clearInterval(timer);
-          reject({ status: 500, error: job.error || 'Job failed' });
+          finish(reject, err);
+        } finally {
+          inFlight = false;
         }
       };
       const timer = setInterval(tick, 1000);
@@ -314,11 +337,13 @@
   }
 
   function highlightMatch(text, q) {
-    // escape FIRST, then wrap the first case-insensitive hit in <mark>
-    const escaped = esc(text);
-    const needle = esc(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!needle) return escaped;
-    return escaped.replace(new RegExp(needle, 'i'), '<mark>$&</mark>');
+    // find the hit on the RAW text, then escape the three pieces separately:
+    // escape-first can match INSIDE an entity ("amp" hits "&amp;") and mangles
+    // the display; matching raw and escaping per segment cannot
+    const idx = text.toLowerCase().indexOf(String(q).toLowerCase());
+    if (!q || idx < 0) return esc(text);
+    return esc(text.slice(0, idx)) + '<mark>' + esc(text.substr(idx, q.length)) +
+      '</mark>' + esc(text.slice(idx + q.length));
   }
 
   function renderSearchResults(body, q, data) {

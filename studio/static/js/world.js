@@ -226,10 +226,12 @@
               S.esc(b.source_name || b.source_file) +
             '</li>'
           );
-          if (b.source_kind === 'chronicle' && S.tabs.simulation) {
+          if (b.source_kind === 'chronicle' && S.tabs.sim) {
+            // the tab is registered as "sim" — "simulation" never existed,
+            // so this click was dead (found 2026-09-25)
             li.style.cursor = 'pointer';
             li.title = 'Read in the Simulation tab';
-            li.addEventListener('click', () => S.showTab('simulation'));
+            li.addEventListener('click', () => S.showTab('sim'));
           }
           list.appendChild(li);
         });

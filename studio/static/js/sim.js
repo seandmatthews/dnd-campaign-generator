@@ -367,6 +367,7 @@
       const isSession = p.kind === 'session_effects';
       const isGoals = p.kind === 'goal_updates';
       const updates = Array.isArray(data.updates) ? data.updates : [];
+      const findings = Array.isArray(data.findings) ? data.findings : [];
       const title = isGoals
         ? 'Proposed goal updates — not canon yet'
         : isSession
@@ -407,6 +408,16 @@
           '</div>').join('') + '</div>';
       };
 
+      // proposals the engine cut during validation — why an update the
+      // model proposed is not on the table (persisted in the bundle since
+      // 2026-09-25; they used to live only in the ephemeral job log)
+      const goalsFindings = () => findings.length
+        ? '<details class="proposal-findings"><summary>Dropped during ' +
+          'validation (' + findings.length + ')</summary><ul class="findings-list">' +
+          findings.map((f) => '<li>' + S.esc(String(f)) + '</li>').join('') +
+          '</ul></details>'
+        : '';
+
       panel.innerHTML = '';
       // innerHTML, not S.el(): the content is multi-root (title + note +
       // table + sections + actions) and S.el() keeps only the FIRST element
@@ -416,7 +427,7 @@
         '<h3 class="panel-title">' + title + '</h3>' +
         '<p class="panel-note">' + subtitle + '</p>' +
         (isGoals
-          ? goalsBody()
+          ? goalsBody() + goalsFindings()
           : '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
             (evs.length
               ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
@@ -452,6 +463,7 @@
 
       acceptBtn.addEventListener('click', async () => {
         if (acceptBtn.disabled) return;
+        acceptBtn.disabled = true; discardBtn.disabled = true;
         const ok = await S.confirmRun(
           isGoals
             ? 'Accepting applies the proposed goal changes to the factions ' +
@@ -462,8 +474,7 @@
               : 'Accepting publishes the whole proposed week into the campaign — ' +
                 'clock, resources, chronicle, timeline — exactly once.'
         );
-        if (!ok) return;
-        acceptBtn.disabled = true; discardBtn.disabled = true;
+        if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
         try {
           const r = await S.api(S.campUrl('/simulation/proposal/' +
@@ -489,12 +500,12 @@
 
       discardBtn.addEventListener('click', async () => {
         if (discardBtn.disabled) return;
+        acceptBtn.disabled = true; discardBtn.disabled = true;
         const ok = await S.confirmRun(
           'Discard this proposal? Nothing was ever written to the ' +
           'campaign; the bundle stays as an audit receipt.'
         );
-        if (!ok) return;
-        acceptBtn.disabled = true; discardBtn.disabled = true;
+        if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
         try {
           await S.api(S.campUrl('/simulation/proposal/' +
@@ -517,7 +528,7 @@
 
   /* ----- forecast panel (propose-and-discard: never canon) ----- */
 
-  function forecastPanel(root, fid) {
+  function forecastPanel(root) {
     const panel = S.el(
       '<section class="panel forecast-panel">' +
         '<h3 class="panel-title">Loading the forecast…</h3>' +
@@ -557,11 +568,11 @@
       const errBox = panel.querySelector('.forecast-error');
       discardBtn.addEventListener('click', async () => {
         if (discardBtn.disabled) return;
+        discardBtn.disabled = true;
         const ok = await S.confirmRun(
           'Discard this forecast? It was never canon — the campaign has ' +
           'not changed by one line because of it.');
-        if (!ok) return;
-        discardBtn.disabled = true;
+        if (!ok) { discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
         try {
           await S.api(S.campUrl('/simulation/forecast/' +
@@ -604,13 +615,13 @@
     const errBox = card.querySelector('.goals-error');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
+      btn.disabled = true;
       const ok = await S.confirmRun(
         'Run a goal review? One LLM pass reads the ledger and proposes goal ' +
         'updates — it spends API credits. Nothing changes unless you accept ' +
         'the proposal afterwards.'
       );
-      if (!ok) return;
-      btn.disabled = true;
+      if (!ok) { btn.disabled = false; return; }
       errBox.innerHTML = '';
       logBox.classList.remove('hidden');
       logBox.textContent = '';
@@ -630,16 +641,19 @@
             ' proposed — review it above, then accept or discard.', 'ok');
           S.showTab('sim'); // re-render: the proposal panel leads the tab
         } else {
-          const findings = Array.isArray(r.findings) ? r.findings : [];
+          const jobFindings = Array.isArray(r.findings) ? r.findings : [];
           errBox.innerHTML = '';
+          // two separate nodes: S.el() keeps only the FIRST element, so one
+          // concatenated two-root call silently dropped the findings list
+          // (same trap that killed the proposal panel — found 2026-09-25)
           errBox.appendChild(S.el(
             '<div class="success-panel">No goal updates proposed — the ' +
-            'ledger does not justify any changes.</div>' +
-            (findings.length
-              ? '<ul class="findings-list">' + findings.map((f) =>
-                  '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'
-              : '')
-          ));
+            'ledger does not justify any changes.</div>'));
+          if (jobFindings.length) {
+            errBox.appendChild(S.el(
+              '<ul class="findings-list">' + jobFindings.map((f) =>
+                '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'));
+          }
           btn.disabled = false;
         }
       }).catch((err) => {
@@ -681,14 +695,14 @@
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const n = parseInt(weeksSel.value, 10) || 2;
+      btn.disabled = true;
       const ok = await S.confirmRun(
         'Run a ' + n + '-week forecast? The engine runs ' + n + ' real week' +
         (n === 1 ? '' : 's') + ' on scratch data — about ' + n + 'x a week' +
         '\'' + 's API spend. Nothing lands in canon; the projection is for ' +
         'your eyes, then you discard it.'
       );
-      if (!ok) return;
-      btn.disabled = true;
+      if (!ok) { btn.disabled = false; return; }
       errBox.innerHTML = '';
       logBox.classList.remove('hidden');
       logBox.textContent = '';
@@ -698,10 +712,13 @@
           body: { confirm: true, weeks: n }
         });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        // the give-up must scale with the run: the server's own per-week
+        // engine cap is 30 min, so a 3-week forecast legally runs 90 — the
+        // week-sized 31-minute default reported a false failure mid-run
         return S.pollJob(resp.job_id, (line) => {
           logBox.textContent += String(line == null ? '' : line) + '\n';
           logBox.scrollTop = logBox.scrollHeight;
-        });
+        }, n * 31 * 60 * 1000 + 5 * 60 * 1000);
       })().then(() => {
         S.toast('Forecast staged — read it above, then discard it.', 'ok');
         S.showTab('sim'); // re-render: the forecast panel leads with the weeks
@@ -826,8 +843,7 @@
         const base = {
           type: isField ? 'set_field' : 'set_resource',
           faction_id: row.querySelector('.e-faction').value,
-          after: isField ? row.querySelector('.e-after').value
-                         : row.querySelector('.e-after').value,
+          after: row.querySelector('.e-after').value,
           reason: row.querySelector('.e-reason').value.trim()
         };
         if (isField) base.field = row.querySelector('.e-field').value;
@@ -935,7 +951,7 @@
     /* an active forecast reads as "where this is heading": right below the
        proposal (it can coexist with one — it is never canon) */
     if (sim && sim.active_forecast) {
-      forecastPanel(root, sim.active_forecast);
+      forecastPanel(root);
     }
 
     /* header strip: week clock + season + premise */
