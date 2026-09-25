@@ -50,6 +50,10 @@ from routers.common import ensure_publishable_409
 
 router = APIRouter()
 
+# proposal kinds that change ONLY simulation/state.yaml — no chronicles, no
+# timeline entries. The accept path treats everything else as a full week.
+STATE_ONLY_KINDS = frozenset({"session_effects", "goal_updates"})
+
 _log = logging.getLogger("studio.simulation")
 
 
@@ -685,6 +689,7 @@ def get_proposal(name: str):
         },
         "diff": bundle["diff"],
         "entries": bundle["entries"],
+        "updates": bundle["updates"],
         "chronicles": [
             {"file": f"simulation/chronicle/{fn}", "title": fn,
              "markdown": text}
@@ -752,7 +757,7 @@ def accept_proposal(name: str, pid: str):
             "path": "simulation/state.yaml",
             "text": bundle["state_text"],
         }]
-        if manifest.get("kind") == "session_effects":
+        if manifest.get("kind") in STATE_ONLY_KINDS:
             chron = None
         else:
             entries = bundle["entries"]
@@ -822,10 +827,11 @@ def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
         "kind": manifest.get("kind") or "simulated_week",
         "transaction": tx_id,
     }
-    if manifest.get("kind") == "session_effects":
+    if manifest.get("kind") in STATE_ONLY_KINDS:
         diff = bundle["diff"]
         result["events_added"] = len(diff.get("events_added") or [])
         result["resources_changed"] = len(diff.get("resources") or {})
+        result["goals_changed"] = len(diff.get("fields") or {})
     else:
         result["chronicles"] = sorted(bundle["chronicles"])
         result["timeline_entries"] = len(bundle["entries"])
@@ -833,15 +839,21 @@ def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
 
 
 def _accept_operation(manifest: dict) -> str:
-    if manifest.get("kind") == "session_effects":
+    kind = manifest.get("kind")
+    if kind == "session_effects":
         return f"accept session effects ({manifest.get('run_record', {}) .get('source') or 'session'})"
+    if kind == "goal_updates":
+        return "accept goal updates from the ledger"
     return f"accept week {manifest.get('proposed_week')} proposal"
 
 
 def _accept_message(name: str, manifest: dict, chron) -> str:
-    if manifest.get("kind") == "session_effects":
+    kind = manifest.get("kind")
+    if kind == "session_effects":
         source = (manifest.get("run_record") or {}).get("source") or "session"
         return f"campaign/{name}: session effects applied ({source})"
+    if kind == "goal_updates":
+        return f"campaign/{name}: goal updates applied (goal review)"
     msg = f"campaign/{name}: week {manifest.get('proposed_week')}"
     if chron and chron.get("title"):
         msg += f" — {chron['title']}"
@@ -1009,6 +1021,166 @@ def post_session(name: str, body: SessionBody):
         "resources_changed": len(diff.get("resources") or {}),
         "diff": diff,
     }
+
+
+_GOAL_REVIEW_TIMEOUT = 900  # one bounded LLM pass + the effects CLI runs
+
+
+@router.post("/api/campaign/{name}/simulation/goal-review", status_code=202)
+def post_goal_review(name: str):
+    """Goal review: the sim proposes faction goal updates grounded in the
+    ledger (recorded weeks, rumors, canon deadlines), staged as a
+    `goal_updates` proposal the DM reviews exactly like a week. Runs as a
+    job (one bounded LLM pass in the engine); nothing changes until the
+    proposal is accepted."""
+    d = require_campaign(name)
+    if not (d / "simulation" / "state.yaml").is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="no simulation/state.yaml in this campaign — create the "
+                   "sandbox first ('Create a simulation' on this tab)")
+    pending = proposals.find_pending(name)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a proposal is awaiting review "
+                   f"({pending.get('proposal_id')}) — accept or discard it "
+                   f"before running a goal review")
+    ensure_publishable_409(name)
+
+    def job(log):
+        # this job runs under the campaign's own lock (submit time) — never
+        # re-acquire it in here. The pre-route check raced: re-check.
+        racing = proposals.find_pending(name)
+        if racing:
+            raise RuntimeError(
+                f"a proposal appeared while this run was starting "
+                f"({racing.get('proposal_id')}) — nothing was run or spent; "
+                "accept or discard it first")
+        state_path = d / "simulation" / "state.yaml"
+        state_text = state_path.read_text(encoding="utf-8")
+        base_revision = publication.file_revision(state_path)
+        base_doc = yaml.safe_load(state_text) or {}
+
+        import tempfile
+        tmp_dir = Path(tempfile.mkdtemp(prefix="studio-goals-"))
+        try:
+            copy_path = tmp_dir / "state.yaml"
+            copy_path.write_text(state_text, encoding="utf-8")
+            updates_path = tmp_dir / "goal-updates.yaml"
+            log("asking the engine to propose goal updates from the ledger "
+                "(one bounded LLM pass)")
+            rc, lines = engines.run_py(
+                engines.AGENTIC_SIMULATOR, "src/goals.py",
+                "--state", str(copy_path), "--out", str(updates_path),
+                timeout=_GOAL_REVIEW_TIMEOUT, on_line=log)
+            if rc != 0:
+                for ln in lines[-10:]:
+                    log(ln)
+                raise RuntimeError(
+                    "goal review failed rc=%s: %s"
+                    % (rc, " | ".join(lines[-10:])))
+            try:
+                updates = yaml.safe_load(
+                    updates_path.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError) as e:
+                raise RuntimeError(
+                    f"the engine wrote no readable updates: {e}")
+            if not isinstance(updates, dict):
+                raise RuntimeError("the engine's updates file does not parse "
+                                   "as a mapping — nothing staged")
+            found = updates.get("updates") or []
+            findings = updates.get("findings") or []
+            if not found:
+                log("no goal updates proposed — the ledger does not justify "
+                    "any changes; nothing staged")
+                return {"proposed": 0, "findings": list(findings),
+                        "staged": False}
+            found = [u for u in found if isinstance(u, dict)]
+
+            # the engine's own validator decides — the same set_field path a
+            # DM-recorded session takes, so a proposed goal cannot carry
+            # anything a hand-written effect could not
+            source = "goal-review:week-" + str(_clock_week(base_doc))
+            record = {"source": source, "events": [], "effects": []}
+            for u in found:
+                eff = {
+                    "type": "set_field",
+                    "faction_id": u.get("faction_id"),
+                    "field": "goal",
+                    "after": u.get("goal"),
+                    "reason": u.get("reason"),
+                    "source": source,
+                }
+                eff["id"] = _effect_id(eff)
+                record["effects"].append(eff)
+            record_path = tmp_dir / "session.yaml"
+            record_path.write_text(
+                yaml.safe_dump(record, sort_keys=False, allow_unicode=True,
+                               width=100), encoding="utf-8")
+            rc, lines = engines.run_py(
+                engines.AGENTIC_SIMULATOR, "src/effects.py",
+                "--check", str(record_path), "--state", str(copy_path),
+                timeout=60)
+            if rc != 0:
+                detail = " | ".join(lines[-5:]) or "no output"
+                raise RuntimeError(
+                    f"the engine refused the proposed goal updates: {detail}")
+            rc, lines = engines.run_py(
+                engines.AGENTIC_SIMULATOR, "src/effects.py",
+                "--apply", str(record_path), "--state", str(copy_path),
+                timeout=60)
+            if rc != 0:
+                detail = " | ".join(lines[-5:]) or "no output"
+                raise RuntimeError(
+                    f"the engine could not apply the proposed goal updates: "
+                    f"{detail}")
+            after_text = copy_path.read_text(encoding="utf-8")
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        after_doc = yaml.safe_load(after_text) or {}
+        # the engine ran for minutes: an accept (or sandbox replace) landing
+        # in between means this after-image was derived from a state that no
+        # longer exists — staging it would publish over that change
+        current = publication.file_revision(state_path)
+        if current != base_revision:
+            raise RuntimeError(
+                "simulation/state.yaml changed while the goal review was "
+                "running (another proposal was accepted?) — run it again "
+                "against the current state; nothing was staged")
+        racing = proposals.find_pending(name)
+        if racing:
+            raise RuntimeError(
+                f"a proposal appeared while this goal review was finishing "
+                f"({racing.get('proposal_id')}) — nothing was staged")
+        run_record = {"kind": "goal-review",
+                      "engine": "agentic-simulator/src/goals.py --state",
+                      "model": None, "base_url": None}
+        try:
+            cfg = llm_client.resolve_config()
+            run_record["model"] = cfg.get("model")
+            run_record["base_url"] = cfg.get("url")
+        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
+            pass
+        pid = proposals.create(
+            name, kind="goal_updates",
+            base_week=_clock_week(base_doc),
+            proposed_week=_clock_week(base_doc),
+            base_revisions={"simulation/state.yaml": base_revision},
+            input_set_revisions={},
+            artifacts={"state": after_text, "chronicles": {}, "entries": [],
+                       "updates": found},
+            run_record=run_record, before_state=base_doc)
+        diff = proposals.diff_states(base_doc, after_doc, [])
+        log(f"staged {len(found)} proposed goal update(s) ({pid}) — nothing "
+            "in the campaign has changed; review, then accept or discard")
+        return {"proposal_id": pid, "status": "pending",
+                "kind": "goal_updates", "proposed": len(found),
+                "findings": list(findings), "staged": True, "diff": diff}
+
+    return submit_campaign_job("goal-review", name, job)
 
 
 @router.get("/api/campaign/{name}/simulation/chronicle/{week}")

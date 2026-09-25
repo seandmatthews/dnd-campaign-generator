@@ -112,6 +112,11 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
                        width=100), encoding="utf-8")
     manifest["artifacts"]["timeline_entries"] = \
         "artifacts/timeline-entries.yaml"
+    updates = artifacts.get("updates") or []
+    (bdir / "artifacts" / "goal-updates.yaml").write_text(
+        yaml.safe_dump(updates, sort_keys=False, allow_unicode=True,
+                       width=100), encoding="utf-8")
+    manifest["artifacts"]["goal_updates"] = "artifacts/goal-updates.yaml"
     replay_text = artifacts.get("replay")
     if replay_text:
         (bdir / "artifacts" / "replay.yaml").write_text(
@@ -201,6 +206,13 @@ def load(name: str, proposal_id: str) -> dict:
         entries = yaml.safe_load(
             (arts / "timeline-entries.yaml").read_text(encoding="utf-8"))
         out["entries"] = entries if isinstance(entries, list) else []
+        updates_path = arts / "goal-updates.yaml"
+        if updates_path.is_file():
+            updates = yaml.safe_load(
+                updates_path.read_text(encoding="utf-8"))
+            out["updates"] = updates if isinstance(updates, list) else []
+        else:
+            out["updates"] = []
         diff = json.loads((arts / "diff.json").read_text(encoding="utf-8"))
         out["diff"] = diff if isinstance(diff, dict) else {}
     except (OSError, yaml.YAMLError, ValueError) as e:
@@ -222,6 +234,7 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
     diff = {
         "clock": {"before": _clock(before or {}), "after": _clock(after or {})},
         "resources": {},
+        "fields": {},
         "events_added": [],
         "rumors_added": [],
     }
@@ -238,6 +251,12 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
                    if res_b.get(k) != res_a.get(k)}
         if changed:
             diff["resources"][fid] = changed
+        # fact fields (goal/kind/secret) — what a set_field effect moved
+        f_changed = {k: {"before": f_before.get(k), "after": f_after.get(k)}
+                     for k in ("goal", "kind", "secret")
+                     if (f_before.get(k) or "") != (f_after.get(k) or "")}
+        if f_changed:
+            diff["fields"][fid] = f_changed
     ev_b = before or {}
     before_events = {(e.get("week"), e.get("actor"), e.get("text"))
                      for e in (ev_b.get("events") or [])

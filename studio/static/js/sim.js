@@ -365,17 +365,47 @@
       const chron = (data.chronicles && data.chronicles.length)
         ? data.chronicles[data.chronicles.length - 1] : null;
       const isSession = p.kind === 'session_effects';
-      const title = isSession
-        ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
-        : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
-      const subtitle = isSession
-        ? '<strong>The world has not changed yet.</strong> These are the recorded ' +
-          'session facts and the reviewed effects they justify. Accepting applies ' +
-          'them exactly once; discarding changes nothing.'
-        : '<strong>The world has not advanced.</strong> ' +
-          'This is a proposal generated from the current state (' +
-          'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
-          'the whole week exactly once; discarding changes nothing.';
+      const isGoals = p.kind === 'goal_updates';
+      const updates = Array.isArray(data.updates) ? data.updates : [];
+      const title = isGoals
+        ? 'Proposed goal updates — not canon yet'
+        : isSession
+          ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
+          : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
+      const subtitle = isGoals
+        ? '<strong>The world has not changed yet.</strong> The engine read ' +
+          'the ledger and proposes these goal changes for each faction. ' +
+          'Accepting applies them exactly once; discarding changes nothing.'
+        : isSession
+          ? '<strong>The world has not changed yet.</strong> These are the recorded ' +
+            'session facts and the reviewed effects they justify. Accepting applies ' +
+            'them exactly once; discarding changes nothing.'
+          : '<strong>The world has not advanced.</strong> ' +
+            'This is a proposal generated from the current state (' +
+            'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
+            'the whole week exactly once; discarding changes nothing.';
+
+      const goalsBody = () => {
+        const rows = updates.length ? updates : Object
+          .entries((diff.fields) || {})
+          .map(([fid, ch]) => ({ faction_id: fid, name: fid,
+            current_goal: (ch.goal || {}).before,
+            goal: (ch.goal || {}).after, reason: null }));
+        if (!rows.length) {
+          return '<p class="muted">No update details were recorded in this ' +
+            'bundle — read the diff below.</p>';
+        }
+        return '<div class="goal-updates">' + rows.map((u) =>
+          '<div class="goal-update">' +
+            '<h5 class="goal-faction">' + S.esc(String(u.name || u.faction_id)) + '</h5>' +
+            '<p class="goal-change"><span class="goal-old">' +
+              S.esc(String(u.current_goal || '')) + '</span> &rarr; ' +
+              '<span class="goal-new">' + S.esc(String(u.goal || '')) +
+            '</span></p>' +
+            (u.reason ? '<p class="goal-reason muted">' +
+              S.esc(String(u.reason)) + '</p>' : '') +
+          '</div>').join('') + '</div>';
+      };
 
       panel.innerHTML = '';
       // innerHTML, not S.el(): the content is multi-root (title + note +
@@ -385,28 +415,31 @@
       panel.innerHTML =
         '<h3 class="panel-title">' + title + '</h3>' +
         '<p class="panel-note">' + subtitle + '</p>' +
-        '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
-        (evs.length
-          ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
-              (isSession ? 'Recorded history &amp; effects (' : 'Proposed events (') + evs.length + ')</summary><ul class="event-list">' +
-              evs.map((e) => '<li><span class="event-text">' + S.esc(e.text || '') + '</span>' +
-                (e.effect ? ' <span class="pill pill-when">effect</span>' : '') +
-                (e.effect == null && e.source ? ' <span class="pill pill-when">history only</span>' : '') +
-                '</li>').join('') +
-            '</ul></details>'
-          : '') +
-        (rums.length
-          ? '<details class="proposal-rumors"><summary>Proposed rumors (' + rums.length + ')</summary><ul class="rumor-list">' +
-              rums.map((r) => '<li class="rumor-entry"><span class="rumor-claim">' + S.esc(r.claim || '') + '</span></li>').join('') +
-            '</ul></details>'
-          : '') +
-        (chron
-          ? '<div class="proposal-chronicle"><h5 class="findings-title">Chronicle (proposed)</h5><article class="chronicle"></article></div>'
-          : '') +
+        (isGoals
+          ? goalsBody()
+          : '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
+            (evs.length
+              ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
+                  (isSession ? 'Recorded history &amp; effects (' : 'Proposed events (') + evs.length + ')</summary><ul class="event-list">' +
+                  evs.map((e) => '<li><span class="event-text">' + S.esc(e.text || '') + '</span>' +
+                    (e.effect ? ' <span class="pill pill-when">effect</span>' : '') +
+                    (e.effect == null && e.source ? ' <span class="pill pill-when">history only</span>' : '') +
+                    '</li>').join('') +
+                '</ul></details>'
+              : '') +
+            (rums.length
+              ? '<details class="proposal-rumors"><summary>Proposed rumors (' + rums.length + ')</summary><ul class="rumor-list">' +
+                  rums.map((r) => '<li class="rumor-entry"><span class="rumor-claim">' + S.esc(r.claim || '') + '</span></li>').join('') +
+                '</ul></details>'
+              : '') +
+            (chron
+              ? '<div class="proposal-chronicle"><h5 class="findings-title">Chronicle (proposed)</h5><article class="chronicle"></article></div>'
+              : '')) +
         '<div class="inline-form proposal-actions">' +
           '<button type="button" class="btn btn-primary proposal-accept">' +
-            (isSession ? 'Accept session changes — apply exactly once'
-                       : 'Accept week ' + S.esc(String(p.proposed_week)) + ' — publish everything') + '</button>' +
+            (isGoals ? 'Accept the goal changes — apply exactly once'
+                     : isSession ? 'Accept session changes — apply exactly once'
+                                 : 'Accept week ' + S.esc(String(p.proposed_week)) + ' — publish everything') + '</button>' +
           '<button type="button" class="btn btn-danger proposal-discard">Discard</button>' +
           '<span class="muted form-note">Accept publishes as one step; discard keeps the audit receipt only.</span>' +
         '</div>' +
@@ -420,11 +453,14 @@
       acceptBtn.addEventListener('click', async () => {
         if (acceptBtn.disabled) return;
         const ok = await S.confirmRun(
-          isSession
-            ? 'Accepting applies the recorded session history and its reviewed ' +
-              'effects to the live state — exactly once.'
-            : 'Accepting publishes the whole proposed week into the campaign — ' +
-              'clock, resources, chronicle, timeline — exactly once.'
+          isGoals
+            ? 'Accepting applies the proposed goal changes to the factions ' +
+              '— exactly once. The audit events cite the ledger.'
+            : isSession
+              ? 'Accepting applies the recorded session history and its reviewed ' +
+                'effects to the live state — exactly once.'
+              : 'Accepting publishes the whole proposed week into the campaign — ' +
+                'clock, resources, chronicle, timeline — exactly once.'
         );
         if (!ok) return;
         acceptBtn.disabled = true; discardBtn.disabled = true;
@@ -432,10 +468,12 @@
         try {
           const r = await S.api(S.campUrl('/simulation/proposal/' +
             encodeURIComponent(p.proposal_id) + '/accept'), { method: 'POST' });
-          S.toast(isSession
-            ? 'Session changes are canon — applied exactly once.'
-            : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
-              ' is canon — accepted exactly once.', 'ok');
+          S.toast(isGoals
+            ? 'Goal changes are canon — applied exactly once.'
+            : isSession
+              ? 'Session changes are canon — applied exactly once.'
+              : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
+                ' is canon — accepted exactly once.', 'ok');
           if (r.snapshot && (r.snapshot.state === 'failed' ||
               r.snapshot.state === 'unavailable')) {
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
@@ -452,8 +490,8 @@
       discardBtn.addEventListener('click', async () => {
         if (discardBtn.disabled) return;
         const ok = await S.confirmRun(
-          'Discard this proposed week? Nothing was ever written to the ' +
-          'campaign; the proposal stays as an audit receipt.'
+          'Discard this proposal? Nothing was ever written to the ' +
+          'campaign; the bundle stays as an audit receipt.'
         );
         if (!ok) return;
         acceptBtn.disabled = true; discardBtn.disabled = true;
@@ -475,6 +513,77 @@
         '<h3 class="panel-title">The proposed week could not be loaded</h3>';
       panel.appendChild(S.errorPanel(err));
     });
+  }
+
+  /* ----- goal review (the ledger moves, goals can too) ----- */
+
+  function goalsCard(root) {
+    const card = S.el(
+      '<section class="panel goals-panel">' +
+        '<h3 class="panel-title">Review the goals</h3>' +
+        '<p class="panel-note">Goals are written once, at creation; the ledger ' +
+          'keeps moving. One bounded LLM pass proposes goal updates grounded in ' +
+          'the recorded weeks, rumors and canon deadlines — staged as a proposal ' +
+          'above; the campaign changes only if you accept it.</p>' +
+        '<div class="inline-form">' +
+          '<button type="button" class="btn btn-primary goal-review-btn">Propose goal updates</button>' +
+          '<span class="muted form-note">Spends API credits; most runs justify few or no changes.</span>' +
+        '</div>' +
+        '<pre class="log-tail hidden goals-log"></pre>' +
+        '<div class="goals-error"></div>' +
+      '</section>'
+    );
+    const btn = card.querySelector('.goal-review-btn');
+    const logBox = card.querySelector('.goals-log');
+    const errBox = card.querySelector('.goals-error');
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      const ok = await S.confirmRun(
+        'Run a goal review? One LLM pass reads the ledger and proposes goal ' +
+        'updates — it spends API credits. Nothing changes unless you accept ' +
+        'the proposal afterwards.'
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      logBox.classList.remove('hidden');
+      logBox.textContent = '';
+      (async () => {
+        const resp = await S.api(S.campUrl('/simulation/goal-review'), {
+          method: 'POST', body: {}
+        });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        return S.pollJob(resp.job_id, (line) => {
+          logBox.textContent += String(line == null ? '' : line) + '\n';
+          logBox.scrollTop = logBox.scrollHeight;
+        });
+      })().then((result) => {
+        const r = result || {};
+        if (r.staged) {
+          S.toast(r.proposed + ' goal update' + (r.proposed === 1 ? '' : 's') +
+            ' proposed — review it above, then accept or discard.', 'ok');
+          S.showTab('sim'); // re-render: the proposal panel leads the tab
+        } else {
+          const findings = Array.isArray(r.findings) ? r.findings : [];
+          errBox.innerHTML = '';
+          errBox.appendChild(S.el(
+            '<div class="success-panel">No goal updates proposed — the ' +
+            'ledger does not justify any changes.</div>' +
+            (findings.length
+              ? '<ul class="findings-list">' + findings.map((f) =>
+                  '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'
+              : '')
+          ));
+          btn.disabled = false;
+        }
+      }).catch((err) => {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        S.toast('Goal review failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+        btn.disabled = false;
+      });
+    });
+    root.appendChild(card);
   }
 
   /* ----- record-a-session form (Phase 3: history + structured effects) ----- */
@@ -937,6 +1046,9 @@
       });
     });
     root.appendChild(runPanel);
+
+    /* goal review: the sim proposes goal updates from the ledger */
+    if (factions.length) goalsCard(root);
 
     /* record-a-session: history + reviewed structured effects (Phase 3) */
     if (factions.length) sessionPanel(root, factions);

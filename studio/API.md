@@ -267,11 +267,15 @@ shapes in this document true.
   one week, no chronicle written, or every faction call failed. A genuinely
   quiet scheduler-held week is a valid proposal.
 - `GET /api/campaign/{name}/simulation/proposal` → the pending bundle
-  (`{"proposal":null}` when none): `{"proposal":{"proposal_id","status",
-  "base_week","proposed_week","created","run_record","base_revisions",
-  "input_set_revisions"},"diff":{clock,resources,events_added,
-  rumors_added,timeline_entries},"entries":[...],"chronicles":[{file,title,
-  markdown}]}`. Reads disk, so review survives a restart.
+  (`{"proposal":null}` when none): `{"proposal":{"proposal_id","kind",
+  "status","base_week","proposed_week","created","run_record",
+  "base_revisions","input_set_revisions"},"diff":{clock,resources,fields,
+  events_added,rumors_added,timeline_entries},"entries":[...],
+  "updates":[...],"chronicles":[{file,title,markdown}]}`. `kind` is
+  `simulated_week` | `session_effects` | `goal_updates`; `updates` is the
+  goal-update list on a goal_updates bundle; `diff.fields` carries
+  `{faction:{goal|kind|secret:{before,after}}}` for any set_field change.
+  Reads disk, so review survives a restart.
 - `POST /api/campaign/{name}/simulation/proposal/{pid}/accept` → publishes
   the WHOLE week (state, chronicles, timeline entries) as one transactional
   publication validated against the base revisions recorded at generation
@@ -299,6 +303,20 @@ shapes in this document true.
   applying to a throwaway copy of the state; the campaign is untouched
   until the accept route publishes it. Accept dispatches on the bundle's
   `kind`: a session_effects publish writes `simulation/state.yaml` only.
+- `POST /api/campaign/{name}/simulation/goal-review` → 202 job. The sim
+  proposes faction goal updates grounded in the ledger (recorded weeks,
+  rumors, canon deadlines — engine `src/goals.py --state`, one bounded
+  LLM pass; per-update findings are dropped and reported). Proposed
+  updates ride the same reviewed effect path a DM-recorded session takes
+  (`src/effects.py --check`/`--apply` with `set_field goal`), then stage
+  as a **`goal_updates` proposal**. 409 while any proposal is pending; a
+  state edit landing mid-run aborts with nothing staged (the after-image
+  would not match canon). Zero proposed updates is a done job with
+  `"staged":false` plus the findings — no empty bundle. Result (staged)
+  `{"proposal_id","status":"pending","kind":"goal_updates","proposed":n,
+  "findings":[...],"staged":true,"diff":{...}}`. Accept applies each goal
+  as one sourced audit event (source `goal-review:week-N`) and writes
+  `simulation/state.yaml` only.
 - Legacy `simulation/pending-week-*.yaml` files (pre-proposal
   implementations) remain reviewable as **timeline-only** reviews: the
   weeks they describe were already committed by the old flow — approving
