@@ -24,14 +24,18 @@ from pathlib import Path
 import spine
 
 # ![[embed]] and [[link]] resolve the same way; target = text before |,
-# section anchor (#Wants) stripped. Obsidian also matches .md-suffixed
-# targets ("[[House Ferrand.md]]"), so the suffix is stripped too. Embeds
-# of ASSET files (![[scene.png]], ![[map.svg]]) are file references, not
-# page links — they stay out of the graph entirely (they used to surface
-# as dangling lore-page generation targets, found 2026-09-25).
-_WIKI_LINK_RE = re.compile(r"!?\[\[([^\[\]#|]+)(?:#[^\[\]#|]*)?(?:\|[^\[\]]*)?\]\]")
+# section anchors (#A#B, one or more) stripped, and the trailing backslash
+# of the table-escaped form ([[Page\|alias]]) stripped. Obsidian also
+# matches .md-suffixed targets ("[[House Ferrand.md]]"), so the suffix is
+# stripped too. Embeds of ASSET files (![[scene.png]], ![[map.svg]]) are
+# file references, not page links — skipped at resolution time UNLESS a
+# page actually carries that name (a page may legitimately be
+# "Vault.json.md"; found 2026-09-25).
+_WIKI_LINK_RE = re.compile(
+    r"!?\[\[([^\[\]#|]+)(?:#[^\[\]#|]*)*(?:\|[^\[\]]*)?\]\]")
 _ASSET_TARGET_RE = re.compile(
-    r"\.(png|jpe?g|gif|webp|avif|svg|uvtt|json|ya?ml|pdf|mp3|mp4|ogg|wav|webm|zip)$",
+    r"\.(png|jpe?g|gif|webp|avif|svg|uvtt|json|ya?ml|pdf|mp3|mp4|m4a|ogg|"
+    r"wav|flac|webm|zip|bmp|tiff?|ico|heic|heif|txt|canvas|excalidraw)$",
     re.IGNORECASE)
 
 
@@ -45,14 +49,25 @@ def normalize_key(name: str) -> str:
 
 
 def _scan_text(text: str):
-    """[(line_no, target)] for every wiki-link in a page of text. Asset-file
-    targets (.png/.svg/...) are skipped — they are file references, not
-    pages; .md suffixes are stripped per Obsidian's [[Page.md]] form."""
+    """[(line_no, target)] for every wiki-link in a page of text. Code
+    fences (``` / ~~~ blocks) and inline code spans are skipped — a code
+    sample's [[Not A Page]] is not a link, and used to become a phantom
+    dangling finding and a lore generation target. Asset-file targets are
+    NOT decided here: whether one is a file reference or a real page
+    (Vault.json.md) is only known once the resolver has had its say."""
     out = []
+    in_fence = False
     for n, line in enumerate(text.splitlines(), 1):
-        for m in _WIKI_LINK_RE.finditer(line):
-            target = m.group(1).strip()
-            if not target or _ASSET_TARGET_RE.search(target):
+        stripped = line.lstrip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        clean = re.sub(r"`[^`]*`", " ", line)
+        for m in _WIKI_LINK_RE.finditer(clean):
+            target = m.group(1).strip().rstrip("\\")
+            if not target:
                 continue
             if target.lower().endswith(".md"):
                 target = target[:-3]
@@ -208,10 +223,13 @@ def _build_index(campaign: Path) -> dict:
             if k in resolve and resolve[k]["file"] != p["file"]:
                 # companion notes are pipeline-named after their slug (a city
                 # map note always collides with the burg's entity page); the
-                # DM cannot rename them, so the collision is structural and
-                # never a finding — entity pages, scanned first, win
-                # resolution (false positives found 2026-09-25)
-                if p["source"] == "map" or resolve[k]["source"] == "map":
+                # DM cannot rename them, so ENTITY-vs-map collisions are
+                # structural and never a finding — entity pages, scanned
+                # first, win resolution (false positives found 2026-09-25).
+                # Only that one direction is silenced: map-vs-map (a city
+                # note and a site note sharing a slug) and map-vs-chronicle
+                # are real ambiguities and stay findings.
+                if (p["source"] == "map") != (resolve[k]["source"] == "map"):
                     continue
                 claiming.setdefault(k, {resolve[k]["file"]}).add(p["file"])
                 continue  # first page wins resolution; the collision is a finding
@@ -224,6 +242,9 @@ def _build_index(campaign: Path) -> dict:
         text = _read(campaign / rel)
         for n, target in _scan_text(text):
             page = resolve.get(normalize_key(target))
+            if page is None and _ASSET_TARGET_RE.search(target):
+                continue  # a file reference, not a page — but only when no
+                # page carries the name (Vault.json.md beats [[Vault.json]])
             if page is not None:
                 backlinks.setdefault(page["file"], []).append({
                     "source_file": rel,

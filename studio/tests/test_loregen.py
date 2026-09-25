@@ -280,3 +280,35 @@ def test_missing_pages_ground_in_their_linking_pages(tmp_spine_root, monkeypatch
         (tmp_spine_root / CAMP / "lore" / "pending-pages-1.yaml")
         .read_text("utf-8"))
     assert "Silver Company" in doc["entries"][0]["text"]
+
+
+def test_missing_pages_ground_in_companion_notes(tmp_spine_root, monkeypatch):
+    """The first cut of the grounding fix read only _MULTI_NAME's FIRST
+    token, so an article-initial name ('The Causeway Camp') grounded as
+    'the' — grounds nothing — and its drafts were still dropped, while the
+    test above passed for the wrong reason (the grounding came from the
+    entity page's YAML strings, never from the companion-note path the fix
+    targets). This test's linking page is a MAP COMPANION NOTE: markdown
+    the YAML-based canon scan never sees, with an article-initial title
+    appearing nowhere else."""
+    note_dir = (tmp_spine_root / CAMP / "maps" / "sites"
+                / "the-brackleford-stones")
+    note_dir.mkdir(parents=True)
+    (note_dir / "the-brackleford-stones.md").write_text(
+        "---\nplace: The Brackleford Stones\n---\n\n"
+        "Site map of The Brackleford Stones. The standing stones watch the "
+        "ash crossing where [[the Ash Wardens]] drill.\n", encoding="utf-8")
+    _canned_llm(monkeypatch, entries_yaml="""- name: the Ash Wardens
+  kind: faction
+  aliases: []
+  body: Soldiery raised at The Brackleford Stones; they hold the ash tolls now.
+  new_names: []
+""")
+    result = loregen.generate_missing_pages(tmp_spine_root / CAMP,
+                                            targets=["the Ash Wardens"],
+                                            limit=1)
+    assert result["pages"] == 1
+    doc = yaml.safe_load(
+        (tmp_spine_root / CAMP / "lore" / "pending-pages-1.yaml")
+        .read_text("utf-8"))
+    assert "Brackleford Stones" in doc["entries"][0]["text"]

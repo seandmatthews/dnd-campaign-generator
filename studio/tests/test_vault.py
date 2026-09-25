@@ -646,3 +646,75 @@ def test_companion_note_slug_never_collides_with_entity_page(tmp_spine_root):
     # resolution still prefers the entity page
     idx = links.build_index("testvale")
     assert idx["resolve"]["dunmore"]["file"] == "lore/entities/Dunmore.md"
+
+
+# follow-ups (2026-09-25 review): suppression scope, code spans, link forms
+
+
+def test_map_vs_map_slug_collision_still_finds(tmp_spine_root):
+    """The companion-note fix silences ENTITY-vs-map collisions only. A
+    city note and a site note sharing a slug is a real ambiguity (resolution
+    picks by scan order) and must stay a finding."""
+    _write(tmp_spine_root / "testvale" / "maps" / "cities" / "dunmore" /
+           "dunmore.md", "---\nkind: city map\n---\n\nCity map of Dunmore.\n")
+    _write(tmp_spine_root / "testvale" / "maps" / "sites" / "dunmore" /
+           "dunmore.md", "---\nkind: site map\n---\n\nSite map of Dunmore.\n")
+    collisions = [f for f in links.findings("testvale")
+                  if f["rule"] == "links/collision"]
+    assert any("dunmore" in f["quote"] for f in collisions), collisions
+
+
+def test_code_blocks_and_inline_code_are_not_links(tmp_spine_root):
+    """[[Not A Page]] inside a fenced block or a code span is code, not a
+    link — it used to become a dangling finding AND a lore generation
+    target grounded on a code sample."""
+    _dangling_page(tmp_spine_root)
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Ledger.md",
+           "---\nname: Ledger\n---\n\n```\nprint('[[Fenced Ghost]]')\n```\n"
+           "Use `[[Inline Ghost]]` when scripting.\n"
+           "Real: [[the Ash Wardens]].\n")
+    targets = [t["target"] for t in links.missing_page_targets("testvale")]
+    assert targets == ["the Ash Wardens"], targets
+    danglings = [f["quote"] for f in links.findings("testvale")
+                 if f["rule"] == "links/dangling"]
+    assert not any("Ghost" in q for q in danglings), danglings
+
+
+def test_asset_form_target_resolving_to_a_page_links(tmp_spine_root):
+    """Dot stems are legal page names: a real Vault.json.md page resolves
+    [[Vault.json]] (asset-skip must not fire for resolvable targets), while
+    an unresolvable exotic embed (![[sketch.excalidraw]]) stays a file
+    reference, not a generation target."""
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Vault.json.md",
+           "---\nname: Vault.json\n---\n\nThe vault's records.\n")
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Thief.md",
+           "---\nname: Thief\n---\n\nRead [[Vault.json]].\n"
+           "![[sketch.excalidraw]]\n")
+    idx = links.build_index("testvale")
+    vault = next(p for p in idx["pages"] if p["file"].endswith("Vault.json.md"))
+    assert any(b["target"] == "Vault.json"
+               for b in idx["backlinks"].get(vault["file"], []))
+    danglings = [f["quote"] for f in links.findings("testvale")
+                 if f["rule"] == "links/dangling"]
+    assert not any("Vault.json" in q for q in danglings), danglings
+    assert not any("excalidraw" in q for q in danglings), danglings
+    targets = [t["target"] for t in links.missing_page_targets("testvale")]
+    assert not any("Vault" in t or "excalidraw" in t for t in targets), targets
+
+
+def test_heading_chains_and_escaped_pipes_resolve(tmp_spine_root):
+    """[[Page#A#B]] (nested heading chain) and the table-escaped
+    [[Page\|alias]] form resolve instead of dangling on malformed
+    targets."""
+    _dangling_page(tmp_spine_root)
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Scribe.md",
+           "---\nname: Scribe\n---\n\n"
+           "Chains: [[Kestra#Life#Legacy]].\n"
+           "Table: | who | [[Kestra\|the liar]] |\n")
+    idx = links.build_index("testvale")
+    kestra = next(p for p in idx["pages"] if p["name"] == "Kestra")
+    targets = {b["target"] for b in idx["backlinks"].get(kestra["file"], [])}
+    assert "Kestra" in targets, targets
+    danglings = [f["quote"] for f in links.findings("testvale")
+                 if f["rule"] == "links/dangling"]
+    assert not any("Kestra" in q for q in danglings), danglings

@@ -220,7 +220,6 @@ def _entries_from_doc(doc):
 _CAP = r"[A-Z][A-Za-z0-9'’-]*"
 _MULTI_NAME = re.compile(rf"\b({_CAP})(?:\s+(?:{_CAP}|of|the|de))+\b")
 
-
 def _normalize(name: str) -> str:
     name = name.strip().strip("'\"").removesuffix("'s").removesuffix("’s")
     low = name.lower()
@@ -369,12 +368,15 @@ def _canon_findings(new_entries_yaml, state_text, pending_name, log):
 def _names_from_text(text):
     """Capitalized multi-word phrases in free markdown text, normalized —
     the grounding set for generator output that merely repeats what its
-    own input pages say (those pages are not YAML the canon scan sees)."""
+    own input pages say (those pages are not YAML the canon scan sees).
+    The WHOLE phrase is grounded (plus its particles-split pieces): the
+    first token alone would ground "The Causeway Camp" as "the", which
+    grounds nothing (found live 2026-09-25, wave's first cut)."""
     out = set()
     for m in _MULTI_NAME.finditer(text or ""):
-        for piece in _split_particles(m.group(1)):
+        for piece in _split_particles(m.group(0)):
             out.add(_normalize(piece))
-        out.add(_normalize(m.group(1)))
+        out.add(_normalize(m.group(0)))
     return out
 
 
