@@ -177,8 +177,13 @@ shapes in this document true.
   before the `{page}` route: "missing" is not a page stem.)
 - `POST /api/campaign/{name}/lore/pages/missing` `{"targets"?: [str]}` → job
   (fed-or-refused, vault stage 4): each dangling link is a generation target
-  whose grounding is the pages that link it — those pages are fed whole.
-  **422-equivalent refusal (job error) when there are no dangling links** or
+  whose grounding is the pages that link it — those pages are fed whole, and
+  names appearing in them count as grounded (a draft repeating its own
+  grounding is not a hallucination; 2026-09-25). Total validation failure
+  reports the findings in the job error and log instead of swallowing them.
+  Asset embeds (`![[scene.png]]`) are file references, not page links: they
+  are never dangling targets. **422-equivalent refusal (job error) when
+  there are no dangling links** or
   none of the requested targets is one. Drafts stage to
   `lore/pending-pages-N.yaml` (entry shape below) and the run attaches
   structural + canon-audit findings; commits snapshot
@@ -313,7 +318,10 @@ shapes in this document true.
   present, PLUS the vault's own advisory findings (`source: "links"`):
   dangling wiki-links and name/alias collisions across entity pages,
   chronicles, and companion notes — capped at 20 per GET, with a note when
-  more exist. Pending entries carrying a `page` payload surface as
+  more exist. Asset-file targets (`![[scene.png]]`) are file references,
+  never dangling; companion notes are pipeline-named after their slug and
+  never collide with an entity page of the same name (the entity page wins
+  resolution). Pending entries carrying a `page` payload surface as
   `kind: "lore-page"` (the missing-page drafts). Each `files[]` row carries
   `revision` (sha256 of the file's exact bytes) — send it back as
   `expected_revision` so a change since the view is refused (409) with
@@ -372,7 +380,9 @@ shapes in this document true.
 - `POST /api/campaign/{name}/knowledge` `{text, visibility, source_file?,
   subjects?, id?}` → upsert + compile (transactional, revision-checked).
   422 on unknown faction ids in the visibility list (a typo must not hide
-  or leak a fact). 409 while a publication conflict is parked.
+  or leak a fact). 409 while a publication conflict is parked. Lands as a
+  history snapshot like every canon change — `snapshot` in the response
+  (`supersede`, `reconcile`, `reveal` and `revoke` snapshot the same way).
 - `POST .../knowledge/{id}/supersede` same body → approves the corrected
   fact and flips the old one to `superseded` (provenance kept, never
   compiled again) + compile.

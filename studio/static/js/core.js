@@ -567,6 +567,9 @@
           picked = list[0].name;
         }
         Studio.state.campaign = picked;
+        // remember the pick so a reload mid-prep lands back on it (a reload
+        // used to reset to the first campaign, found 2026-09-25)
+        try { localStorage.setItem('campaign-studio.campaign', picked); } catch (_) {}
       }
     } catch (err) {
       select.innerHTML = '';
@@ -640,6 +643,7 @@
     const select = document.getElementById('campaign-select');
     select.addEventListener('change', () => {
       Studio.state.campaign = select.value || null;
+      try { localStorage.setItem('campaign-studio.campaign', select.value); } catch (_) {}
       closeSearch(); // results belong to the campaign that was searched
       showTab(Studio.state.activeTab); // campaign switch re-renders the active tab
     });
@@ -673,7 +677,9 @@
       if (ev.key === 'Escape') closeSearch();
     });
 
-    await refreshCampaigns(null);
+    let remembered = null;
+    try { remembered = localStorage.getItem('campaign-studio.campaign'); } catch (_) {}
+    await refreshCampaigns(remembered);
     showTab(Studio.state.activeTab);
     checkSetup(); // fire-and-forget: the strip appears only if setup is incomplete
   }

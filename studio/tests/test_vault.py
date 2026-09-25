@@ -598,3 +598,51 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
     text = copied.read_text(encoding="utf-8")
     assert "[[wardens]]" in text  # linkified on the campaign copy at accept
   
+
+
+# asset embeds + companion-note collisions (found live 2026-09-25) --------
+
+
+def test_asset_embeds_never_dangle_or_become_page_targets(tmp_spine_root):
+    """![[scene.png]] is a file reference, not a page link: it must not
+    surface as a dangling finding nor as a missing-page generation target
+    (the app offered to write lore pages for PNG files). [[Page.md]] keeps
+    resolving per Obsidian's suffix form."""
+    _dangling_page(tmp_spine_root)  # Kestra.md: [[Kestra.md]] resolves to it
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Vault.md",
+           "---\nname: Vault\n---\n\n![[the-drowned-vault.png]]\n"
+           "![[tasospon.svg]]\nStill sworn to [[the Ash Wardens]].\n"
+           "Read [[Kestra.md]] too.\n")
+    rules = {f["rule"] for f in links.findings("testvale")}
+    assert "links/dangling" in rules  # the Ash Wardens still dangles
+    danglings = [f["quote"] for f in links.findings("testvale")
+                 if f["rule"] == "links/dangling"]
+    assert all(".png" not in q and ".svg" not in q for q in danglings), danglings
+    targets = [t["target"] for t in links.missing_page_targets("testvale")]
+    assert targets == ["the Ash Wardens"], targets
+    # [[Kestra.md]] resolves to the Kestra page — no dangling, real backlink
+    # (the recorded target is the suffix-stripped "Kestra")
+    assert not any("Kestra" in q for q in danglings)
+    idx = links.build_index("testvale")
+    kestra = next(p for p in idx["pages"] if p["name"] == "Kestra")
+    assert any(b["target"] == "Kestra"
+               for b in idx["backlinks"].get(kestra["file"], []))
+
+
+def test_companion_note_slug_never_collides_with_entity_page(tmp_spine_root):
+    """A city map note is pipeline-named after its slug and always shares a
+    name with the burg's entity page — the collision was structural noise
+    the DM cannot fix by renaming (found live 2026-09-25). Entity pages win
+    resolution; the note never becomes a collision finding."""
+    _write(tmp_spine_root / "testvale" / "lore" / "entities" / "Dunmore.md",
+           "---\nname: Dunmore\n---\n\nThe burgh itself.\n")
+    _write(tmp_spine_root / "testvale" / "maps" / "cities" / "dunmore" /
+           "dunmore.md",
+           "---\nkind: city map\nplace: '[[Dunmore]]'\n---\n\n"
+           "![[dunmore.svg]]\n\nCity map of Dunmore.\n")
+    collisions = [f for f in links.findings("testvale")
+                  if f["rule"] == "links/collision"]
+    assert not any("dunmore" in f["quote"] for f in collisions), collisions
+    # resolution still prefers the entity page
+    idx = links.build_index("testvale")
+    assert idx["resolve"]["dunmore"]["file"] == "lore/entities/Dunmore.md"

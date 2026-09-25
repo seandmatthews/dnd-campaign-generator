@@ -173,3 +173,22 @@ def test_knowledge_requires_simulation_state(client, spine_root):
     # assert the 404 shape through the wardens campaign minus its state
     r = client.get("/api/campaign/nonexistent/knowledge")
     assert r.status_code == 404
+
+
+def test_knowledge_writes_take_history_snapshots(client, tmp_spine_root):
+    """A knowledge write published its files but skipped the git snapshot —
+    published-but-untracked until someone hit snapshot recovery (found live
+    2026-09-25). Every canon change commits: record, supersede, reveal."""
+    r = _add(client, text="The ford-toll ledger was rewritten in secret.",
+             visibility="dm_only")
+    assert r.status_code == 200, r.text
+    assert r.json()["snapshot"]["state"] == "committed", r.json().get("snapshot")
+
+    r = _add(client, text="The ford-toll bridge over the Vane burned.",
+             visibility="public")
+    assert r.json()["snapshot"]["state"] == "committed"
+    fid = r.json()["fact"]["id"]
+    rv = client.post(f"/api/campaign/testvale/knowledge/{fid}/reveal",
+                     json={"week": 1})
+    assert rv.status_code == 200, rv.text
+    assert rv.json()["snapshot"]["state"] == "committed", rv.json().get("snapshot")

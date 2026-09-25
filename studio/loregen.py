@@ -215,9 +215,10 @@ def _entries_from_doc(doc):
 # Capitalized multi-word candidates, allowing lowercase particles between
 # capitals ("Sera of Ruravaqan", "House Ferrand"). The FIRST token must be a
 # capitalized word — particle-only runs ("of the") are not names. A single
-# capitalized word alone is never checked — too noisy.
+# capitalized word alone is never checked — too noisy. (The first token is
+# captured so _names_from_text can reuse the pattern.)
 _CAP = r"[A-Z][A-Za-z0-9'’-]*"
-_MULTI_NAME = re.compile(rf"\b{_CAP}(?:\s+(?:{_CAP}|of|the|de))+\b")
+_MULTI_NAME = re.compile(rf"\b({_CAP})(?:\s+(?:{_CAP}|of|the|de))+\b")
 
 
 def _normalize(name: str) -> str:
@@ -365,6 +366,18 @@ def _canon_findings(new_entries_yaml, state_text, pending_name, log):
 
 # ------------------------------------------------------------- entry pipeline
 
+def _names_from_text(text):
+    """Capitalized multi-word phrases in free markdown text, normalized —
+    the grounding set for generator output that merely repeats what its
+    own input pages say (those pages are not YAML the canon scan sees)."""
+    out = set()
+    for m in _MULTI_NAME.finditer(text or ""):
+        for piece in _split_particles(m.group(1)):
+            out.add(_normalize(piece))
+        out.add(_normalize(m.group(1)))
+    return out
+
+
 def _validate_entries(raw_entries, known):
     """Shape-check and hallucination-check every entry; return (kept, findings)."""
     kept, findings = [], []
@@ -434,8 +447,14 @@ def generate_entries(campaign_dir, focus="", log=None):
     known = _canon_names(geo_text, entities, styles)
     kept, findings = _validate_entries(raw_entries, known)
     if not kept:
+        # the findings ARE the diagnosis — swallow them and the DM only
+        # sees "failed validation" with nothing to fix (found 2026-09-25)
+        for f in findings:
+            log(f"finding: {f['rule']} — {f['note']}")
         raise RuntimeError(
-            "every returned entry failed validation (see findings in the log)")
+            "every returned entry failed validation: "
+            + " | ".join(f"{f['rule']}: {f['note']}"[:200]
+                         for f in findings[:3]))
 
     # ids continue the timeline sequence; source stays "authored" — the DM's
     # approval (M4) is what makes generated lore canon. new_names ride along
@@ -622,10 +641,18 @@ def generate_missing_pages(campaign_dir, targets=None, log=None, limit=None):
 
     known = _canon_names(_read(campaign_dir / "world" / "geography.yaml"),
                          entities, styles)
+    # the linking pages are the prompt's grounding — a draft that repeats a
+    # name straight out of them is not a hallucination (they are markdown,
+    # invisible to the YAML-based canon scan) (found 2026-09-25)
+    known |= _names_from_text(target_blocks)
     kept, findings = _missing_page_findings(raw_pages, groups, known)
     if not kept:
+        for f in findings:
+            log(f"finding: {f['rule']} — {f['note']}")
         raise RuntimeError(
-            "every returned page draft failed validation (see findings)")
+            "every returned page draft failed validation: "
+            + " | ".join(f"{f['rule']}: {f['note']}"[:200]
+                         for f in findings[:3]))
 
     pending_path = _next_pending_path(campaign_dir, kind="pages")
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(

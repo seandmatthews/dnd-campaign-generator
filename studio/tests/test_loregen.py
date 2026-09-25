@@ -235,3 +235,48 @@ def test_name_endpoint_sync(client, tmp_spine_root, monkeypatch):
     assert list(body) == ["names"]
     assert len(body["names"]) == 8
     assert "Corvinth" in body["names"]
+
+
+# 8. Total-failure diagnosability + linking-page grounding (2026-09-25) ----
+
+
+def test_total_validation_failure_reports_findings(tmp_spine_root, monkeypatch):
+    """When EVERY entry is dropped the findings were raised away with a
+    'see findings in the log' error — and nothing logged them (found live
+    2026-09-25). The error now carries the notes and the log gets lines."""
+    lines = []
+    _canned_llm(monkeypatch, entries_yaml="""- when: before the toll
+  title: The Silver Bazaar of Qeth
+  text: The Silver Bazaar of Qeth burned twice, and the Guild of Silvermongers rebuilt it in salt.
+  new_names: []
+""")
+    with pytest.raises(RuntimeError) as ei:
+        loregen.generate_entries(tmp_spine_root / CAMP, "rope", log=lines.append)
+    msg = str(ei.value)
+    assert "Qeth" in msg and "hallucinated-name" in msg
+    assert any("loregen/hallucinated-name" in ln for ln in lines), lines
+
+
+def test_missing_pages_ground_in_their_linking_pages(tmp_spine_root, monkeypatch):
+    """The missing-pages validator checked only geography/entities/styles,
+    so a draft that repeated a name straight out of the linking page it was
+    grounded on ('The Causeway Camp' in its own companion note) was dropped
+    as a hallucination — deterministically, forever (found live 2026-09-25).
+    The linking pages are the prompt's grounding; their names are known."""
+    (tmp_spine_root / CAMP / "lore" / "entities" / "Kestra.md").write_text(
+        "---\nname: Kestra\n---\n\nSworn to [[the Ash Wardens]] since the "
+        "crossing, where the Silver Company fell.\n", encoding="utf-8")
+    _canned_llm(monkeypatch, entries_yaml="""- name: the Ash Wardens
+  kind: faction
+  aliases: []
+  body: Soldiery raised where the Silver Company fell; they hold the ash tolls now.
+  new_names: []
+""")
+    result = loregen.generate_missing_pages(tmp_spine_root / CAMP,
+                                            targets=["the Ash Wardens"],
+                                            limit=1)
+    assert result["pages"] == 1
+    doc = yaml.safe_load(
+        (tmp_spine_root / CAMP / "lore" / "pending-pages-1.yaml")
+        .read_text("utf-8"))
+    assert "Silver Company" in doc["entries"][0]["text"]

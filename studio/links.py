@@ -25,8 +25,14 @@ import spine
 
 # ![[embed]] and [[link]] resolve the same way; target = text before |,
 # section anchor (#Wants) stripped. Obsidian also matches .md-suffixed
-# targets ("[[House Ferrand.md]]"), so the suffix is stripped too.
+# targets ("[[House Ferrand.md]]"), so the suffix is stripped too. Embeds
+# of ASSET files (![[scene.png]], ![[map.svg]]) are file references, not
+# page links — they stay out of the graph entirely (they used to surface
+# as dangling lore-page generation targets, found 2026-09-25).
 _WIKI_LINK_RE = re.compile(r"!?\[\[([^\[\]#|]+)(?:#[^\[\]#|]*)?(?:\|[^\[\]]*)?\]\]")
+_ASSET_TARGET_RE = re.compile(
+    r"\.(png|jpe?g|gif|webp|avif|svg|uvtt|json|ya?ml|pdf|mp3|mp4|ogg|wav|webm|zip)$",
+    re.IGNORECASE)
 
 
 def normalize_key(name: str) -> str:
@@ -39,11 +45,17 @@ def normalize_key(name: str) -> str:
 
 
 def _scan_text(text: str):
-    """[(line_no, target)] for every wiki-link in a page of text."""
+    """[(line_no, target)] for every wiki-link in a page of text. Asset-file
+    targets (.png/.svg/...) are skipped — they are file references, not
+    pages; .md suffixes are stripped per Obsidian's [[Page.md]] form."""
     out = []
     for n, line in enumerate(text.splitlines(), 1):
         for m in _WIKI_LINK_RE.finditer(line):
             target = m.group(1).strip()
+            if not target or _ASSET_TARGET_RE.search(target):
+                continue
+            if target.lower().endswith(".md"):
+                target = target[:-3]
             if target:
                 out.append((n, target))
     return out
@@ -194,6 +206,13 @@ def _build_index(campaign: Path) -> dict:
         p["key"] = keys[0] if keys else ""
         for k in keys:
             if k in resolve and resolve[k]["file"] != p["file"]:
+                # companion notes are pipeline-named after their slug (a city
+                # map note always collides with the burg's entity page); the
+                # DM cannot rename them, so the collision is structural and
+                # never a finding — entity pages, scanned first, win
+                # resolution (false positives found 2026-09-25)
+                if p["source"] == "map" or resolve[k]["source"] == "map":
+                    continue
                 claiming.setdefault(k, {resolve[k]["file"]}).add(p["file"])
                 continue  # first page wins resolution; the collision is a finding
             resolve.setdefault(k, p)

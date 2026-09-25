@@ -16,6 +16,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 import briefing
+import canon
 import knowledge
 import publication
 import spine
@@ -62,7 +63,10 @@ def get_knowledge(name: str):
 @router.post("/api/campaign/{name}/knowledge")
 def post_knowledge(name: str, body: FactBody):
     """Record/approve a fact and compile the visible slice into the state.
-    Visibility must be explicit: dm_only, public, or a list of faction ids."""
+    Visibility must be explicit: dm_only, public, or a list of faction ids.
+    The write lands as a history snapshot like every canon change (the
+    store save + the compiled state commit together; found skipped
+    2026-09-25)."""
     _require_state(name)
     try:
         with campaign_lock_nowait(name, "recording the fact"):
@@ -72,12 +76,15 @@ def post_knowledge(name: str, body: FactBody):
                 visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects)
             pub = knowledge.compile_into_state(name)
+            snap = canon.snapshot_result(
+                name, f"campaign/{name}: record fact {fact['id']}")
+            publication.after_snapshot(name, pub["transaction"], snap)
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except publication.PublicationConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"fact": fact, "compiled": len(knowledge.compile_state_section(name)),
-            "transaction": pub.get("transaction")}
+            "transaction": pub.get("transaction"), "snapshot": snap}
 
 
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/supersede")
@@ -92,13 +99,16 @@ def post_supersede(name: str, fact_id: str, body: SupersedeBody):
                 name, fact_id, text=body.text, visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects)
             pub = knowledge.compile_into_state(name)
+            snap = canon.snapshot_result(
+                name, f"campaign/{name}: supersede fact {fact_id}")
+            publication.after_snapshot(name, pub["transaction"], snap)
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except publication.PublicationConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
     return {"fact": new, "superseded": fact_id,
             "compiled": len(knowledge.compile_state_section(name)),
-            "transaction": pub.get("transaction")}
+            "transaction": pub.get("transaction"), "snapshot": snap}
 
 
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/reconcile")
@@ -120,9 +130,11 @@ def post_reconcile(name: str, fact_id: str):
             knowledge.reconcile(name, fact_id)
         except knowledge.KnowledgeError as e:
             raise HTTPException(status_code=422, detail=str(e))
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: reconcile fact {fact_id}")
         updated = next(f for f in knowledge.load(name)["facts"]
                        if f["id"] == fact_id)
-        return {"fact": updated}
+        return {"fact": updated, "snapshot": snap}
 
 
 # ------------------------------------------------- briefing + disclosure
@@ -171,7 +183,9 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
             briefing.reveal(name, fact_id, week=week)
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
-        return {"revealed": fact_id}
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: reveal fact {fact_id}")
+        return {"revealed": fact_id, "snapshot": snap}
 
 
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/revoke")
@@ -180,7 +194,9 @@ def post_revoke(name: str, fact_id: str):
     require_campaign(name)
     with campaign_lock_nowait(name, "revoking the reveal"):
         briefing.revoke(name, fact_id)
-        return {"revoked": fact_id}
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: revoke fact {fact_id}")
+        return {"revoked": fact_id, "snapshot": snap}
 
 
 @router.get("/api/campaign/{name}/disclosure")

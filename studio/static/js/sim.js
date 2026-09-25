@@ -378,7 +378,11 @@
           'the whole week exactly once; discarding changes nothing.';
 
       panel.innerHTML = '';
-      panel.appendChild(S.el(
+      // innerHTML, not S.el(): the content is multi-root (title + note +
+      // table + sections + actions) and S.el() keeps only the FIRST element
+      // — the rest was silently dropped and the missing .chronicle node then
+      // threw, making the catch() remove the whole panel (found 2026-09-25)
+      panel.innerHTML =
         '<h3 class="panel-title">' + title + '</h3>' +
         '<p class="panel-note">' + subtitle + '</p>' +
         '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
@@ -406,8 +410,7 @@
           '<button type="button" class="btn btn-danger proposal-discard">Discard</button>' +
           '<span class="muted form-note">Accept publishes as one step; discard keeps the audit receipt only.</span>' +
         '</div>' +
-        '<div class="proposal-error"></div>'
-      ));
+        '<div class="proposal-error"></div>';
       if (chron) panel.querySelector('.chronicle').innerHTML = S.md(chron.markdown || '');
 
       const errBox = panel.querySelector('.proposal-error');
@@ -466,7 +469,12 @@
           acceptBtn.disabled = false; discardBtn.disabled = false;
         }
       });
-    }).catch(() => { panel.remove(); });
+    }).catch((err) => {
+      // never silent: a removed panel reads as "no proposal", which is a lie
+      panel.innerHTML =
+        '<h3 class="panel-title">The proposed week could not be loaded</h3>';
+      panel.appendChild(S.errorPanel(err));
+    });
   }
 
   /* ----- record-a-session form (Phase 3: history + structured effects) ----- */
