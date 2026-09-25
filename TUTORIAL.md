@@ -170,12 +170,14 @@ On **Agent Simulation**, a fresh campaign shows *Create a simulation*:
 3. Click **Create simulation**. Faction cards appear. This step is free —
    it's your setup, no LLM involved.
 
-Then **Advance the world** → **Run week 1**. After a credits confirmation,
-the week runs (a few minutes): factions act on what they can *see* (their
-fog of war, inspectable in the Views panel), dice decide contested moves,
-rumors spread, and a **chronicle** is written — the week's story, with the
-full roll table. The week also stages its events as pending timeline
-entries for Review, same as lore.
+Then click **Propose week 1** (under *Generate week 1*). After a credits
+confirmation, the week runs (a few minutes): factions act on what they can
+*see* (their fog of war, inspectable in the Views panel), dice decide
+contested moves, and rumors spread. What comes back is a **proposal** —
+the proposed week with its chronicle and a diff, shown right on the tab.
+Nothing is canon yet: read the chronicle, check the diff, then click
+**Accept** to publish it (or **Discard** to throw the whole week away and
+propose a fresh one).
 
 The scheduler treats a sandbox's first week as founding week: every
 faction acts, hungry or cautious. Later, a faction the world has stopped
@@ -184,9 +186,13 @@ chronicle narrates quiet weeks just as faithfully). To keep a rivalry
 hot, mark it in `simulation/state.yaml`:
 `disposition: {other-faction-id: hostile}` under a faction.
 
-**You should see:** the week clock advance, the chronicle appear in the
-Chronicle reader, and pending entries waiting in Review. Curious why a
-faction did something? The **Why inspector** traces its causal chain.
+**You should see:** after accepting, the week clock advance, the
+chronicle in the Chronicle reader, and the events in the proposal's diff
+now part of canon. Curious why a faction did something? The **Why
+inspector** traces its causal chain. New: on the **Knowledge** tab you can
+record facts with explicit visibility (DM-only, public, faction-only),
+read the deterministic DM briefing, and reveal public facts to the party
+handout.
 
 Run more weeks whenever you like — the world accumulates history. Your
 players never see the machinery; you harvest maps, lore and rumors from it.
@@ -206,9 +212,10 @@ Every generation, approval and week auto-commits just that campaign folder
 to the campaigns workspace's own git repo — `git -C campaigns log -- <name>`
 is the audit trail, and a bad outcome is one checkout away from gone.
 
-Starting another campaign is Step 1 again. The two example campaigns
-shipped in `campaigns/` (`sample`, `ruravaqan`) are yours to poke at —
-nothing in them is precious.
+Starting another campaign is Step 1 again. A fresh clone starts with an
+empty `campaigns/` folder — campaigns you create live there, and nothing
+in them is precious: every campaign folder is its own git history, so you
+can always check out yesterday's world.
 
 ---
 

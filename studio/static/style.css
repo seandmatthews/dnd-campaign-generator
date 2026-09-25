@@ -1337,3 +1337,38 @@ tr.entity-row:hover { background: var(--hover, rgba(0, 0, 0, 0.04)); }
   gap: 6px;
 }
 li.backlink-item[style] { cursor: pointer; }
+
+/* ------------------------------------------------ knowledge tab (phases 4+6) */
+
+.pill-vis-dm { border-color: var(--line-strong); color: var(--ink-faint); }
+.pill-vis-public { border-color: var(--moss); color: var(--moss); }
+.pill-vis-factions { border-color: var(--slate); color: var(--slate); }
+.pill-stale { border-color: #a4431f; color: #a4431f; }
+.pill-superseded { border-color: var(--line-strong); color: var(--ink-faint); text-decoration: line-through; }
+
+.fact-card { margin-bottom: 10px; }
+.fact-text { max-width: 72ch; font-size: 15px; margin: 6px 0 4px; }
+.fact-meta { font-size: 12px; color: var(--ink-faint); margin-bottom: 6px; }
+.fact-list { margin-bottom: 16px; }
+.vis-factions {
+  display: flex; flex-wrap: wrap; gap: 4px 14px;
+  padding: 4px 0 8px;
+}
+.vis-faction-item { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+.supersede-form { margin: -4px 0 14px 18px; }
+
+.briefing-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.briefing-item { padding: 7px 0; border-bottom: 1px dotted var(--line); }
+.briefing-item:last-child { border-bottom: none; }
+.briefing-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.briefing-text { max-width: 72ch; margin-top: 3px; }
+.briefing-ref { font-size: 12px; }
+.briefing-controls { align-items: flex-end; }
+.briefing-markdown { text-decoration: none; }
+
+.snapshot-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: 1px solid #a4431f; border-left: 4px solid #a4431f;
+  background: var(--paper-bright); border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-bottom: 14px;
+}

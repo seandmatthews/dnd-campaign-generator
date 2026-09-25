@@ -1,6 +1,6 @@
 /* Campaign Studio — sim.js
    Agent Simulation tab: week clock, faction cards, rumors board, events,
-   chronicle reader, views inspector, why inspector, "run week" button. */
+   chronicle reader, views inspector, why inspector, "propose week" button. */
 (function () {
   'use strict';
   const S = window.Studio;
@@ -302,7 +302,7 @@
       errBox.innerHTML = '';
       try {
         await S.api(S.campUrl('/simulation/state'), { method: 'POST', body: body });
-        S.toast('Simulation created — factions are live below. Run week 1 when ready.', 'ok');
+        S.toast('Simulation created — factions are live below. Propose week 1 when ready.', 'ok');
         S.showTab('sim'); // re-render: the real sim view with the run button
       } catch (err) {
         errBox.innerHTML = '';
@@ -436,7 +436,7 @@
           if (r.snapshot && (r.snapshot.state === 'failed' ||
               r.snapshot.state === 'unavailable')) {
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
-              ' — retry from the campaign summary.', 'error');
+              ' — use the Retry snapshot button above.', 'error');
           }
           S.showTab('sim');
         } catch (err) {
@@ -633,8 +633,9 @@
         root.appendChild(S.el(
           '<section class="panel sim-intro"><h3 class="panel-title">No simulation in this campaign yet</h3>' +
             '<p class="muted">Maps and World Building work without it. Create the ' +
-            'faction sandbox below — then <em>Run week</em> simulates what happens ' +
-            'next, one week at a time, and writes the chronicle.</p>' +
+            'faction sandbox below — then <em>Propose week 1</em> simulates what happens ' +
+            'next, one week at a time; accepting the proposal writes the chronicle ' +
+            'and advances the canon clock.</p>' +
           '</section>'
         ));
         createSimulationPanel(root);
@@ -644,6 +645,11 @@
       return;
     }
     root.innerHTML = '';
+
+    // a failed history snapshot means published-but-untracked: surface the
+    // one-click recovery (POST .../snapshot) where the accept happened
+    const snapBanner = await S.snapshotBanner();
+    if (snapBanner) root.appendChild(snapBanner);
 
     // scheduler holds from the week run that triggered this re-render:
     // shown once as a banner, then cleared (the design doc wants holds

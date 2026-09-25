@@ -502,6 +502,10 @@
         '<div class="form-block">' +
           '<div class="missing-targets"><p class="muted">Checking the lore&hellip;</p></div>' +
           '<div class="inline-form">' +
+            '<label class="field missing-limit">' +
+              '<span class="field-label">Max pages this run</span>' +
+              '<input type="number" class="input missing-limit-n" min="1" step="1" value="8" ' +
+                'aria-label="Maximum pages to generate this run"></label>' +
             '<button type="button" class="btn btn-primary missing-write" disabled>Write the missing pages</button>' +
           '</div>' +
           '<pre class="log-tail hidden"></pre>' +
@@ -511,6 +515,7 @@
       '</section>'
     );
     const targetsBox = card.querySelector('.missing-targets');
+    const limitInput = card.querySelector('.missing-limit-n');
     const btn = card.querySelector('.missing-write');
     const logBox = card.querySelector('.log-tail');
     const errBox = card.querySelector('.form-error');
@@ -540,9 +545,14 @@
 
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
+      // the pre-spend throttle: the server accepts {"limit": n} and stops
+      // there — without it one click on a 30-dangling-link vault burns the
+      // full LLM call ceiling in one go
+      const n = Math.max(1, parseInt(limitInput.value, 10) || 1);
+      const capped = Math.min(targets.length, n);
       const ok = await S.confirmRun(
-        'Generate draft pages for ' + targets.length + ' dangling link' +
-        (targets.length === 1 ? '' : 's') + ' with the LLM? This spends API ' +
+        'Generate draft pages for up to ' + capped + ' dangling link' +
+        (capped === 1 ? '' : 's') + ' with the LLM? This spends API ' +
         'credits; the drafts land in Review — nothing is applied directly.'
       );
       if (!ok) return;
@@ -554,7 +564,7 @@
       (async () => {
         const resp = await S.api(S.campUrl('/lore/pages/missing'), {
           method: 'POST',
-          body: { targets: targets.map((t) => t.target) }
+          body: { targets: targets.map((t) => t.target), limit: n }
         });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
         return S.pollJob(resp.job_id, (line) => {

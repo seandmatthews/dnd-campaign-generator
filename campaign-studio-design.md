@@ -1,5 +1,5 @@
 # Campaign Studio
-## One application, three tabs, one shared spine
+## One application, five tabs, one shared spine
 
 **Status:** design / iteration plan — built as `Documents/D&D/studio/` when
 commissioned

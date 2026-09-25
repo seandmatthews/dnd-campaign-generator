@@ -190,7 +190,7 @@ engines' own artifacts.
 
 ## Briefing and the player handout
 
-The Simulation tab's data plus the knowledge records compile — with no LLM
+The Knowledge tab (facts, briefing, party disclosure) and the Simulation tab's data compile — with no LLM
 pass — into a **DM briefing**: changes in a week range, unresolved
 decisions (pending proposals clearly labeled as NOT canon, stale facts,
 pending reviews), capped at ten items with an honest "N more not shown"
@@ -206,8 +206,8 @@ handout with an explanation, never the DM briefing.
 ## Budget
 
 Every LLM-consuming run (a week, a lore generation) meters its provider
-calls against an explicit ceiling (`LLM_MAX_CALLS`, default 24) and stops
-between calls with a clear incomplete status when it runs out — a budget
+calls against an explicit ceiling (`LLM_MAX_CALLS`; unset, it scales with the roster — 2 calls per faction plus narration, minimum 24) and stops
+between calls when it runs out: a WEEK aborts with nothing written (no all-holds canon week), other runs stop with a clear incomplete status — a budget
 guard, not a billing estimate; the token tally in the logs is approximate
 and never presented as the provider's exact charges.
 

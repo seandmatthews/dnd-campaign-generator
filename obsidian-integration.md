@@ -111,7 +111,7 @@ One pass over the vault's `*.md` builds:
 
 The index powers three things, all advisory:
 
-1. **Page view + backlinks in the Lore tab** — the entities table becomes
+1. **Page view + backlinks in the World Building tab** — the entities table becomes
    clickable pages, "mentioned in" computed server-side, so Obsidian need not
    be open.
 2. **Validation findings** — dangling links and name/alias collisions surface
@@ -264,7 +264,7 @@ is judgment, not grinding.
 ## 7. Build order
 
 1. **Pages become canonical** — parser in spine, one-time migration of
-   `entities.yaml`, page view + backlinks in the Lore tab. No behavior change
+   `entities.yaml`, page view + backlinks in the World Building tab. No behavior change
    elsewhere.
 2. **Linking** — resolver + backlink index, dangling-link/collision findings,
    doctor check, search extension.

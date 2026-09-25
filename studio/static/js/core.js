@@ -114,6 +114,53 @@
     });
   }
 
+  /* ---------- history snapshot recovery ---------- */
+
+  // A failed snapshot means "your change published, but the git undo trail
+  // does not have it" — the one recovery path that must never require curl.
+  Studio.snapshotBanner = async function () {
+    try {
+      const summary = await api(campUrl(''));
+      const txs = (summary && summary.publication &&
+                   Array.isArray(summary.publication.transactions))
+        ? summary.publication.transactions : [];
+      const broken = txs.some((t) => t && t.snapshot &&
+        (t.snapshot.state === 'failed' || t.snapshot.state === 'unavailable'));
+      if (!broken) return null;
+    } catch (_) {
+      return null; // advisory: a missing summary never blocks the tab
+    }
+    const banner = el(
+      '<div class="snapshot-banner" role="status">' +
+        '<span>Your change published, but the <strong>history snapshot</strong> ' +
+          'failed &mdash; the git undo trail is missing it.</span>' +
+        '<button type="button" class="btn snapshot-retry">Retry snapshot</button>' +
+      '</div>');
+    const btn = banner.querySelector('.snapshot-retry');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      await Studio.retrySnapshot();
+    });
+    return banner;
+  };
+
+  Studio.retrySnapshot = async function () {
+    try {
+      const r = await api(campUrl('/snapshot'), { method: 'POST' });
+      const snap = r && r.snapshot;
+      if (snap && (snap.state === 'failed' || snap.state === 'unavailable')) {
+        toast('Snapshot still ' + snap.state +
+          ' — see the studio log for the reason.', 'error');
+      } else {
+        toast('History snapshot committed — the undo trail is whole again.', 'ok');
+      }
+    } catch (err) {
+      toast('Snapshot retry failed' +
+        (err && err.error ? ': ' + err.error : ''), 'error');
+    }
+    showTab(Studio.state.activeTab); // re-render: the banner reflects the retry
+  };
+
   /* ---------- markdown (escape FIRST, then a minimal subset) ---------- */
 
   function mdInline(s) {
@@ -360,7 +407,7 @@
         'No campaign selected. Click <strong>+ New</strong> in the header to ' +
         'create one, or pick one from the Campaign list. New here? The ' +
         '<a href="/tutorial" target="_blank" rel="noopener">first-campaign ' +
-        'tutorial</a> goes from zero to a living campaign in about 20 minutes.' +
+        'tutorial</a> goes from zero to a living campaign in about 30 minutes.' +
       '</div>'
     );
   }
@@ -381,7 +428,8 @@
           '<ul class="help-tabs">' +
             '<li><strong>Maps</strong> &mdash; generate a world from a seed, then city and battlemap scenes (Foundry-ready).</li>' +
             '<li><strong>World Building</strong> &mdash; geography, timeline, naming voice; generates backstory as pending lore.</li>' +
-            '<li><strong>Agent Simulation</strong> &mdash; the faction sandbox: create factions, run a week, read the chronicle, ask why.</li>' +
+            '<li><strong>Agent Simulation</strong> &mdash; the faction sandbox: create factions, <em>Propose week N</em>, then accept or discard the proposal.</li>' +
+            '<li><strong>Knowledge</strong> &mdash; what is true and who may know it: approved facts, the DM briefing, and what the party has been told.</li>' +
             '<li><strong>Review</strong> &mdash; one queue: nothing enters the campaign until you approve it.</li>' +
           '</ul>' +
           '<p class="modal-body"><strong>First campaign?</strong><br>' +
@@ -389,7 +437,9 @@
             '2. Maps &rarr; <em>Generate a world</em> with any seed<br>' +
             '3. Maps &rarr; map a burg, roll a battlemap scene<br>' +
             '4. World Building &rarr; <em>Generate backstory</em>, approve it in Review<br>' +
-            '5. Agent Simulation &rarr; <em>Create a simulation</em>, then <em>Run week</em></p>' +
+            '5. Agent Simulation &rarr; <em>Create a simulation</em>, then ' +
+            '<em>Propose week 1</em> &mdash; accepting the proposal advances ' +
+            'the canon clock</p>' +
           '<p class="modal-body">Full walkthrough with troubleshooting: ' +
             '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
             '(also at <code>TUTORIAL.md</code> in the repo). Something not ' +

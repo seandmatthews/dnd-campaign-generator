@@ -62,8 +62,7 @@
     if (snap && (snap.state === 'failed' || snap.state === 'unavailable')) {
       // the files changed fine; only the undo-trail commit did not happen
       S.toast('Published, but the history snapshot ' + snap.state +
-        ' — retry it from the campaign summary (POST /api/campaign/' +
-        S.state.campaign + '/snapshot)', 'error');
+        ' — use the Retry snapshot button at the top of this tab.', 'error');
     }
     S.showTab('review'); // refresh: the queue is the file state, re-read it
   }
@@ -249,6 +248,11 @@
       return;
     }
     root.innerHTML = '';
+
+    // a failed history snapshot means published-but-untracked: surface the
+    // one-click recovery (POST .../snapshot) instead of telling the DM to curl
+    const banner = await S.snapshotBanner();
+    if (banner) root.appendChild(banner);
 
     const items = (data && Array.isArray(data.items)) ? data.items : [];
     const notes = (data && Array.isArray(data.notes)) ? data.notes : [];

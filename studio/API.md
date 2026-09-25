@@ -470,7 +470,8 @@ markdown renderer shows the display text; Obsidian gets the real links.
 
 One page (guardrail 6). `index.html` loads, in order, plain scripts
 (no modules, no build): `js/esc.js, js/logtail.js, js/core.js, js/maps.js,
-js/world.js, js/sim.js, js/review.js` (`esc.js`/`logtail.js` are UMD and
+js/world.js, js/sim.js, js/knowledge.js, js/review.js` (`esc.js`/`logtail.js`
+are UMD and
 double as CommonJS modules for the Node suites `studio/tests/js/`).
 
 `js/core.js` defines `window.Studio`:
@@ -505,10 +506,21 @@ hit a 501 until wave 2 — render the error inline, never console-only):
   raw state keeps it); events list;
   chronicle reader (week picker → `Studio.md`); views inspector (faction
   picker → YAML `<pre>`); why inspector (week + faction → indented lines);
-  "Run week N" behind `Studio.confirmRun("This runs a real week — it spends
-  API credits and advances the canon clock.")` with live log tail.
+  "Propose week N" behind a `Studio.confirmRun` credits warning with live
+  log tail — the run stages a PROPOSAL (state + chronicle + diff) shown in
+  a review panel with **Accept** / **Discard**; only Accept publishes
+  (idempotent, receipt-backed). The tab also renders the session-effects
+  recorder and `Studio.snapshotBanner()` when a history snapshot failed.
+- **Knowledge**: approved facts (visibility pills dm_only/public/
+  faction-list, stale + superseded badges) with record / supersede /
+  reconcile / reveal-to-party / revoke actions; the deterministic DM
+  briefing (since-week + focus controls, capped item list, Markdown link);
+  the party-disclosure record with the handout link (GET
+  `/disclosure/handout`, plain text, ONLY revealed facts).
 - **Review**: items with kind badge, provenance, findings inline,
-  approve/delete buttons.
+  approve/delete buttons; renders `Studio.snapshotBanner()` too — a failed
+  history snapshot is recovered with its one-click "Retry snapshot" button
+  (POST `/api/campaign/{name}/snapshot`), never by hand-crafted HTTP.
 
 Header (all tabs): a search box. Enter fires
 `GET /api/campaign/{name}/search?q=…` for the selected campaign and
