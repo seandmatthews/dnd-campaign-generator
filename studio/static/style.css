@@ -976,6 +976,18 @@ textarea.input {
 .goal-new { font-weight: 600; }
 .goal-reason { margin: 0; font-size: 13px; }
 
+/* forecast: a projection, styled clearly not-canon (dashed border, dimmed
+   chronicle prose) so nobody mistakes it for the record */
+.forecast-panel { border: 1.5px dashed var(--ink-faint, #9a938a); }
+.forecast-week {
+  padding: 12px 0 6px;
+  border-bottom: 1px dashed var(--line, #e5e0d8);
+}
+.forecast-week:last-of-type { border-bottom: none; }
+.forecast-week-title { margin: 0 0 6px; font-size: 14.5px; }
+.forecast-chronicle { opacity: 0.85; }
+.forecast-diff { margin-top: 6px; }
+
 .review-actions {
   display: flex;
   align-items: center;

@@ -317,6 +317,29 @@ shapes in this document true.
   "findings":[...],"staged":true,"diff":{...}}`. Accept applies each goal
   as one sourced audit event (source `goal-review:week-N`) and writes
   `simulation/state.yaml` only.
+- `POST /api/campaign/{name}/simulation/forecast` `{"confirm":true,
+  "weeks":2|3}` → 202 job. **Forecast: propose-and-discard, never canon.**
+  Runs the REAL engine forward N weeks on scratch data (copy-in, then
+  `src/tick.py --live` N times under the engine lock; the same
+  interrupted-run flag/backup recovery as a week). Per projected week the
+  clock must advance exactly one, a chronicle must be written, and "every
+  faction call failed" aborts — an outage is not a forecast. The result
+  stages a bundle under `simulation/forecasts/<id>/` (git-ignored: a
+  projection is not canon and not undo-trail material) and never occupies
+  the pending-proposal slot — a real week can be generated while a
+  forecast is on the table, and there is no accept. 409 while a pending
+  proposal exists (the forecast reads the canon that proposal would
+  change), while another forecast is active, or the engine home is busy.
+  Result `{"forecast_id","status":"active","base_week","weeks":[{week,
+  title,markdown,diff}]}`.
+- `GET /api/campaign/{name}/simulation/forecast` → `{"forecast":null}` or
+  `{"forecast":{forecast_id,status,base_week,created,run_record},
+  "weeks":[{week,title,markdown,diff}]}` (reads disk — survives a
+  restart; also surfaced as `active_forecast` in `GET .../simulation`).
+- `POST /api/campaign/{name}/simulation/forecast/{fid}/discard` → flips
+  the bundle's status to `discarded`; live files were never touched and
+  the bundle stays as a receipt. Discarded projections are never fed
+  into future prompts.
 - Legacy `simulation/pending-week-*.yaml` files (pre-proposal
   implementations) remain reviewable as **timeline-only** reviews: the
   weeks they describe were already committed by the old flow — approving

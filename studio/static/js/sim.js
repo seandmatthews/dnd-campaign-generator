@@ -515,6 +515,72 @@
     });
   }
 
+  /* ----- forecast panel (propose-and-discard: never canon) ----- */
+
+  function forecastPanel(root, fid) {
+    const panel = S.el(
+      '<section class="panel forecast-panel">' +
+        '<h3 class="panel-title">Loading the forecast…</h3>' +
+      '</section>'
+    );
+    root.appendChild(panel);
+
+    S.api(S.campUrl('/simulation/forecast')).then((data) => {
+      const f = data && data.forecast;
+      const weeks = (data && Array.isArray(data.weeks)) ? data.weeks : [];
+      if (!f || !weeks.length) { panel.remove(); return; }
+      panel.innerHTML =
+        '<h3 class="panel-title">Forecast — where this is heading ' +
+          '(from week ' + S.esc(String(f.base_week)) + ', not canon)</h3>' +
+        '<p class="panel-note"><strong>Projection only.</strong> The engine ' +
+          'ran ' + weeks.length + ' real week' + (weeks.length === 1 ? '' : 's') +
+          ' on scratch data from canon week ' + S.esc(String(f.base_week)) + '. ' +
+          'Nothing here is canon and nothing can be accepted — steer now ' +
+          '(record a session, add knowledge, change a goal) before the real ' +
+          'week lands on any of this.</p>' +
+        weeks.map((w) =>
+          '<div class="forecast-week">' +
+            '<h4 class="forecast-week-title"><span class="pill pill-when">forecast</span> Week ' +
+              S.esc(String(w.week)) +
+              (w.title ? ' — ' + S.esc(String(w.title)) : '') + '</h4>' +
+            '<article class="chronicle forecast-chronicle">' + S.md(w.markdown || '') + '</article>' +
+            '<table class="mini-table forecast-diff"><tbody>' + diffRows(w.diff) + '</tbody></table>' +
+          '</div>').join('') +
+        '<div class="inline-form proposal-actions">' +
+          '<button type="button" class="btn btn-danger forecast-discard">Discard the forecast</button>' +
+          '<span class="muted form-note">Discard only — a forecast is never canon; ' +
+          'the bundle stays as a receipt.</span>' +
+        '</div>' +
+        '<div class="forecast-error"></div>';
+
+      const discardBtn = panel.querySelector('.forecast-discard');
+      const errBox = panel.querySelector('.forecast-error');
+      discardBtn.addEventListener('click', async () => {
+        if (discardBtn.disabled) return;
+        const ok = await S.confirmRun(
+          'Discard this forecast? It was never canon — the campaign has ' +
+          'not changed by one line because of it.');
+        if (!ok) return;
+        discardBtn.disabled = true;
+        errBox.innerHTML = '';
+        try {
+          await S.api(S.campUrl('/simulation/forecast/' +
+            encodeURIComponent(f.forecast_id) + '/discard'), { method: 'POST' });
+          S.toast('Forecast discarded — the campaign never changed.', 'ok');
+          S.showTab('sim');
+        } catch (err) {
+          errBox.innerHTML = '';
+          errBox.appendChild(S.errorPanel(err));
+          discardBtn.disabled = false;
+        }
+      });
+    }).catch((err) => {
+      panel.innerHTML =
+        '<h3 class="panel-title">The forecast could not be loaded</h3>';
+      panel.appendChild(S.errorPanel(err));
+    });
+  }
+
   /* ----- goal review (the ledger moves, goals can too) ----- */
 
   function goalsCard(root) {
@@ -580,6 +646,69 @@
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
         S.toast('Goal review failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+        btn.disabled = false;
+      });
+    });
+    root.appendChild(card);
+  }
+
+  /* ----- forecast (run the real engine forward on scratch) ----- */
+
+  function forecastCard(root) {
+    const card = S.el(
+      '<section class="panel forecast-card-panel">' +
+        '<h3 class="panel-title">Forecast the next weeks</h3>' +
+        '<p class="panel-note">Runs the real engine forward 2&ndash;3 weeks ' +
+          'on scratch data — dice, scheduler, consequences and all — and ' +
+          'shows you where the current trajectory lands. A projection only: ' +
+          'never canon, never accept-able; read it, steer, discard it.</p>' +
+        '<div class="inline-form">' +
+          '<label class="field field-narrow"><span class="field-label">Weeks</span>' +
+            '<select class="input forecast-weeks"><option value="2">2</option>' +
+              '<option value="3">3</option></select></label>' +
+          '<button type="button" class="btn btn-primary forecast-run-btn">Run the forecast</button>' +
+          '<span class="muted form-note">Costs one real week of API credits ' +
+            'per projected week.</span>' +
+        '</div>' +
+        '<pre class="log-tail hidden forecast-log"></pre>' +
+        '<div class="forecast-run-error"></div>' +
+      '</section>'
+    );
+    const btn = card.querySelector('.forecast-run-btn');
+    const weeksSel = card.querySelector('.forecast-weeks');
+    const logBox = card.querySelector('.forecast-log');
+    const errBox = card.querySelector('.forecast-run-error');
+    btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
+      const n = parseInt(weeksSel.value, 10) || 2;
+      const ok = await S.confirmRun(
+        'Run a ' + n + '-week forecast? The engine runs ' + n + ' real week' +
+        (n === 1 ? '' : 's') + ' on scratch data — about ' + n + 'x a week' +
+        '\'' + 's API spend. Nothing lands in canon; the projection is for ' +
+        'your eyes, then you discard it.'
+      );
+      if (!ok) return;
+      btn.disabled = true;
+      errBox.innerHTML = '';
+      logBox.classList.remove('hidden');
+      logBox.textContent = '';
+      (async () => {
+        const resp = await S.api(S.campUrl('/simulation/forecast'), {
+          method: 'POST',
+          body: { confirm: true, weeks: n }
+        });
+        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        return S.pollJob(resp.job_id, (line) => {
+          logBox.textContent += String(line == null ? '' : line) + '\n';
+          logBox.scrollTop = logBox.scrollHeight;
+        });
+      })().then(() => {
+        S.toast('Forecast staged — read it above, then discard it.', 'ok');
+        S.showTab('sim'); // re-render: the forecast panel leads with the weeks
+      }).catch((err) => {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+        S.toast('Forecast failed' + (err && err.error ? ': ' + err.error : ''), 'error');
         btn.disabled = false;
       });
     });
@@ -801,6 +930,12 @@
     /* the pending proposal leads the tab: nothing else has moved */
     if (sim && sim.pending_proposal) {
       proposalPanel(root, sim.pending_proposal);
+    }
+
+    /* an active forecast reads as "where this is heading": right below the
+       proposal (it can coexist with one — it is never canon) */
+    if (sim && sim.active_forecast) {
+      forecastPanel(root, sim.active_forecast);
     }
 
     /* header strip: week clock + season + premise */
@@ -1049,6 +1184,9 @@
 
     /* goal review: the sim proposes goal updates from the ledger */
     if (factions.length) goalsCard(root);
+
+    /* forecast: the real engine projected forward on scratch */
+    if (factions.length) forecastCard(root);
 
     /* record-a-session: history + reviewed structured effects (Phase 3) */
     if (factions.length) sessionPanel(root, factions);

@@ -428,7 +428,7 @@
           '<ul class="help-tabs">' +
             '<li><strong>Maps</strong> &mdash; generate a world from a seed, then city and battlemap scenes (Foundry-ready).</li>' +
             '<li><strong>World Building</strong> &mdash; geography, timeline, naming voice; generates backstory as pending lore.</li>' +
-            '<li><strong>Agent Simulation</strong> &mdash; the faction sandbox: create factions, <em>Propose week N</em>, then accept or discard the proposal.</li>' +
+            '<li><strong>Agent Simulation</strong> &mdash; the faction sandbox: create factions, <em>Propose week N</em>, then accept or discard the proposal. <em>Review the goals</em> and <em>Forecast the next weeks</em> stage projections you steer with &mdash; neither is canon until you say so.</li>' +
             '<li><strong>Knowledge</strong> &mdash; what is true and who may know it: approved facts, the DM briefing, and what the party has been told.</li>' +
             '<li><strong>Review</strong> &mdash; one queue: nothing enters the campaign until you approve it.</li>' +
           '</ul>' +

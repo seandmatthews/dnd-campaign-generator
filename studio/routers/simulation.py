@@ -38,6 +38,7 @@ from pydantic import BaseModel, StrictBool, field_validator
 
 import canon
 import engines
+import forecasts
 import links
 import llm_client
 import proposals
@@ -78,6 +79,22 @@ class WeekBody(BaseModel):
         if v is not True:
             raise ValueError("confirm must be exactly true — this runs a real "
                              "week: it spends API credits and advances the canon clock")
+        return v
+
+
+class ForecastBody(BaseModel):
+    """A forecast runs the real engine forward N weeks on scratch data and
+    stages a projection the DM reads and discards — never canon, never
+    occupying the pending-proposal slot. N× a week's API spend."""
+    confirm: StrictBool
+    weeks: int = 2
+
+    @field_validator("weeks")
+    @classmethod
+    def _weeks_range(cls, v):
+        if v not in (2, 3):
+            raise ValueError("weeks must be 2 or 3 — the forecast runs the "
+                             "real engine forward one week at a time")
         return v
 
 
@@ -303,6 +320,8 @@ def get_simulation(name: str):
         "views_available": [f.get("id") for f in factions],
         "pending_proposal": (proposals.find_pending(name) or {}).get(
             "proposal_id"),
+        "active_forecast": (forecasts.find_active(name) or {}).get(
+            "forecast_id"),
     }
 
 
@@ -536,6 +555,108 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             "held": sorted(held), "timeline_entries": len(entries),
             "diff": diff,
         }
+    finally:
+        clear_week_flag()
+
+
+def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
+    """Copy-in -> N x tick --live on scratch -> record the projection. Runs
+    under the engine lock (the job holds the campaign lock outside). The
+    campaign is NEVER written except the forecast bundle; nothing here is
+    canon-able, so there is no accept — the DM reads and discards."""
+    try:
+        base_doc = spine.load_state(name)
+        base_week = _clock_week(base_doc)
+        # fail BEFORE any spend (same rule as the week flow: a hand-edited
+        # float week would otherwise burn the first tick then re-crash)
+        if not isinstance(base_week, int) or isinstance(base_week, bool):
+            raise RuntimeError(
+                f"meta.clock.week is {base_week!r}, not an integer — fix "
+                "simulation/state.yaml before running a forecast")
+        _copy_state_in(name)
+        log("state copied into engine home (previous engine state kept as "
+            "state.yaml.bak)")
+        chronicle_dir = engines.engine_chronicle_dir()
+        prev_doc = base_doc
+        weeks_out = []
+        for i in range(1, n_weeks + 1):
+            before = {p.name for p in chronicle_dir.glob("*.md")} \
+                if chronicle_dir.is_dir() else set()
+            log(f"projecting week {base_week + i} "
+                f"(tick {i}/{n_weeks} on scratch data)")
+            rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR,
+                                       "src/tick.py", "--live",
+                                       timeout=_WEEK_TIMEOUT, on_line=log)
+            if rc != 0:
+                for ln in lines[-10:]:
+                    log(ln)
+                raise RuntimeError(
+                    "forecast week %d failed rc=%s: %s"
+                    % (base_week + i, rc, " | ".join(lines[-10:])))
+            try:
+                after_text = engines.engine_state_path().read_text(
+                    encoding="utf-8")
+            except OSError as e:
+                raise RuntimeError(f"the engine wrote no state: {e}")
+            after_doc = yaml.safe_load(after_text) or {}
+            if not isinstance(after_doc, dict):
+                raise RuntimeError(
+                    "the engine's state does not parse as a mapping — "
+                    "forecast aborted")
+            week = _clock_week(after_doc)
+            if not isinstance(week, int) or isinstance(week, bool) \
+                    or week != _clock_week(prev_doc) + 1:
+                raise RuntimeError(
+                    "the engine did not advance exactly one week "
+                    f"({_clock_week(prev_doc)} -> {week}) — forecast aborted")
+            new_files = sorted(
+                {p.name for p in chronicle_dir.glob("*.md")} - before) \
+                if chronicle_dir.is_dir() else []
+            if not new_files:
+                raise RuntimeError(
+                    f"the engine wrote no chronicle for week {week} — "
+                    "forecast aborted")
+            n_factions = len(base_doc.get("factions") or [])
+            proposal_failed = [ln for ln in lines
+                               if "HOLDS (proposal failed" in ln]
+            scheduler_held = {m.group(1) for ln in lines
+                              if (m := _HOLDS_RE.match(ln))
+                              and "proposal failed" not in ln}
+            if n_factions and proposal_failed \
+                    and (len(proposal_failed) + len(scheduler_held)) \
+                    >= n_factions:
+                raise RuntimeError(
+                    "every faction call failed in projected week "
+                    f"{week} — the projection is not a forecast, it is "
+                    "an outage (nothing recorded)")
+            title = (_chronicle_meta(new_files) or {}).get("title")
+            markdown = "\n\n".join(
+                (chronicle_dir / fn).read_text(encoding="utf-8")
+                for fn in new_files)
+            weeks_out.append({
+                "week": week, "title": title,
+                "markdown": markdown,
+                "diff": proposals.diff_states(prev_doc, after_doc, []),
+            })
+            prev_doc = after_doc
+        run_record = {
+            "engine": f"agentic-simulator/src/tick.py --live x{n_weeks} "
+                      "(scratch forecast)",
+            "model": None, "base_url": None,
+        }
+        try:
+            cfg = llm_client.resolve_config()
+            run_record["model"] = cfg.get("model")
+            run_record["base_url"] = cfg.get("url")
+        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
+            pass
+        fid = forecasts.create(name, base_week=base_week, weeks=weeks_out,
+                               run_record=run_record)
+        log(f"forecast staged ({fid}): {n_weeks} projected week(s), base "
+            f"week {base_week} — a projection only; the campaign is "
+            "unchanged and nothing here can be accepted into canon")
+        return {"forecast_id": fid, "status": "active", "base_week": base_week,
+                "weeks": weeks_out}
     finally:
         clear_week_flag()
 
@@ -1181,6 +1302,104 @@ def post_goal_review(name: str):
                 "findings": list(findings), "staged": True, "diff": diff}
 
     return submit_campaign_job("goal-review", name, job)
+
+
+@router.post("/api/campaign/{name}/simulation/forecast", status_code=202)
+def post_forecast(name: str, body: ForecastBody):
+    """Forecast: run the real engine forward 2-3 weeks on SCRATCH data and
+    stage a projection the DM reads and discards — "where is this heading"
+    before canon lands. Never canon: it occupies no pending-proposal slot
+    (a real week can be generated while a forecast is on the table), the
+    accept route cannot publish it, and the bundle is git-ignored."""
+    d = require_campaign(name)
+    if not (d / "simulation" / "state.yaml").is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="no simulation/state.yaml in this campaign — create the "
+                   "sandbox first ('Create a simulation' on this tab)")
+    pending = proposals.find_pending(name)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a proposal is awaiting review "
+                   f"({pending.get('proposal_id')}) — accept or discard it "
+                   f"before forecasting (the forecast reads the canon the "
+                   f"proposal would change)")
+    active = forecasts.find_active(name)
+    if active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a forecast is already on the table "
+                   f"({active.get('forecast_id')}) — read it and discard it, "
+                   f"or wait to re-forecast from a new canon week")
+    ensure_publishable_409(name)
+    if not engines.ENGINE_LOCK.acquire(timeout=1.0):
+        raise HTTPException(
+            status_code=409,
+            detail="the engine home is busy — a week run is already in "
+                   "flight (one engine home, one scratch state at a time)")
+    engines.ENGINE_LOCK.release()
+
+    def job(log):
+        # same race re-checks as every staging job (the campaign lock this
+        # job runs under is submit-time; never re-acquire it in here)
+        racing = proposals.find_pending(name)
+        if racing:
+            raise RuntimeError(
+                f"a proposal appeared while this run was starting "
+                f"({racing.get('proposal_id')}) — nothing was run or spent")
+        racing = forecasts.find_active(name)
+        if racing:
+            raise RuntimeError(
+                f"a forecast appeared while this run was starting "
+                f"({racing.get('forecast_id')}) — nothing was run or spent")
+        write_week_flag(name)
+        log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
+            "crash restores the engine home from its backup")
+        with engines.ENGINE_LOCK:
+            return _run_forecast(name, d, body.weeks, log)
+
+    return submit_campaign_job("forecast", name, job)
+
+
+@router.get("/api/campaign/{name}/simulation/forecast")
+def get_forecast(name: str):
+    """The one active forecast (or {\"forecast\": null}), with every
+    projected week's chronicle and diff. Reads disk, so it survives a
+    restart."""
+    require_campaign(name)
+    active = forecasts.find_active(name)
+    if not active:
+        return {"forecast": None}
+    fid = str(active.get("forecast_id"))
+    bundle = forecasts.load(name, fid)
+    return {
+        "forecast": {
+            "forecast_id": fid,
+            "status": active.get("status"),
+            "base_week": active.get("base_week"),
+            "created": active.get("created"),
+            "run_record": active.get("run_record") or {},
+        },
+        "weeks": bundle["weeks"],
+    }
+
+
+@router.post("/api/campaign/{name}/simulation/forecast/{fid}/discard")
+def discard_forecast(name: str, fid: str):
+    """Discard a forecast: flips the bundle's status only. The projection
+    was never canon; the bundle stays on disk as a receipt. Discarded
+    projections are never fed into future prompts."""
+    require_campaign(name)
+    with campaign_lock_nowait(name, "discarding the forecast"):
+        try:
+            forecasts.set_status(name, fid, "discarded",
+                                 decided_note="discarded by the DM after "
+                                              "reading; nothing was ever "
+                                              "canon")
+        except forecasts.ForecastError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"discarded": fid}
 
 
 @router.get("/api/campaign/{name}/simulation/chronicle/{week}")
