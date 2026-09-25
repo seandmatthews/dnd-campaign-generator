@@ -556,7 +556,10 @@
           input.type = 'text'; input.className = 'input e-after';
           input.placeholder = 'the new value';
           afterEl.replaceWith(input);
-        } else if (!isField && afterEl.tagName === 'INPUT') {
+        } else if (!isField && (afterEl.tagName === 'INPUT' ||
+                                !afterEl.options.length)) {
+          // the template ships an empty select — a fresh row must get its
+          // levels here, not only when toggling back from set_field
           const sel = document.createElement('select');
           sel.className = 'input e-after';
           sel.innerHTML = LEVELS.map((l) => '<option>' + l + '</option>').join('');
