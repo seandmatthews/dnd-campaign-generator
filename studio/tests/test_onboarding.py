@@ -191,7 +191,9 @@ def test_doctor_quick_skips_live_probe(client, monkeypatch):
     assert calls["kwargs"] == {}          # default path: unchanged call shape
     client.get("/api/doctor?quick=1")
     assert calls["kwargs"] == {"live_llm": False}
-    monkeypatch.undo()
+    # no monkeypatch.undo() here: undoing the shared instance would also tear
+    # down fixture patches (e.g. a tmp campaigns root). The original captured
+    # above is called directly instead.
     assert real_report(live_llm=False)["ok"] in (True, False)  # accepts the kwarg
 
 

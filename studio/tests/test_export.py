@@ -9,6 +9,7 @@
 """
 
 import json
+import pathlib
 import zipfile
 
 import export_campaign
@@ -142,3 +143,156 @@ def test_restore_refuses_traversal_members(client, tmp_spine_root,
     else:  # pragma: no cover
         raise AssertionError("a traversal member was accepted")
     assert not (fresh / "escaped.txt").exists()
+
+
+def _rebuild(archive, tmp_path, name="evil.zip", mutate=None):
+    """Copy an archive, optionally rewriting the manifest dict."""
+    evil = tmp_path / name
+    with zipfile.ZipFile(archive) as zin, \
+            zipfile.ZipFile(evil, "w") as zout:
+        for item in zin.namelist():
+            data = zin.read(item)
+            if item == "manifest.json" and mutate is not None:
+                manifest = json.loads(data.decode("utf-8"))
+                mutate(manifest)
+                data = json.dumps(manifest).encode("utf-8")
+            zout.writestr(item, data)
+    return evil
+
+
+def test_restore_refuses_drive_qualified_members(client, tmp_spine_root,
+                                                 monkeypatch, tmp_path):
+    """Windows-specific escape: `Path(x) / "C:/evil"` IS C:/evil, so a
+    drive-colon member would write outside --into (found by review)."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    evil = tmp_path / "drive.zip"
+    with zipfile.ZipFile(archive) as zin, \
+            zipfile.ZipFile(evil, "w") as zout:
+        for item in zin.namelist():
+            zout.writestr(item, zin.read(item))
+        zout.writestr("campaign/C:/evil.txt", "pwned")
+        zout.writestr("campaign/C:evil2.txt", "pwned")
+    fresh = tmp_path / "restored"
+    try:
+        export_campaign.main(["--restore", str(evil), "--into", str(fresh)])
+    except SystemExit as e:
+        assert "unsafe path" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("a drive-qualified member was accepted")
+    assert not (fresh / "evil.txt").exists()
+    assert not pathlib.Path("C:/evil.txt").exists()
+    assert not pathlib.Path("C:evil2.txt").exists()
+
+
+def test_restore_refuses_a_manifest_campaign_that_escapes(
+        client, tmp_spine_root, monkeypatch, tmp_path, capsys):
+    """The manifest is archive-controlled data like any other: a campaign
+    name of "../elsewhere" would place the target outside --into."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    evil = _rebuild(archive, tmp_path, mutate=lambda m: m.update(
+        {"campaign": "../elsewhere"}))
+    fresh = tmp_path / "restored"
+    try:
+        export_campaign.main(["--restore", str(evil), "--into", str(fresh)])
+    except SystemExit:
+        assert "unusable campaign" in capsys.readouterr().err
+    else:  # pragma: no cover
+        raise AssertionError("an escaping manifest campaign was accepted")
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_restore_refuses_a_manifest_campaign_no_loader_could_address(
+        client, tmp_spine_root, monkeypatch, tmp_path, capsys):
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    evil = _rebuild(archive, tmp_path, mutate=lambda m: m.update(
+        {"campaign": "bad name with spaces"}))
+    try:
+        export_campaign.main(["--restore", str(evil), "--into",
+                              str(tmp_path / "restored")])
+    except SystemExit:
+        assert "unusable campaign" in capsys.readouterr().err
+    else:  # pragma: no cover
+        raise AssertionError("an unusable campaign name was accepted")
+
+
+def test_restore_refuses_an_archive_with_no_manifest(
+        client, tmp_spine_root, monkeypatch, tmp_path, capsys):
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    bare = tmp_path / "bare.zip"
+    with zipfile.ZipFile(archive) as zin, \
+            zipfile.ZipFile(bare, "w") as zout:
+        for item in zin.namelist():
+            if item != "manifest.json":
+                zout.writestr(item, zin.read(item))
+    try:
+        export_campaign.main(["--restore", str(bare), "--into",
+                              str(tmp_path / "restored")])
+    except SystemExit:
+        assert "no manifest.json" in capsys.readouterr().err
+    else:  # pragma: no cover
+        raise AssertionError("a manifest-less archive was restored")
+
+
+def test_restore_refuses_an_unparseable_manifest(client, tmp_spine_root,
+                                                 monkeypatch, tmp_path,
+                                                 capsys):
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    broken = tmp_path / "broken.zip"
+    with zipfile.ZipFile(archive) as zin, \
+            zipfile.ZipFile(broken, "w") as zout:
+        for item in zin.namelist():
+            data = b"{not json at all" if item == "manifest.json" \
+                else zin.read(item)
+            zout.writestr(item, data)
+    try:
+        export_campaign.main(["--restore", str(broken), "--into",
+                              str(tmp_path / "restored")])
+    except SystemExit:
+        assert "does not parse" in capsys.readouterr().err
+    else:  # pragma: no cover
+        raise AssertionError("an unparseable manifest was accepted")
+
+
+def test_restore_refuses_an_archive_missing_a_manifested_file(
+        client, tmp_spine_root, monkeypatch, tmp_path):
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    short = tmp_path / "short.zip"
+    with zipfile.ZipFile(archive) as zin:
+        manifest = json.loads(zin.read("manifest.json").decode("utf-8"))
+        victim = "campaign/" + sorted(manifest["files"])[0]
+        with zipfile.ZipFile(short, "w") as zout:
+            for item in zin.namelist():
+                if item != victim:
+                    zout.writestr(item, zin.read(item))
+    fresh = tmp_path / "restored"
+    try:
+        export_campaign.main(["--restore", str(short), "--into", str(fresh)])
+    except SystemExit as e:
+        assert "missing manifest file" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("an incomplete archive was restored")
+    assert not (fresh / "testvale").exists(), "nothing written on refusal"
+
+
+def test_export_excludes_every_documented_noise_pattern(client,
+                                                        tmp_spine_root,
+                                                        monkeypatch):
+    """excluded() is the whole privacy story — pin every pattern."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    for rel in ("x.log", "x.bak", "x.tmp", "x.pyc", "sub/__pycache__/m.pyc",
+                ".git/HEAD", ".gitignore", "llm.env", "llm.env.example"):
+        assert export_campaign.excluded(rel), f"{rel} must be excluded"
+    for rel in ("campaign.yaml", "simulation/state.yaml", "notes.md"):
+        assert not export_campaign.excluded(rel), f"{rel} must ride along"

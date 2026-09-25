@@ -574,9 +574,16 @@ def record_receipt(name: str, key: str, result: dict) -> None:
 
 
 def _cap_receipts(receipts: Path) -> None:
-    receipts_list = sorted(receipts.glob("*.json"), key=lambda p: p.stat().st_mtime)
+    try:
+        receipts_list = sorted(receipts.glob("*.json"),
+                               key=lambda p: p.stat().st_mtime)
+    except OSError:
+        return  # a receipt deleted under us: capping is best effort
     for old in receipts_list[:-RECEIPT_CAP]:
-        old.unlink(missing_ok=True)
+        try:
+            old.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def after_snapshot(name: str, tx_id: str | None, snap: dict) -> None:

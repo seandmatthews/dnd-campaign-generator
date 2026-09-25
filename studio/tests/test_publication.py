@@ -22,6 +22,7 @@ would also undo the tmp_spine_root fixture's CAMPAIGNS_ROOT patch).
 """
 
 import json
+import pathlib
 import unittest.mock as mock
 
 import canon
@@ -143,15 +144,22 @@ def test_publish_noop_when_all_targets_already_match(tmp_spine_root):
 
 
 def test_publish_refuses_unsafe_targets(tmp_spine_root):
-    for bad in ("../escape.yaml", "/abs.yaml", ".studio-transactions/x.yaml"):
+    # every rejection class of _safe_target: traversal, absolute, the
+    # transaction area, drive-colon (Windows: "C:evil" or "C:/evil" joins
+    # as a drive path), and control characters
+    for bad in ("../escape.yaml", "/abs.yaml", ".studio-transactions/x.yaml",
+                "C:/evil.yaml", "C:evil.yaml", "lore/ctrl\x01.yaml"):
         try:
             publication.publish("testvale", [{"path": bad, "text": "x"}],
                                 operation="bad")
         except publication.PublicationError:
             pass
         else:  # pragma: no cover
-            raise AssertionError(f"unsafe target accepted: {bad}")
+            raise AssertionError(f"unsafe target accepted: {bad!r}")
     assert not (tmp_spine_root.parent / "escape.yaml").exists()
+    assert not (tmp_spine_root.parent / "evil.yaml").exists()
+    assert not pathlib.Path("C:/evil.yaml").exists(), \
+        "a drive-qualified target must be refused before any write"
 
 
 def test_stale_base_revision_conflicts_and_writes_nothing(tmp_spine_root):
@@ -350,8 +358,9 @@ def test_duplicate_approve_applies_once(client, tmp_spine_root):
 
 
 def test_approve_after_restart_still_idempotent(client, tmp_spine_root):
-    # receipts live on disk; the second identical request answers from the
-    # receipt exactly as it would after a server restart
+    """A genuine restart: a fresh TestClient entered as a context manager
+    runs the lifespan (boot recovery over every campaign) before the
+    repeat — the answer comes from the on-disk receipt, not a cache."""
     path = _pending(tmp_spine_root, "lore/pending-entries-3.yaml",
                     [{"id": "x1", "when": "w", "title": "T", "text": "x",
                       "source": "authored"}])
@@ -359,7 +368,12 @@ def test_approve_after_restart_still_idempotent(client, tmp_spine_root):
             "expected_revision": publication.file_revision(path)}
     r1 = client.post("/api/campaign/testvale/review/approve", json=body)
     assert r1.status_code == 200
-    r2 = client.post("/api/campaign/testvale/review/approve", json=body)
+    assert len(_timeline_entries(tmp_spine_root)) == FIXTURE_TIMELINE_LEN + 1
+
+    from fastapi.testclient import TestClient
+    import server
+    with TestClient(server.app) as restarted:  # lifespan: recover_campaign
+        r2 = restarted.post("/api/campaign/testvale/review/approve", json=body)
     assert r2.status_code == 200 and r2.json().get("idempotent") is True
     assert len(_timeline_entries(tmp_spine_root)) == FIXTURE_TIMELINE_LEN + 1
 
@@ -457,7 +471,100 @@ def test_git_failure_distinguishable_from_no_change(
 
 def test_no_change_state_distinguishable(client, tmp_spine_root):
     # an approve that changes nothing in git's eyes reports no_change,
-    # which is a success state, distinct from failed/unavailable
-    r = client.post("/api/campaign/testvale/snapshot", json={})
-    assert r.status_code == 200
-    assert r.json()["snapshot"]["state"] in ("committed", "no_change")
+    # a success state, distinct from failed/unavailable — pinned exactly:
+    # the first snapshot commits (the fixture copy has no repo yet), and
+    # an immediate second one has nothing to commit
+    r1 = client.post("/api/campaign/testvale/snapshot", json={})
+    assert r1.status_code == 200
+    assert r1.json()["snapshot"]["state"] == "committed", r1.json()
+    r2 = client.post("/api/campaign/testvale/snapshot", json={})
+    assert r2.status_code == 200
+    assert r2.json()["snapshot"]["state"] == "no_change", r2.json()
+
+
+def test_boot_retries_a_failed_snapshot_over_a_complete_transaction(
+        client, tmp_spine_root):
+    """The snapshot-failed half of boot recovery (_retry_snapshot): a
+    COMPLETE transaction whose git snapshot failed keeps its payload; boot
+    retries once — success prunes, failure retains."""
+    _pending(tmp_spine_root, "simulation/pending-week-9.yaml", [_entry()])
+
+    def failing_git(root, *args):
+        if args[0] == "commit":
+            return 128, "", "fatal: injected commit failure"
+        return 0, "", ""
+
+    with mock.patch.object(canon, "_git", failing_git):
+        r = client.post("/api/campaign/testvale/review/approve",
+                        json={"file": "simulation/pending-week-9.yaml",
+                              "all": True})
+    assert r.status_code == 200 and r.json()["snapshot"]["state"] == "failed"
+    tx = r.json()["transaction"]
+    tx_dir = tmp_spine_root / "testvale" / publication.TX_DIR_NAME / tx
+    assert tx_dir.exists(), "payload retained while the snapshot failed"
+
+    # boot with git still failing: the payload is retained
+    with mock.patch.object(canon, "_git", failing_git):
+        out = publication.recover_campaign("testvale")
+    assert out["pruned"] == [] and tx_dir.exists()
+
+    # boot with git healthy: the retry commits and prunes the payload
+    out = publication.recover_campaign("testvale")
+    assert out["pruned"] == [tx]
+    assert not tx_dir.exists()
+
+
+def test_publication_resolve_route_applies_over_external_edits(
+        client, tmp_spine_root):
+    """The only UI way to clear a parked conflict. Bad resolution / unknown
+    transaction are 409s; 'apply' forces the staged outcome over the
+    external bytes (an explicit DM choice — recovery never does it alone)."""
+    with _crash_immediately():
+        try:
+            publication.publish("testvale",
+                                [{"path": "lore/x.yaml", "text": "staged\n"}],
+                                operation="resolve test")
+        except RuntimeError:
+            pass
+    (tmp_spine_root / "testvale" / "lore" / "x.yaml").write_text(
+        "external\n", encoding="utf-8")
+    publication.recover_campaign("testvale")
+    summary = client.get("/api/campaign/testvale").json()
+    tx = summary["publication"]["transactions"][0]["transaction"]
+
+    r = client.post("/api/campaign/testvale/publication/resolve",
+                    json={"transaction": tx, "resolution": "nonsense"})
+    assert r.status_code == 409 and "apply" in r.json()["error"]
+    r = client.post("/api/campaign/testvale/publication/resolve",
+                    json={"transaction": "no-such-tx", "resolution": "apply"})
+    assert r.status_code == 409 and "no such transaction" in r.json()["error"]
+
+    r = client.post("/api/campaign/testvale/publication/resolve",
+                    json={"transaction": tx, "resolution": "apply"})
+    assert r.status_code == 200 and r.json()["resolved"] == tx
+    assert (tmp_spine_root / "testvale" / "lore" / "x.yaml").read_text(
+        encoding="utf-8") == "staged\n", "apply forces the staged outcome"
+
+
+def test_publication_resolve_discard_keeps_live_bytes(client, tmp_spine_root):
+    with _crash_immediately():
+        try:
+            publication.publish("testvale",
+                                [{"path": "lore/y.yaml", "text": "staged\n"}],
+                                operation="resolve discard test")
+        except RuntimeError:
+            pass
+    (tmp_spine_root / "testvale" / "lore" / "y.yaml").write_text(
+        "external\n", encoding="utf-8")
+    publication.recover_campaign("testvale")
+    summary = client.get("/api/campaign/testvale").json()
+    tx = summary["publication"]["transactions"][0]["transaction"]
+
+    r = client.post("/api/campaign/testvale/publication/resolve",
+                    json={"transaction": tx, "resolution": "discard"})
+    assert r.status_code == 200 and r.json()["resolution"] == "discard"
+    assert (tmp_spine_root / "testvale" / "lore" / "y.yaml").read_text(
+        encoding="utf-8") == "external\n", "discard keeps the live bytes"
+    # the conflict is cleared: publication writers work again
+    publication.publish("testvale", [{"path": "lore/z.yaml", "text": "z"}],
+                        operation="post-discard")

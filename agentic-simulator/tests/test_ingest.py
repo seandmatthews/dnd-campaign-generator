@@ -144,7 +144,11 @@ def test_cli_state_flag_applies_into_target_and_leaves_default_alone():
         pending = pathlib.Path(d) / "pending.yml"
         props = extract(notes("- The Mint buys the debt."), STATE)
         write_pending(props, pending)
-        default_before = (ROOT / "world" / "state.yaml").read_bytes()
+        # the default file may not exist on a fresh checkout — the guarantee
+        # is "unchanged", so compare against whatever was there (or nothing)
+        default_path = ROOT / "world" / "state.yaml"
+        default_before = default_path.read_bytes() \
+            if default_path.is_file() else None
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = main(["--apply", str(pending), "--state", str(target)])
@@ -152,7 +156,9 @@ def test_cli_state_flag_applies_into_target_and_leaves_default_alone():
         assert buf.getvalue() == "merged 1 events\n"
         after = yaml.safe_load(target.read_text(encoding="utf-8"))
         assert after["events"][-1]["actor"] == "mint", "event landed in the target file"
-        assert (ROOT / "world" / "state.yaml").read_bytes() == default_before, \
+        default_after = default_path.read_bytes() \
+            if default_path.is_file() else None
+        assert default_after == default_before, \
             "the default world/state.yaml must be untouched"
     print("  --state: apply lands in the given file, default state.yaml untouched  OK")
 
@@ -196,6 +202,68 @@ def test_cli_without_state_flag_targets_the_fixed_default():
     print("  default: no --state still routes at the fixed world/state.yaml  OK")
 
 
+def test_apply_applies_structured_effects_through_the_validator():
+    """The p3 delegation: `effects:` entries in the pending file are
+    validated and applied by effects.apply_session_record, and count
+    toward the merged total."""
+    with tempfile.TemporaryDirectory() as d:
+        path = temp_state_copy(d)
+        pending = {
+            "week": 4, "source": "session:test",
+            "proposals": [],
+            "effects": [{
+                "id": "eff-1", "type": "set_resource",
+                "faction_id": "mint", "resource": "coin",
+                "expected_before": "low", "after": "none",
+                "reason": "The party destroyed the treasury.",
+                "source": "session:test",
+            }],
+        }
+        n = apply(pending, path)
+        after = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert n == 1, f"apply returned {n}, want 1 (the effect)"
+    mint = next(f for f in after["factions"] if f["id"] == "mint")
+    assert mint["resources"]["coin"] == "none", "the effect landed"
+    print("  effects: pending-file effects apply through the validator  OK")
+
+
+def test_apply_refuses_an_invalid_effect_without_writing():
+    """All-or-nothing: one unknown faction in effects refuses the whole
+    file — the valid events in the same file must not half-land."""
+    with tempfile.TemporaryDirectory() as d:
+        path = temp_state_copy(d)
+        before = path.read_bytes()
+        pending = {
+            "week": 4, "source": "session:test",
+            "proposals": [{"actor": "world", "text": "A storm."}],
+            "effects": [{
+                "id": "eff-bad", "type": "set_resource",
+                "faction_id": "ghosts", "resource": "coin",
+                "expected_before": "low", "after": "none",
+                "reason": "typo'd faction", "source": "session:test",
+            }],
+        }
+        n = apply(pending, path)
+        assert path.read_bytes() == before, "a refused file writes nothing"
+    assert n == -1, f"apply returned {n}, want -1"
+    print("  effects: one invalid effect refuses the whole file  OK")
+
+
+def test_apply_warns_when_the_pending_week_is_not_next():
+    with tempfile.TemporaryDirectory() as d:
+        path = temp_state_copy(d)
+        stale_week = STATE["meta"]["clock"]["week"]  # next would be +1
+        pending = {"week": stale_week,
+                   "proposals": [{"actor": "world", "text": "A storm."}]}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            n = apply(pending, path)
+    assert n == 1, "a stale week still applies (the DM's file is authoritative)"
+    assert "warning:" in buf.getvalue() and str(stale_week) in buf.getvalue(), \
+        "the stale-week landing is warned about loudly"
+    print("  stale week: applies as dated but warns loudly  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_bullets_become_proposals_and_prose_is_ignored,
@@ -206,6 +274,9 @@ if __name__ == "__main__":
         test_apply_appends_to_temp_copy_and_counts,
         test_apply_refuses_unknown_actor_without_writing,
         test_merged_event_keys_are_exactly_week_actor_text,
+        test_apply_applies_structured_effects_through_the_validator,
+        test_apply_refuses_an_invalid_effect_without_writing,
+        test_apply_warns_when_the_pending_week_is_not_next,
         test_cli_state_flag_applies_into_target_and_leaves_default_alone,
         test_cli_state_flag_position_and_equals_form,
         test_cli_without_state_flag_targets_the_fixed_default,

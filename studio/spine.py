@@ -522,7 +522,13 @@ def style_files(name: str) -> list:
 
 def read_style(name: str, filename: str) -> str:
     path = _style_path(name, filename)
-    return path.read_text(encoding="utf-8")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # same contract as read_chronicle: latin-1 never fails, and one
+        # resaved file must not 500 the whole Lore tab (get_lore reads
+        # every style file)
+        return path.read_text(encoding="latin-1")
 
 
 def write_style(name: str, filename: str, text: str) -> Path:

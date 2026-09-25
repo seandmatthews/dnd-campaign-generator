@@ -203,6 +203,7 @@ def test_cli_check_and_apply_round_trip():
 def test_cli_refuses_invalid_batch_without_writing():
     with tempfile.TemporaryDirectory() as d:
         state_path = temp_state_copy(d)
+        before = state_path.read_bytes()
         record_path = pathlib.Path(d) / "session.yaml"
         record_path.write_text(yaml.safe_dump({
             "source": "session:session-08",
@@ -211,8 +212,8 @@ def test_cli_refuses_invalid_batch_without_writing():
         }, sort_keys=False), encoding="utf-8")
         rc = main(["--apply", str(record_path), "--state", str(state_path)])
         assert rc == 1
-        assert yaml.safe_load(state_path.read_text(encoding="utf-8")) \
-            == fresh_state() or True  # bytes compared below
+        assert state_path.read_bytes() == before, \
+            "an invalid batch is all-or-nothing: not one byte written"
 
 
 if __name__ == "__main__":

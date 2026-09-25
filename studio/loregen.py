@@ -195,8 +195,10 @@ commentary. Exactly {count} names."""
 # -------------------------------------------------------------------- parsing
 
 def _extract_yaml(text):
-    """Same tolerance as the simulator's llm.py: accept a fenced block."""
-    match = re.search(r"```(?:ya?ml)?\s*(.*?)```", text, re.DOTALL)
+    """Same tolerance as the simulator's llm.py: accept a fenced block,
+    yaml-labeled or json-labeled (models wrap YAML lists in ```json often
+    enough that refusing them would fail jobs the engine's weeks survive)."""
+    match = re.search(r"```(?:ya?ml|json)?\s*(.*?)```", text, re.DOTALL)
     block = match.group(1) if match else text
     return yaml.safe_load(block)
 

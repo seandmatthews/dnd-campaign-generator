@@ -42,8 +42,11 @@ def _fold(word):
 
 
 def _words(text):
-    """All folded word tokens of the text."""
-    return [_fold(w) for w in re.findall(r"[A-Za-z]+", text)]
+    """All folded word tokens of the text. Unicode letters, not [A-Za-z]:
+    an é/ü/ñ campaign name tokenized as punctuation yielded no content
+    tokens, so unknown_actor/unwitnessed_event silently never fired — a
+    false green for exactly the campaigns worth checking."""
+    return [_fold(w) for w in re.findall(r"[^\W\d_]+", text)]
 
 
 def _content(text):
@@ -64,7 +67,7 @@ def _sentences(text):
 # --- week references ---------------------------------------------------------
 
 _WEEK_NUM = re.compile(
-    r"\bweek[\s-]*(\d{1,2}|" + "|".join(sorted(_NUMWORDS, key=len, reverse=True)) + r")\b",
+    r"\bweek[\s-]*(\d{1,3}|" + "|".join(sorted(_NUMWORDS, key=len, reverse=True)) + r")\b",
     re.IGNORECASE,
 )
 _WEEK_LAST = re.compile(r"\blast\s+week\b", re.IGNORECASE)
@@ -111,10 +114,11 @@ def _known_name_tokens(state):
 
 def _capitalized_phrases(text):
     """Maximal Title-case runs (joined by 'of'/'the'/'de'); a lone capitalized
-    first word of a sentence is not treated as a name."""
+    first word of a sentence is not treated as a name. Unicode letters for
+    the same reason _words is."""
     out = []
     for sent in _sentences(text):
-        words = re.findall(r"[A-Za-z][A-Za-z']*", sent)
+        words = re.findall(r"[^\W\d_][^\W\d_']*", sent)
         i, n = 0, len(words)
         while i < n:
             head = words[i][0].isupper() and (

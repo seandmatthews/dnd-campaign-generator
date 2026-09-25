@@ -6,7 +6,9 @@ Zero dependencies — run directly:  python tests/test_llm.py
 import io
 import contextlib
 import json
+import os
 import sys
+import tempfile
 import urllib.error
 import pathlib
 
@@ -39,6 +41,131 @@ def test_extract_yaml_from_fences():
         "a json fence parses too"
     assert _extract_yaml("action: bare") == {"action": "bare"}
     print("  extract: yaml/json fences and bare YAML all parse  OK")
+
+
+def test_budget_ceiling_stops_between_calls():
+    """The per-run ceiling: begin_run resets, limit=1 admits one call, the
+    second raises BudgetExceeded instead of spending without a bound."""
+    saved_post, saved_budget = llm._post_json, dict(llm._BUDGET)
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+
+    def fake_post(cfg, body, timeout, attempts=3):
+        return response("ok")
+
+    llm._post_json = fake_post
+    try:
+        llm.begin_run(limit=1)
+        assert llm.complete("prompt one") == "ok"
+        try:
+            llm.complete("prompt two")
+        except llm.BudgetExceeded:
+            pass
+        else:
+            raise AssertionError("the second call must hit the ceiling")
+        llm.begin_run(limit=2)
+        llm.complete("a")
+        llm.complete("b")
+        usage = llm.run_usage()
+        assert usage["calls"] == 2, "the meter counts every POST"
+    finally:
+        llm._post_json = saved_post
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    print("  budget: begin_run resets, the ceiling stops between calls  OK")
+
+
+def test_budget_is_rechecked_on_length_retries():
+    """The ceiling must be re-checked before EVERY POST: a finish_reason
+    'length' retry loop used to be unmetered and could spend past it."""
+    saved_post, saved_budget = llm._post_json, dict(llm._BUDGET)
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    seq = [response("half a thought", finish="length"),
+           response("a complete thought at last", finish="stop")]
+    calls = []
+
+    def fake_post(cfg, body, timeout, attempts=3):
+        calls.append(body["max_tokens"])
+        return seq[min(len(calls), len(seq)) - 1]
+
+    llm._post_json = fake_post
+    try:
+        llm.begin_run(limit=1)
+        # the first POST returns finish=length; the retry must see calls
+        # (1) >= limit (1) and raise, never POST again
+        llm.complete("prompt", max_tokens=16, max_budget=64)
+    except llm.BudgetExceeded:
+        assert len(calls) == 1, "stopped between calls, having spent one"
+    else:
+        raise AssertionError("the length retry must hit the ceiling at limit=1")
+    finally:
+        llm._post_json = saved_post
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    print("  budget: length-extension retries are metered too  OK")
+
+
+def test_empty_choices_is_a_readable_error_not_indexerror():
+    saved_post, saved_budget = llm._post_json, dict(llm._BUDGET)
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    llm._post_json = lambda cfg, body, timeout, attempts=3: {"choices": []}
+    try:
+        llm.begin_run(limit=4)
+        llm.complete("prompt")
+    except RuntimeError as e:
+        assert "no choices" in str(e), str(e)
+    else:
+        raise AssertionError("an empty choices list must raise, not IndexError")
+    finally:
+        llm._post_json = saved_post
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    print("  provider: empty choices -> readable RuntimeError  OK")
+
+
+def test_legacy_key_scan_prefers_the_coding_plan_rule():
+    """Same order as studio/llm_client: rule 1 (the coding-plan key the
+    default endpoint needs) first, rule 0 last — both sides must pick the
+    SAME key from one provider_config.json."""
+    fake_home = pathlib.Path(tempfile.mkdtemp(prefix="llm-home-"))
+    cfg_dir = fake_home / ".zcode" / "v2"
+    cfg_dir.mkdir(parents=True)
+    (cfg_dir / "provider_config.json").write_text(json.dumps({
+        "config": {"providerConfigRules": {"providerRules": [
+            {"config": {"access": {"apiKey": "rule-zero-key"}}},
+            {"config": {"access": {"apiKey": "rule-one-key"}}},
+        ]}}}), encoding="utf-8")
+    saved_home = pathlib.Path.home
+    pathlib.Path.home = staticmethod(lambda: fake_home)
+    try:
+        assert llm._find_key() == "rule-one-key", \
+            "rule 0 is scanned last (studio parity)"
+    finally:
+        pathlib.Path.home = saved_home
+    print("  config: legacy key scan order matches the studio  OK")
+
+
+def test_env_file_points_at_the_repo_root():
+    """The seam fix: the engine reads the SAME llm.env as the studio — the
+    repo root, next to llm.env.example — not this directory's own file."""
+    assert llm.ENV_FILE == llm.ROOT.parent / "llm.env", llm.ENV_FILE
+    assert llm.read_env_file(llm.ROOT.parent / "no-such-llm.env") == {}, \
+        "a missing llm.env is {} (optional by design)"
+    print("  config: ENV_FILE is the repo root, shared with the studio  OK")
 
 
 def test_validate_clamps_and_canonicalizes_target():
@@ -272,8 +399,13 @@ if __name__ == "__main__":
         test_post_json_retries_transient_http_errors,
         test_post_json_hard_errors_become_readable_runtimeerrors,
         test_complete_budget_doubling_keeps_longest,
+        test_budget_ceiling_stops_between_calls,
+        test_budget_is_rechecked_on_length_retries,
+        test_empty_choices_is_a_readable_error_not_indexerror,
         test_find_key_env_wins_and_fallback_walks_rules,
+        test_legacy_key_scan_prefers_the_coding_plan_rule,
         test_resolve_config_precedence_and_custom_base_error,
+        test_env_file_points_at_the_repo_root,
     ]:
         fn()
     print("all llm tests passed")

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 import canon
 import links
+import llm_client
 import loregen
 import spine
 from routers.common import ensure_entities_migrated, require_campaign, submit_campaign_job
@@ -188,8 +189,11 @@ def post_name(name: str, body: NameBody):
     culture = (body.culture or "").strip()
     if not culture:
         raise HTTPException(status_code=422, detail="culture is required")
+    llm_client.begin_run()  # this request gets its own (fresh) call ceiling
     try:
         names = loregen.name_candidates(d, culture, body.count, body.hint or "")
     except loregen.FedOrRefused as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except llm_client.BudgetExceeded as e:
+        raise HTTPException(status_code=503, detail=str(e))
     return {"names": names}

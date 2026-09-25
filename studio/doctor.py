@@ -56,9 +56,10 @@ NPM_INSTALL_CMD = ["npm", "install", "--no-audit", "--no-fund"]
 # (Documents\D&D). Nothing the headless pipeline needs is scripted.
 NPM_INSTALL_FMG = NPM_INSTALL_CMD + ["--ignore-scripts"]
 
-# a live/interrupted week leaves this flag in the engine home (the engine
-# home is scratch; the campaign is canon — copy-back only happens on success)
-WEEK_RUN_FLAG = PARENT / "agentic-simulator" / "world" / ".week-run-flag"
+# a live/interrupted week leaves a flag in the engine home (the engine
+# home is scratch; the campaign is canon — copy-back only happens on
+# success). The path itself is owned by engines.week_flag_path() — this
+# module deliberately keeps no second copy of it.
 
 ENGINES = [
     ("dnd-mapping", "src/import_fmg.py",

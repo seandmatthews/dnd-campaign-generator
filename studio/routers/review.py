@@ -45,6 +45,7 @@ import engines
 import links
 import publication
 import spine
+import timeline
 from routers.common import require_campaign
 from routers.common import ensure_publishable_409
 
@@ -52,11 +53,16 @@ router = APIRouter()
 
 PENDING_PATTERNS = (("lore", "pending-*.yaml"),
                     ("simulation", "pending-week-*.yaml"))
-T_ID_RE = re.compile(r"^t\d+$")
-T_NUM_RE = re.compile(r"^t0*(\d+)$")
+# t-id allocation lives in timeline.py (the one timeline writer/serializer)
 _ENTRY_START_RE = re.compile(r"^- id:\s*(\S+)")
 
-CHECK_TIMEOUT_S = 60     # per check.py run
+# GET review runs check.py per pending file on a REQUEST THREAD: a wedged
+# run at the old 60s cap held that thread for a minute (a few open tabs
+# drain the threadpool everything else needs), and the findings are
+# advisory — never approval-blocking. 20s still covers check.py on any
+# real campaign; check.py itself keeps engines.run_check's 180s default
+# for direct CLI use.
+CHECK_TIMEOUT_S = 20
 FINDINGS_BUDGET_S = 1.5  # soft budget for all check.py runs in one GET
 VAULT_FINDINGS_CAP = 20  # dangling/collision rows shown per GET
 
@@ -329,80 +335,27 @@ def get_review(name: str):
 
 
 def _timeline_path(campaign_dir: Path) -> Path:
-    return campaign_dir / "lore" / "timeline.yaml"
+    return timeline.timeline_path(campaign_dir)
 
 
 def _load_timeline(campaign_dir: Path):
-    """(doc, entries list) — doc is None when the file is absent; a bare
-    list and an {entries: [...]} mapping are both read and preserved."""
-    path = _timeline_path(campaign_dir)
-    if not path.is_file():
-        return None, []
+    """(doc, entries) via the timeline module — 422 on a corrupt file."""
     try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (yaml.YAMLError, OSError) as e:
-        raise HTTPException(status_code=422,
-                            detail=f"lore/timeline.yaml does not parse: {e}")
-    if isinstance(doc, list):
-        return doc, doc
-    if isinstance(doc, dict) and isinstance(doc.get("entries"), list):
-        return doc, doc["entries"]
-    return doc, []
-
-
-def _existing_tnums(entries: list) -> set:
-    out = set()
-    for e in entries:
-        if isinstance(e, dict):
-            m = T_NUM_RE.match(str(e.get("id") or ""))
-            if m:
-                out.add(int(m.group(1)))
-    return out
+        return timeline.load(campaign_dir)
+    except timeline.TimelineBadFile as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _append_approved(campaign_dir: Path, chosen: list) -> dict:
-    """The new lore/timeline.yaml document with `chosen` appended, keeping
-    ^t\\d+$ ids and assigning the next free t-number to provisional ones. A
-    batch whose title+text is already in the timeline is refused (409) —
-    that is the crash-between-writes recovery path: the append landed, the
-    pending rewrite did not, and re-approving would silently duplicate.
-    Returns the doc; the caller publishes it (no write here)."""
+    """The new lore/timeline.yaml document with `chosen` appended — the
+    allocation/duplicate rules live in timeline.append; this wrapper keeps
+    this router's 409/422 mapping. Returns the doc; the caller publishes it
+    (no write here)."""
     doc, entries = _load_timeline(campaign_dir)
-    existing = _existing_tnums(entries)
-    seen = {(str(e.get("title") or ""), str(e.get("text") or ""))
-            for e in entries if isinstance(e, dict)}
-    for entry in chosen:
-        eid = str(entry.get("id") or "")
-        if eid and T_ID_RE.match(eid):
-            if int(eid[1:]) in existing:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"id {eid} already exists in lore/timeline.yaml")
-            existing.add(int(eid[1:]))  # also guards duplicates within the batch
-            continue  # keep the entry's own t-id
-        identity = (str(entry.get("title") or ""), str(entry.get("text") or ""))
-        if identity != ("", "") and identity in seen:
-            raise HTTPException(
-                status_code=409,
-                detail=f"an entry titled {identity[0]!r} with this exact text "
-                       f"is already in lore/timeline.yaml — if a previous "
-                       f"approve crashed midway, delete it from the pending "
-                       f"file instead of re-approving")
-        next_num = (max(existing) + 1) if existing else 1
-        entry["id"] = f"t{next_num:04d}"
-        existing.add(next_num)
-        seen.add(identity)
-
-    if doc is None:
-        doc = {"entries": list(entries)}
-    if isinstance(doc, list):
-        doc.extend(chosen)
-    elif isinstance(doc, dict):
-        doc.setdefault("entries", []).extend(chosen)
-    else:
-        raise HTTPException(status_code=422,
-                            detail="lore/timeline.yaml has an unsupported shape")
-    return doc
+    try:
+        return timeline.append(doc, entries, chosen)
+    except timeline.TimelineConflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 def _page_rel(entry: dict) -> str:
@@ -543,8 +496,7 @@ def post_approve(name: str, body: ReviewBody):
                 new_timeline = _append_approved(d, entries)
                 writes.append({
                     "path": "lore/timeline.yaml",
-                    "text": yaml.safe_dump(new_timeline, sort_keys=False,
-                                           allow_unicode=True, width=100)})
+                    "text": timeline.dump(new_timeline)})
                 for e in entries:
                     try:
                         stubs = _stub_writes(name, e)

@@ -244,7 +244,9 @@ def test_integrated_completion_scenario(client, tmp_spine_root, monkeypatch,
     assert r.status_code == 200
     doc = r.json()
     assert any(i["kind"] == "event" and i["week"] == 4 for i in doc["items"])
-    assert "NOT CANON" not in doc["markdown"].upper() or doc["items"]
+    assert doc["items"], "the briefing is not empty here"
+    assert "NOT CANON" not in doc["markdown"].upper(), \
+        "after the accept, no pending-proposal label survives in the briefing"
     r = client.post(f"/api/campaign/testvale/knowledge/"
                     f"{public_fact['id']}/reveal", json={"week": 4})
     assert r.status_code == 200, r.text

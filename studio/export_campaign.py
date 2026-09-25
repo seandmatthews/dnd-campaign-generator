@@ -129,14 +129,17 @@ def _load_manifest(z: zipfile.ZipFile) -> dict:
 
 def _safe_member(name: str) -> str | None:
     """The campaign-relative path for a zip member, or None for non-campaign
-    members (the manifest). Any traversal or absolute path is a refusal."""
+    members (the manifest). Any traversal or absolute path is a refusal —
+    including a drive-qualified one: on Windows `Path(x) / "C:/evil"` IS
+    `C:/evil`, so a `:` anywhere in a relative path is refused outright."""
     if name == MANIFEST:
         return None
     if not name.startswith(CAMPAIGN_PREFIX):
         raise SystemExit(f"error: unexpected member in archive: {name}")
     rel = name[len(CAMPAIGN_PREFIX):]
     if (not rel or rel.startswith("/") or ".." in rel.split("/")
-            or "\\" in rel or any(ord(ch) < 32 for ch in rel)):
+            or "\\" in rel or ":" in rel
+            or any(ord(ch) < 32 for ch in rel)):
         raise SystemExit(f"error: unsafe path in archive: {name}")
     return rel
 
@@ -151,8 +154,13 @@ def restore(archive: pathlib.Path, into: pathlib.Path) -> pathlib.Path:
     with zipfile.ZipFile(archive) as z:
         manifest = _load_manifest(z)
         campaign = str(manifest.get("campaign") or "")
-        if not campaign:
-            print("error: manifest names no campaign", file=sys.stderr)
+        # the manifest is data from the archive like any other: a campaign
+        # name that would place the target outside --into ("../x") or that
+        # no loader could ever address is a refusal, not a destination
+        import spine
+        if not spine.valid_name(campaign):
+            print(f"error: manifest names an unusable campaign: {campaign!r}",
+                  file=sys.stderr)
             raise SystemExit(1)
         target = into / campaign
         if target.exists():

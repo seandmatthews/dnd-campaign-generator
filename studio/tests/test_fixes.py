@@ -127,45 +127,39 @@ def test_unexpected_errors_are_json_not_plain_text(tmp_spine_root, client, monke
 # ------------------------------------------------------------- engine lock
 
 
-def test_views_hold_the_engine_lock(tmp_spine_root, client, monkeypatch):
-    """views copy state INTO the shared engine home: the engine run must
-    happen while engines.ENGINE_LOCK is held, and must wait while anyone
-    else (a week job) holds it."""
-    import time
+def test_views_need_no_engine_lock(tmp_spine_root, client, monkeypatch):
+    """views read the CAMPAIGN's own state via views.py --state: no copy-in,
+    no engines.ENGINE_LOCK. The old contract (copy into the shared home
+    under the lock) made every view 409 while any week ran; the new one
+    must serve a view WHILE the shared engine home is locked, and the
+    engine must be pointed at this campaign's canon state file."""
     import routers.simulation as sim
 
-    # the copy-in below must land in a scratch home — without this the test
-    # wrote testvale's fixture state over the real agentic-simulator/world/
-    # state.yaml on every suite run (found 2026-09-23)
+    # keep any hypothetical home-touching well away from the real tree
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
                         tmp_spine_root / "engine-home")
-    calls = []
-    started = threading.Event()
+    seen = {}
 
-    def fake_run_py(*a, **k):
-        assert engines.ENGINE_LOCK.locked(), "engine run outside the engine lock"
-        calls.append(1)
-        started.set()
-        return 0, ["week: 4"]
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
+        seen["script"] = script
+        seen["args"] = args
+        return 0, ["week: 4", "you:", "  id: wardens"]
 
     monkeypatch.setattr(engines, "run_py", fake_run_py)
     monkeypatch.setattr(sim.engines, "run_py", fake_run_py)
 
-    result = {}
-
-    def call():
-        r = client.get("/api/campaign/testvale/simulation/views/wardens")
-        result["status"] = r.status_code
-
-    # a week job holds the engine home: views must block, not clobber
+    # a week job holds the shared engine home: the view must still serve
     with engines.ENGINE_LOCK:
-        t = threading.Thread(target=call, daemon=True)
-        t.start()
-        time.sleep(0.3)
-        assert not calls, "views ran inside the shared engine home while it was locked"
-    t.join(timeout=5)
-    assert calls, "views never ran after the lock freed"
-    assert result.get("status") == 200, result
+        r = client.get("/api/campaign/testvale/simulation/views/wardens")
+    assert r.status_code == 200, r.text
+    assert seen["script"] == "src/views.py"
+    assert "--state" in seen["args"], (
+        "views must pass --state (the campaign's own state), not rely on "
+        "copy-in to the shared engine home")
+    state_arg = Path(str(seen["args"][seen["args"].index("--state") + 1]))
+    assert state_arg.name == "state.yaml"
+    assert "testvale" in str(state_arg)
 
 
 # ------------------------------------------------------------- llm_client

@@ -196,8 +196,10 @@ class _NoDotGit(StaticFiles):
     serves exactly as before."""
 
     def lookup_path(self, path: str):
+        # any depth: a nested repo at campaigns/<c>/<sub>/.git must not
+        # serve either, so check every segment, not just the first two
         parts = path.replace("\\", "/").split("/")
-        if any(p.lower() == ".git" for p in parts[:2]):
+        if any(p.lower() == ".git" for p in parts):
             return "", ""
         return super().lookup_path(path)
 

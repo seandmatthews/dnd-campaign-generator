@@ -17,6 +17,10 @@ built upon. Two links, one sentence each:
                                       # one JSON object instead:
                                       # {"week": <int>, "faction": "<id>",
                                       #  "lines": [<the exact strings above>]}
+  python src/why.py <week> <actor> --state PATH
+                                      # read that state file instead of
+                                      # world/state.yaml (same contract as
+                                      # views.py --state)
 """
 
 import json
@@ -121,5 +125,28 @@ def why_cli(state, argv):
     return 0 if find_event(state, week, actor) else 1
 
 
+def main(argv):
+    """`python src/why.py <week> <actor> [--json] [--state PATH]` — --state
+    reads that state file instead of the engine home's world/state.yaml
+    (the studio's why route passes the campaign's own canon state, which
+    needs no copy-in and no engine lock)."""
+    state_path = None
+    rest = list(argv)
+    if "--state" in rest[1:]:
+        i = rest.index("--state")
+        if i + 1 >= len(rest):
+            print("usage: python src/why.py <week> <actor> [--json] "
+                  "[--state PATH]", file=sys.stderr)
+            return 2
+        state_path = rest[i + 1]
+        rest = rest[:i] + rest[i + 2:]
+    try:
+        state = load_state(state_path)
+    except OSError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return why_cli(state, rest)
+
+
 if __name__ == "__main__":
-    sys.exit(why_cli(load_state(), sys.argv))
+    sys.exit(main(sys.argv))

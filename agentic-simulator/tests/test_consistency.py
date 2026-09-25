@@ -179,6 +179,23 @@ def test_warnings_sorted():
     print("  sorted: warnings ordered by kind then detail  OK")
 
 
+def test_non_ascii_names_are_checked_too():
+    """The tokenizer was [A-Za-z]+: a fully non-ASCII name (Séra Müde)
+    produced no content tokens, so unknown_actor silently never fired —
+    a false green for exactly the campaigns worth checking."""
+    state = {
+        "meta": {"clock": {"week": 3}},
+        "city": {"name": "Ruravaqan", "districts": []},
+        "factions": [{"id": "mint", "name": "the Mint",
+                      "secret": "", "knows": []}],
+        "events": [],
+    }
+    out = check(_prop("Séra Müde"), state, "mint")
+    assert any(w["kind"] == "unknown_actor" and "Séra Müde" in w["detail"]
+               for w in out), out
+    print("  unicode: non-ASCII names tokenize and get checked  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_clean_proposal_is_silent,
@@ -191,6 +208,7 @@ if __name__ == "__main__":
         test_foreign_secret_warns,
         test_own_secret_is_silent,
         test_warnings_sorted,
+        test_non_ascii_names_are_checked_too,
     ]:
         fn()
     print("all consistency tests passed")

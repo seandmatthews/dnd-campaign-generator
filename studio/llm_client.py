@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import pathlib
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -166,26 +167,42 @@ class BudgetExceeded(RuntimeError):
 # invoice — the numbers are estimates, never the provider's exact charges.
 # The ceiling is explicit and configurable; a run that hits it stops
 # between calls with an incomplete status.
+#
+# Thread-local on purpose: generation jobs run one per campaign (per-campaign
+# locks do not serialize each other), and a single shared meter let campaign
+# B's begin_run() reset campaign A's ceiling mid-run — A's spend went
+# unchecked while A's remaining calls flipped B into a spurious
+# BudgetExceeded. Each thread meters its own run.
 def _env_limit():
     try:
         return max(1, int(os.environ.get("LLM_MAX_CALLS") or 24))
     except ValueError:
         return 24
-_BUDGET = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+_local = threading.local()
+
+
+def _budget():
+    b = getattr(_local, "budget", None)
+    if b is None:
+        b = {"calls": 0, "tokens": 0, "limit": _env_limit()}
+        _local.budget = b
+    return b
 
 
 def begin_run(limit=None):
-    """Reset the meter for one logical run (a week, a generation job)."""
-    _BUDGET["calls"] = 0
-    _BUDGET["tokens"] = 0
+    """Reset the meter for one logical run (a week, a generation job) — on
+    the calling thread."""
+    b = _budget()
+    b["calls"] = 0
+    b["tokens"] = 0
     if limit is not None:
-        _BUDGET["limit"] = max(1, int(limit))
+        b["limit"] = max(1, int(limit))
 
 
 def run_usage():
     """Approximate metering for the run so far: {"calls", "tokens"}."""
-    return {"calls": _BUDGET["calls"], "tokens": _BUDGET["tokens"],
-            "limit": _BUDGET["limit"]}
+    b = _budget()
+    return {"calls": b["calls"], "tokens": b["tokens"], "limit": b["limit"]}
 
 
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
@@ -206,22 +223,31 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     }
     best = ""
     while True:
-        if _BUDGET["calls"] >= _BUDGET["limit"]:
+        b = _budget()
+        if b["calls"] >= b["limit"]:
             raise BudgetExceeded(
-                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
-                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+                f"per-run LLM ceiling reached ({b['limit']} calls, "
+                f"~{b['tokens']} tokens metered) — run stopped "
                 "incomplete; raise LLM_MAX_CALLS or split the work")
         data = _post_json(cfg, body, timeout)
-        _BUDGET["calls"] += 1
+        b["calls"] += 1
         usage = data.get("usage") or {}
         if usage:
-            _BUDGET["tokens"] += int(usage.get("total_tokens") or 0)
+            b["tokens"] += int(usage.get("total_tokens") or 0)
             _log.info("llm tokens (run meter ~%d calls / ~%d tokens — "
                       "estimates, not the provider's bill): prompt=%s "
-                      "completion=%s", _BUDGET["calls"], _BUDGET["tokens"],
+                      "completion=%s", b["calls"], b["tokens"],
                       usage.get("prompt_tokens", "?"),
                       usage.get("completion_tokens", "?"))
-        choice = data["choices"][0]
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            # a 200 with no choices (content filter, proxy anomaly) must not
+            # surface as a bare IndexError job failure
+            shape = sorted(data)[:6] if isinstance(data, dict) else type(data).__name__
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response keys: {shape}")
+        choice = choices[0]
         content = choice["message"].get("content") or ""
         if len(content.strip()) > len(best.strip()):
             best = content

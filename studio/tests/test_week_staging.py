@@ -387,3 +387,145 @@ def mock_publication_crash():
     return mock.patch.object(
         publication, "_apply_text",
         mock.Mock(side_effect=RuntimeError("injected crash")))
+
+
+# --------------------------------------------------- review-pass additions
+
+def test_replay_trail_rides_with_the_proposal(
+        client, tmp_spine_root, monkeypatch):
+    """The resolver's replay trail (seed + rule_version + normalized
+    proposals) is part of the proposal's identity — the previously untested
+    path where the engine wrote a replay file and staging attaches it."""
+    inner = _fake_tick(None)
+
+    def fake(engine_root_, script, *args, timeout=600, on_line=None):
+        rc, lines = inner(engine_root_, script, *args, timeout=timeout,
+                          on_line=on_line)
+        replay = engine_root_ / "world" / "replay" / "week-4.yaml"
+        replay.parent.mkdir(parents=True, exist_ok=True)
+        replay.write_text(yaml.safe_dump({
+            "schema_version": 1, "rule_version": 2, "week": 4,
+            "seed": 123456789, "proposals": [], "outcomes": [],
+        }, sort_keys=False), encoding="utf-8")
+        return rc, lines
+
+    monkeypatch.setattr(engines, "run_py", fake)
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    pid = job["result"]["proposal_id"]
+    bundle = proposals.load("testvale", pid)
+    assert bundle["manifest"]["run_record"]["rule_version"] == 2, \
+        "the replay's rule version lands in the run record"
+    assert bundle["manifest"]["artifacts"].get("replay") == \
+        "artifacts/replay.yaml"
+    assert (tmp_spine_root / "testvale" / "simulation" / "proposals" / pid
+            / "artifacts" / "replay.yaml").is_file()
+
+
+def test_accept_and_discard_refuse_unknown_proposal_ids(
+        client, tmp_spine_root, monkeypatch):
+    r = client.post(
+        "/api/campaign/testvale/simulation/proposal/no-such-pid/accept")
+    assert r.status_code == 404 and "no such proposal" in r.json()["error"]
+    r = client.post(
+        "/api/campaign/testvale/simulation/proposal/no-such-pid/discard")
+    assert r.status_code == 409
+    # a discarded proposal cannot be discarded twice
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    assert client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/discard"
+    ).status_code == 200
+    r = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/discard")
+    assert r.status_code == 409 and "not pending" in r.json()["error"]
+
+
+def test_week_run_fast_fails_while_the_engine_is_busy(
+        client, tmp_spine_root):
+    """The courtesy 409: a week would queue behind another campaign's
+    half-hour run with no signal — the route refuses quickly instead."""
+    with engines.ENGINE_LOCK:
+        r = client.post("/api/campaign/testvale/simulation/week",
+                        json={"confirm": True})
+    assert r.status_code == 409 and "busy" in r.json()["error"]
+    assert client.get(
+        "/api/campaign/testvale/simulation/proposal"
+    ).json()["proposal"] is None
+
+
+def test_week_job_rechecks_the_pending_invariant_under_the_lock(
+        client, tmp_spine_root, monkeypatch):
+    """The pre-route pending check runs on the request thread — a second
+    request could slip past it. The job re-checks under the campaign lock
+    and refuses before writing the flag or spending anything."""
+    import unittest.mock as mock
+    fake_pending = {"proposal_id": "fake-1", "proposed_week": 4}
+    responses = iter([None, fake_pending])
+    monkeypatch.setattr(engines, "run_py", _fake_tick(None))
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+                        tmp_spine_root / "engine-home")
+    # call 1: the route's pre-check (None); call 2: the job's re-check
+    # (the "raced" proposal); any later reader: back to the real answer
+    monkeypatch.setattr(proposals, "find_pending",
+                        lambda name: next(responses, None))
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "error" and "proposal appeared" in job["error"]
+    assert client.get(
+        "/api/campaign/testvale/simulation/proposal"
+    ).json()["proposal"] is None
+    assert not engines.week_flag_path().exists(), "no flag left behind"
+
+
+def test_accept_repairs_a_wedged_pending_status_from_the_receipt(
+        client, tmp_spine_root, monkeypatch):
+    """The crash window AFTER the receipt: publish landed, the status flip
+    did not. The receipt short-circuit must repair the proposal's status,
+    or a published week blocks every new week until a manual discard."""
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    key = hashlib.sha256(json.dumps(
+        ["accept-proposal", "testvale", pid]).encode("utf-8")).hexdigest()
+    publication.record_receipt("testvale", key, {"accepted": pid})
+    # the proposal is still pending, and canon never received the week —
+    # this retry walks the receipt short-circuit with nothing applied
+    r = client.post(f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r.status_code == 200 and r.json().get("idempotent") is True
+    manifest = proposals.load("testvale", pid)["manifest"]
+    assert manifest["status"] == "accepted", \
+        "the short-circuit repairs the wedged status"
+    # and a NEW week can be generated again (no phantom pending blocking)
+    job2 = _run_week(client, monkeypatch, tmp_spine_root)
+    assert job2["status"] == "done", job2["error"]
+
+
+def test_session_route_guards(client, tmp_spine_root):
+    """The post_session 404/422 guards: no sandbox, no source, nothing to
+    record — each refused before any engine call."""
+    r = client.post("/api/campaigns", json={"name": "plain-camp",
+                                            "title": "Plain"})
+    assert r.status_code == 201, r.text
+    body = {"source": "session:1",
+            "events": [{"actor": "world", "text": "x"}]}
+    r = client.post("/api/campaign/plain-camp/simulation/session", json=body)
+    assert r.status_code == 404 and "sandbox" in r.json()["error"]
+    r = client.post("/api/campaign/no-such-camp/simulation/session",
+                    json=body)
+    assert r.status_code == 404
+
+    # testvale HAS a sandbox: the source / nothing-to-record guards fire
+    # (a MISSING source is pydantic's 422; whitespace-only passes the model
+    # and hits the route's own readable guard)
+    r = client.post("/api/campaign/testvale/simulation/session",
+                    json={"source": "   ",
+                          "events": [{"actor": "world", "text": "x"}]})
+    assert r.status_code == 422 and "source is required" in r.json()["error"]
+    r = client.post("/api/campaign/testvale/simulation/session",
+                    json={"source": "session:1"})
+    assert r.status_code == 422 and "nothing to record" in r.json()["error"]

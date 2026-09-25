@@ -181,3 +181,71 @@ def test_zai_hint_only_for_zai_urls(monkeypatch, tmp_path):
         llm_client.complete("p", timeout=1)
     assert "doctor" not in str(ei.value)
     assert attempts[-1].startswith("https://api.openai.com/v1/")
+
+
+# ------------------------------------------------------------ run metering
+
+def _spendable(monkeypatch, tmp_path):
+    _isolate(monkeypatch, tmp_path)
+    f = tmp_path / "llm.env"
+    f.write_text("LLM_API_KEY=k\n", encoding="utf-8")
+    monkeypatch.setattr(llm_client, "ENV_FILE", f)
+    monkeypatch.setattr(llm_client, "_post_json", lambda cfg, body, timeout: {
+        "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}]})
+
+
+def test_budget_ceiling_stops_between_calls(monkeypatch, tmp_path):
+    """begin_run resets; limit=1 admits one POST; the second raises
+    BudgetExceeded between calls instead of spending without a bound."""
+    _spendable(monkeypatch, tmp_path)
+    llm_client.begin_run(limit=1)
+    assert llm_client.complete("a") == "x"
+    with pytest.raises(llm_client.BudgetExceeded, match="ceiling"):
+        llm_client.complete("b")
+
+
+def test_budget_is_thread_local(monkeypatch, tmp_path):
+    """Generation jobs run one per campaign on separate threads (per-
+    campaign locks do not serialize each other). A shared meter once let
+    campaign B's begin_run reset campaign A's ceiling mid-run — spend
+    overrun — while A's remaining calls flipped B into a spurious
+    BudgetExceeded. Each thread must meter its own run."""
+    import threading
+    _spendable(monkeypatch, tmp_path)
+    llm_client.begin_run(limit=2)
+    other = {}
+
+    def campaign_b():
+        llm_client.begin_run(limit=99)
+        llm_client.complete("a")
+        llm_client.complete("b")
+        other["usage"] = llm_client.run_usage()
+
+    t = threading.Thread(target=campaign_b)
+    t.start()
+    t.join()
+    assert other["usage"]["calls"] == 2, "B meters its own run"
+    assert llm_client.run_usage()["calls"] == 0, \
+        "B's begin_run did not reset THIS thread's meter"
+
+
+def test_post_name_begins_its_own_run_and_maps_budget_to_503(
+        client, tmp_spine_root, monkeypatch):
+    """The name route is synchronous and never used to begin a run: it
+    shared whatever the last job left on the meter and a spent meter made
+    it 500 forever. It must begin a fresh run and map BudgetExceeded to a
+    readable 503."""
+    import loregen
+    calls = {"begin": 0}
+    monkeypatch.setattr(llm_client, "begin_run",
+                        lambda limit=None: calls.__setitem__(
+                            "begin", calls["begin"] + 1))
+
+    def boom(*a, **k):
+        raise llm_client.BudgetExceeded("per-run LLM ceiling reached (24 calls)")
+
+    monkeypatch.setattr(loregen, "name_candidates", boom)
+    r = client.post("/api/campaign/testvale/lore/name",
+                    json={"culture": "vesten"})
+    assert r.status_code == 503 and "ceiling" in r.json()["error"]
+    assert calls["begin"] == 1, "the name route begins its own (fresh) run"

@@ -28,7 +28,20 @@ import urllib.request
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-ENV_FILE = ROOT / "llm.env"
+# llm.env lives at the REPO ROOT, next to llm.env.example and TUTORIAL.md —
+# the same file studio/llm_client.py reads. (This used to point at this
+# directory's own llm.env, which the example's instructions never create;
+# _env_path still honors that legacy location for existing installs.)
+ENV_FILE = ROOT.parent / "llm.env"
+_LEGACY_ENV_FILE = ROOT / "llm.env"
+
+
+def _env_path():
+    if ENV_FILE.is_file() or not _LEGACY_ENV_FILE.is_file():
+        return ENV_FILE
+    print(f"note: {ENV_FILE} not found — using legacy {_LEGACY_ENV_FILE}",
+          file=sys.stderr)
+    return _LEGACY_ENV_FILE
 
 API_BASE_DEFAULT = "https://api.z.ai/api/coding/paas/v4"
 API_URL = API_BASE_DEFAULT + "/chat/completions"
@@ -47,7 +60,7 @@ def read_env_file(path=None):
     """Same .env reader as studio/llm_client.read_env_file (kept identical
     on purpose): '#' comments, KEY=VALUE, quotes stripped, BOM tolerated,
     {} when absent."""
-    path = pathlib.Path(path or ENV_FILE)
+    path = pathlib.Path(path or _env_path())
     try:
         text = path.read_text(encoding="utf-8-sig")
     except OSError:
@@ -75,11 +88,17 @@ def _find_key():
     cfg = pathlib.Path.home() / ".zcode" / "v2" / "provider_config.json"
     if cfg.exists():
         try:
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            rules = json.loads(cfg.read_text(encoding="utf-8"))[
+                "config"]["providerConfigRules"]["providerRules"]
+        except (OSError, ValueError, KeyError, TypeError):
             return ""
-        for rule in data.get("config", {}).get("providerConfigRules", {}).get("providerRules", []):
-            key = rule.get("config", {}).get("access", {}).get("apiKey")
+        # rule 1 is the coding-plan key and the default endpoint needs it:
+        # scan it and the rest first, rule 0 LAST — the same order as
+        # studio/llm_client._find_legacy_key, so both sides pick the same key
+        order = list(range(1, len(rules))) + [0]
+        for i in order:
+            key = ((rules[i].get("config") or {}).get("access")
+                   or {}).get("apiKey")
             if key and not key.startswith("enc:"):
                 return key
     return ""
@@ -134,7 +153,12 @@ def _post_json(cfg, body, timeout, attempts=3):
             if e.code in _RETRYABLE and attempt < attempts - 1:
                 last = RuntimeError(f"HTTP {e.code}, retrying (attempt {attempt + 1}): {detail}")
                 continue
-            raise RuntimeError(f"HTTP {e.code}: {detail}") from e
+            hint = ""
+            if "api.z.ai" in cfg["url"] and (e.code == 401 or "1113" in detail):
+                hint = (" — run the studio's doctor (GET /api/doctor): the "
+                        "coding endpoint needs the coding-plan key, and 1113 "
+                        "means the wrong endpoint or an empty plan pool")
+            raise RuntimeError(f"HTTP {e.code}: {detail}{hint}") from e
         except urllib.error.URLError as e:
             last = RuntimeError(f"network error (attempt {attempt + 1}): {e.reason}")
             if attempt == attempts - 1:
@@ -180,12 +204,9 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     budget that runs out mid-thought returns an empty answer — or a
     mid-sentence one — with finish_reason "length". When that happens,
     double the budget and retry, keeping the longest answer seen. Token
-    usage is printed to stderr per call so cost is never invisible."""
-    if _BUDGET["calls"] >= _BUDGET["limit"]:
-        raise BudgetExceeded(
-            f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
-            f"~{_BUDGET['tokens']} tokens metered) — run stopped "
-            "incomplete; raise LLM_MAX_CALLS to allow a longer run")
+    usage is printed to stderr per call so cost is never invisible. The
+    per-run ceiling is re-checked before EVERY POST, including the
+    length-extension retries, so a single call cannot spend past it."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -201,6 +222,11 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     }
     best = ""
     while True:
+        if _BUDGET["calls"] >= _BUDGET["limit"]:
+            raise BudgetExceeded(
+                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
+                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+                "incomplete; raise LLM_MAX_CALLS to allow a longer run")
         data = _post_json(cfg, body, timeout)
         _BUDGET["calls"] += 1
         usage = data.get("usage") or {}
@@ -210,7 +236,15 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
                   f"~{_BUDGET['tokens']} tokens — estimates, not the "
                   f"provider's bill): prompt={usage.get('prompt_tokens', '?')} "
                   f"completion={usage.get('completion_tokens', '?')}", file=sys.stderr)
-        choice = data["choices"][0]
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            # a 200 with no choices (content filter, proxy anomaly) must not
+            # become an IndexError masked as "proposal failed"
+            shape = sorted(data)[:6] if isinstance(data, dict) else type(data).__name__
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response keys: {shape}")
+        choice = choices[0]
         content = choice["message"].get("content") or ""
         if len(content.strip()) > len(best.strip()):
             best = content

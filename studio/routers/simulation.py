@@ -25,7 +25,6 @@ where every faction call failed are job errors, not proposals. A genuinely
 quiet scheduler-held week is valid.
 """
 
-import contextlib
 import datetime
 import hashlib
 import json
@@ -44,32 +43,19 @@ import llm_client
 import proposals
 import publication
 import spine
+import timeline
 from routers.common import require_campaign, submit_campaign_job
 from routers.common import ensure_publishable_409
-from routers.review import _append_approved, _idempotency_key  # noqa: PLC2701
 
 router = APIRouter()
 
 _log = logging.getLogger("studio.simulation")
 
 
-@contextlib.contextmanager
-def _engine_lock_bounded(timeout: float = 1.0):
-    """views/why wait briefly for the shared engine home; a running week may
-    hold it for many minutes, and a sync request thread parked that long
-    (several open tabs' worth) drains the threadpool everything else needs.
-    Refuse quickly instead — the UI renders the 409 in the error panel."""
-    if not engines.ENGINE_LOCK.acquire(timeout=timeout):
-        raise HTTPException(
-            status_code=409,
-            detail="the engine home is busy — a week run is in progress; "
-                   "views and why reopen when it finishes")
-    try:
-        yield
-    finally:
-        engines.ENGINE_LOCK.release()
-
-_STATE_BACKUP = "state.yaml.bak"
+# views/why read the CAMPAIGN's own state via the engine's --state flag —
+# no copy-in, so no shared-engine-home critical section and no lock: a view
+# of campaign A works while campaign B's week runs. The engine lock now
+# guards only what actually mutates the shared home (week copy-in/copy-out).
 _HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
 _WEEK_TIMEOUT = 1800  # a live week is minutes of LLM calls
 # clause/sentence punctuation that may end a proposed timeline title
@@ -322,16 +308,17 @@ def get_view(name: str, faction_id: str):
     if faction_id not in ids:
         raise HTTPException(status_code=404,
                             detail=f"unknown faction: {faction_id}")
-    # the engine home is one shared scratch file: copy-in + run + read is a
-    # critical section (engines.ENGINE_LOCK), or a views call for campaign B
-    # clobbers campaign A's live week mid-run
-    with _engine_lock_bounded():
-        _copy_state_in(name)
-        try:
-            rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/views.py",
-                                       faction_id, timeout=60)
-        except RuntimeError as e:  # engine tree or python missing entirely
-            raise HTTPException(status_code=503, detail=f"engine failed to start: {e}")
+    # views.py reads ONE file, and its --state flag points it anywhere:
+    # hand it the campaign's own canon state directly. No copy-in means no
+    # shared-engine-home critical section — a view works for any campaign
+    # while any week runs (canon is untouched until a proposal is accepted).
+    try:
+        rc, lines = engines.run_py(
+            engines.AGENTIC_SIMULATOR, "src/views.py", faction_id,
+            "--state", str(spine.campaign_dir(name)
+                           / "simulation" / "state.yaml"), timeout=60)
+    except RuntimeError as e:  # engine tree or python missing entirely
+        raise HTTPException(status_code=503, detail=f"engine failed to start: {e}")
     out = "\n".join(lines).strip()
     if rc != 0:
         # the CLI exists (rc 0/1/2 are its contract); anything nonzero here
@@ -381,6 +368,14 @@ def post_week(name: str, body: WeekBody):
     engines.ENGINE_LOCK.release()
 
     def job(log):
+        # the pre-route check raced: re-check under the campaign lock this
+        # job runs in — two quick requests must never stage two pendings
+        racing = proposals.find_pending(name)
+        if racing:
+            raise RuntimeError(
+                f"a proposal appeared while this run was starting "
+                f"({racing.get('proposal_id')}) — nothing was run or spent; "
+                "accept or discard it first")
         # interrupted-run detection: flagged before copy-in, cleared only
         # when the proposal is staged (or failed and rolled back)
         write_week_flag(name)
@@ -408,6 +403,13 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
     try:
         base_doc = spine.load_state(name)
         base_week = _clock_week(base_doc)
+        # fail BEFORE any spend: a hand-edited float week (week: 4.0) would
+        # otherwise crash tick.py mid-run after the faction calls, and re-
+        # crash on every retry — each attempt a full week's API cost
+        if not isinstance(base_week, int) or isinstance(base_week, bool):
+            raise RuntimeError(
+                f"meta.clock.week is {base_week!r}, not an integer — fix "
+                "simulation/state.yaml before running a week")
         base_revisions = {
             "simulation/state.yaml": publication.file_revision(
                 d / "simulation" / "state.yaml"),
@@ -420,7 +422,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             "lore/entities": publication.fingerprint_dir(
                 d / "lore" / "entities"),
         }
-        chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
+        chronicle_dir = engines.engine_chronicle_dir()
         before = {p.name for p in chronicle_dir.glob("*.md")} \
             if chronicle_dir.is_dir() else set()
 
@@ -436,7 +438,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             raise RuntimeError("tick --live failed rc=%s: %s"
                                % (rc, " | ".join(lines[-10:])))
 
-        engine_state = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
+        engine_state = engines.engine_state_path()
         try:
             new_state_text = engine_state.read_text(encoding="utf-8")
         except OSError as e:
@@ -447,8 +449,10 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
                                "mapping — no proposal staged")
         proposed_week = _clock_week(after_doc)
 
-        # invalid candidates never become approvable bundles
-        if base_week is not None and proposed_week != base_week + 1:
+        # invalid candidates never become approvable bundles (a float clock
+        # would slip the != check — 5.0 == 5 — and poison the manifest)
+        if not isinstance(proposed_week, int) or isinstance(proposed_week, bool) \
+                or (base_week is not None and proposed_week != base_week + 1):
             raise RuntimeError(
                 f"the engine did not advance exactly one week (base week "
                 f"{base_week} -> {proposed_week}) — no proposal staged")
@@ -475,8 +479,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
 
         # the resolver's replay trail (normalized proposals + seed + rule
         # version) rides with the proposal when the engine wrote one
-        replay_path = engines.AGENTIC_SIMULATOR / "world" / "replay" / \
-            f"week-{proposed_week}.yaml"
+        replay_path = engines.engine_replay_path(proposed_week)
         replay_text = replay_path.read_text(encoding="utf-8") \
             if replay_path.is_file() else None
         try:
@@ -537,7 +540,7 @@ def _chronicle_meta(filenames: list) -> dict | None:
     0005-a.md). Title parsed from the file's `# Week N — Title` heading."""
     if not filenames:
         return None
-    chronicle_dir = engines.AGENTIC_SIMULATOR / "chronicle"
+    chronicle_dir = engines.engine_chronicle_dir()
     fn = max(filenames, key=lambda f: (chronicle_dir / f).stat().st_mtime)
     title = fn
     try:
@@ -600,15 +603,15 @@ def restore_interrupted_week():
     except (OSError, ValueError):
         pass  # unreadable flag: still restore, still clear
     name = str(doc.get("campaign") or "unknown")
-    state = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
-    bak = state.parent / _STATE_BACKUP
+    state = engines.engine_state_path()
+    bak = engines.engine_state_backup_path()
     if bak.is_file():
         engines.copy_file_atomic(bak, state)
         _log.warning("interrupted week run for campaign %s — engine home "
                      "restored", name)
     else:
-        _log.warning("interrupted week run for campaign %s — no %s in the "
-                     "engine home, leaving it as it stands", name, _STATE_BACKUP)
+        _log.warning("interrupted week run for campaign %s — no state.yaml.bak "
+                     "in the engine home, leaving it as it stands", name)
     clear_week_flag()
     return {"campaign": name, "restored": bak.is_file()}
 
@@ -705,6 +708,17 @@ def accept_proposal(name: str, pid: str):
         ensure_publishable_409(name)
         prior = publication.receipt(name, key)
         if prior:
+            # the crash window AFTER the receipt: publish landed, the status
+            # flip did not. Repair it from the receipt, or a proposal that
+            # is actually canon stays "pending" and blocks every new week.
+            try:
+                b = proposals.load(name, pid)
+                if b["manifest"].get("status") == "pending":
+                    proposals.set_status(name, pid, "accepted",
+                                         decided_note="status repaired from "
+                                                      "the accept receipt")
+            except proposals.ProposalError:
+                pass  # bundle gone or damaged: the receipt still answers
             return {**prior, "idempotent": True}
         try:
             bundle = proposals.load(name, pid)
@@ -740,11 +754,16 @@ def accept_proposal(name: str, pid: str):
             chron = None
         else:
             entries = bundle["entries"]
-            new_timeline = _append_approved(d, entries)  # 409 on duplicates
+            try:
+                tdoc, tentries = timeline.load(d)
+                new_timeline = timeline.append(tdoc, tentries, entries)
+            except timeline.TimelineConflict as e:
+                raise HTTPException(status_code=409, detail=str(e))
+            except timeline.TimelineBadFile as e:
+                raise HTTPException(status_code=422, detail=str(e))
             writes.append({
                 "path": "lore/timeline.yaml",
-                "text": yaml.safe_dump(new_timeline, sort_keys=False,
-                                       allow_unicode=True, width=100),
+                "text": timeline.dump(new_timeline),
             })
             for fn in bundle["chronicles"]:
                 rel = f"simulation/chronicle/{fn}"
@@ -944,6 +963,15 @@ def post_session(name: str, body: SessionBody):
             d / "simulation" / "state.yaml"),
     }
     with spine.campaign_lock(name):
+        # re-check under the lock: the pre-route check raced the moment the
+        # request thread didn't hold it (two tabs, session + week together)
+        racing = proposals.find_pending(name)
+        if racing:
+            raise HTTPException(
+                status_code=409,
+                detail=f"a proposal appeared while this session was being "
+                       f"prepared ({racing.get('proposal_id')}) — accept or "
+                       f"discard it first; nothing was staged")
         pid = proposals.create(
             name, kind="session_effects",
             base_week=_clock_week(base_doc), proposed_week=_clock_week(base_doc),
@@ -982,14 +1010,17 @@ def post_why(name: str, body: WhyBody):
     if body.faction not in ids:
         raise HTTPException(status_code=404,
                             detail=f"unknown faction: {body.faction}")
-    with _engine_lock_bounded():  # copy-in + run is the shared-home critical section
-        _copy_state_in(name)
-        try:
-            rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/why.py",
-                                       str(body.week), body.faction, "--json",
-                                       timeout=120)
-        except RuntimeError as e:  # engine tree or python missing entirely
-            raise HTTPException(status_code=503, detail=f"engine failed to start: {e}")
+    # why.py reads ONE state file: point --state at the campaign's canon —
+    # no copy-in, no engine lock (views run while a week runs)
+    try:
+        rc, lines = engines.run_py(
+            engines.AGENTIC_SIMULATOR, "src/why.py",
+            str(body.week), body.faction, "--json",
+            "--state", str(spine.campaign_dir(name)
+                           / "simulation" / "state.yaml"),
+            timeout=120)
+    except RuntimeError as e:  # engine tree or python missing entirely
+        raise HTTPException(status_code=503, detail=f"engine failed to start: {e}")
     out = "\n".join(lines).strip()
     if rc != 0:
         raise HTTPException(
@@ -1013,9 +1044,8 @@ def _copy_state_in(name: str) -> None:
     """D4: campaign state.yaml -> engine home, backing up the engine's
     previous state first. The engine reads a fixed world/state.yaml."""
     src = spine.campaign_dir(name) / "simulation" / "state.yaml"
-    engine_state = engines.AGENTIC_SIMULATOR / "world" / "state.yaml"
+    engine_state = engines.engine_state_path()
     engine_state.parent.mkdir(parents=True, exist_ok=True)
     if engine_state.is_file():
-        engines.copy_file(engine_state,
-                          engine_state.parent / _STATE_BACKUP)
+        engines.copy_file(engine_state, engines.engine_state_backup_path())
     engines.copy_file(src, engine_state)

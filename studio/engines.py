@@ -69,6 +69,31 @@ def week_flag_path() -> Path:
     return AGENTIC_SIMULATOR / "world" / WEEK_FLAG_NAME
 
 
+# The rest of the engine home's layout is owned HERE the same way: routers
+# and the doctor must rebuild none of it. All read at call time so tests can
+# relocate AGENTIC_SIMULATOR.
+
+def engine_state_path() -> Path:
+    """The shared engine home's scratch state.yaml (campaigns own canon)."""
+    return AGENTIC_SIMULATOR / "world" / "state.yaml"
+
+
+def engine_state_backup_path() -> Path:
+    """The pre-copy-in engine state, kept so a boot after a crashed week can
+    restore the home (restore_interrupted_week)."""
+    return AGENTIC_SIMULATOR / "world" / "state.yaml.bak"
+
+
+def engine_replay_path(week) -> Path:
+    """The resolver's replay trail for one week (scratch; rides with the
+    proposal bundle)."""
+    return AGENTIC_SIMULATOR / "world" / "replay" / f"week-{week}.yaml"
+
+
+def engine_chronicle_dir() -> Path:
+    return AGENTIC_SIMULATOR / "chronicle"
+
+
 def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple:
     if env:
         # merge over the parent env (PATH etc. must survive); never mutate it

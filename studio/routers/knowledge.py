@@ -160,7 +160,12 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
     with spine.campaign_lock(name):
         week = None
         if isinstance(body, dict) and body.get("week") is not None:
-            week = int(body["week"])
+            try:
+                week = int(body["week"])
+            except (TypeError, ValueError):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"week must be an integer, got {body['week']!r}")
         try:
             briefing.reveal(name, fact_id, week=week)
         except ValueError as e:

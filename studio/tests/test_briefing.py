@@ -30,11 +30,101 @@ def test_briefing_range_and_cap(client, tmp_spine_root):
 
     doc = briefing.build("testvale", since_week=3)
     assert doc["total"] == 6  # weeks 4..9 only — the range is honored
-    assert doc["shown"] <= briefing.BRIEFING_CAP
-    assert doc["omitted"] == doc["total"] - doc["shown"]
+    assert doc["shown"] == 6 and doc["omitted"] == 0  # under the cap: all shown
     assert all(i["week"] > 3 for i in doc["items"] if i["kind"] == "event")
-    # the markdown renderer says so too — never a silent truncation
-    assert "more not shown" in doc["markdown"] if doc["omitted"] else True
+    assert "more not shown" not in doc["markdown"], "nothing omitted, no note"
+
+
+def test_briefing_cap_truncates_honestly(client, tmp_spine_root):
+    """The name of the game: over BRIEFING_CAP items -> exactly the first
+    ten shown, an honest omitted count, and the markdown says so."""
+    path = tmp_spine_root / "testvale" / "simulation" / "state.yaml"
+    state = yaml_load(path)
+    total = briefing.BRIEFING_CAP + 5
+    state["events"] = [{"week": w, "actor": "wardens",
+                        "text": f"wardens week-{w} deed"}
+                       for w in range(1, total + 1)]
+    write_yaml(path, state)
+
+    doc = briefing.build("testvale", since_week=0)
+    # the fixture may carry other item kinds (pending reviews) — judge the
+    # seeded events by kind
+    event_items = [i for i in doc["items"] if i["kind"] == "event"]
+    assert doc["total"] >= total, "every seeded event counts"
+    assert len(event_items) == briefing.BRIEFING_CAP
+    assert doc["shown"] == briefing.BRIEFING_CAP
+    assert doc["omitted"] == doc["total"] - briefing.BRIEFING_CAP
+    # newest weeks win the slots (sorted week-desc)
+    assert [i["week"] for i in event_items] == list(
+        range(total, total - briefing.BRIEFING_CAP, -1))
+    assert f"{doc['omitted']} more not shown" in doc["markdown"], \
+        "never a silent truncation of history"
+
+
+def test_briefing_includes_rumors_stale_facts_and_pending_reviews(
+        client, tmp_spine_root):
+    """Three of the five item kinds were previously unasserted — a refactor
+    could silently drop them."""
+    # a source file, approved as a fact's source, then changed -> stale
+    style = tmp_spine_root / "testvale" / "lore" / "style" / "voice.md"
+    style.parent.mkdir(parents=True, exist_ok=True)
+    style.write_text("original voice", encoding="utf-8")
+    _add_fact(client, text="The bell tolls at dusk.", visibility="public",
+              source_file="lore/style/voice.md")
+    style.write_text("the voice changed under us", encoding="utf-8")
+
+    # a pending review file (any file in the pending globs counts)
+    (tmp_spine_root / "testvale" / "lore" / "pending-batch.yaml").write_text(
+        "entries: []\n", encoding="utf-8")
+
+    path = tmp_spine_root / "testvale" / "simulation" / "state.yaml"
+    state = yaml_load(path)
+    state["events"] = [{"week": 2, "actor": "wardens", "text": "wardens deed"}]
+    state["rumors"] = [{"claim": "the ferry is haunted", "fidelity": "high",
+                        "born_week": 3}]
+    write_yaml(path, state)
+
+    doc = briefing.build("testvale", since_week=0)
+    kinds = {i["kind"] for i in doc["items"]}
+    assert {"event", "rumor", "stale_fact", "pending_reviews"} <= kinds, kinds
+    rumor = next(i for i in doc["items"] if i["kind"] == "rumor")
+    assert rumor["week"] == 3 and rumor["detail"] == "fidelity high"
+    stale = next(i for i in doc["items"] if i["kind"] == "stale_fact")
+    assert stale["status"] == "needs_attention"
+    assert "reconcile" in stale["detail"]
+    pending = next(i for i in doc["items"] if i["kind"] == "pending_reviews")
+    assert "1 pending review file" in pending["title"]
+
+
+def test_briefing_focus_narrows_and_refs_link_chronicles(
+        client, tmp_spine_root):
+    path = tmp_spine_root / "testvale" / "simulation" / "state.yaml"
+    state = yaml_load(path)
+    state["events"] = [
+        {"week": 2, "actor": "wardens", "text": "wardens week-2 deed"},
+        {"week": 2, "actor": "mint", "text": "mint week-2 move"},
+    ]
+    write_yaml(path, state)
+    # a chronicle for week 2 -> the event item should link it as a ref
+    chron_dir = tmp_spine_root / "testvale" / "simulation" / "chronicle"
+    chron_dir.mkdir(parents=True, exist_ok=True)
+    (chron_dir / "0002-the-deed.md").write_text(
+        "# Week 2 — The Deed\n\nThey acted.\n", encoding="utf-8")
+
+    unfocused = briefing.build("testvale", since_week=0)
+    # the fixture may carry other item kinds — judge the seeded events
+    assert {i["actor"] for i in unfocused["items"]
+            if i["kind"] == "event"} == {"wardens", "mint"}
+
+    focused = briefing.build("testvale", since_week=0, focus=["mint"])
+    assert {i["actor"] for i in focused["items"]
+            if i["kind"] == "event"} == {"mint"}, \
+        "focus filters items to the named faction/place"
+    assert focused["focus"] == ["mint"]
+    event = next(i for i in focused["items"] if i["kind"] == "event")
+    assert any(r["type"] == "chronicle" and r["file"].endswith("0002-the-deed.md")
+               for r in event["refs"]), \
+        "the supporting chronicle rides along as a ref"
 
 
 def test_briefing_labels_pending_proposals_as_proposed(

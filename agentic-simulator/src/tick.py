@@ -144,11 +144,18 @@ def run_live(state):
         print("error: state has no city — set city.name in state.yaml "
               "before running a week")
         sys.exit(2)
+    # same fail-fast contract for a non-integer clock: a float week (a hand
+    # edit, a bad merge) would crash f"{week:04d}" in write_chronicle AFTER
+    # the faction calls' spend, and re-crash on every retry
+    prev_week = state.get("meta", {}).get("clock", {}).get("week")
+    if not isinstance(prev_week, int) or isinstance(prev_week, bool):
+        print(f"error: meta.clock.week is {prev_week!r}, not an integer — "
+              "fix state.yaml before running a week")
+        sys.exit(2)
     act = scheduler.activation(state)          # "last week" = the clock as-is
     held = scheduler.holds(state, act)
     # the just-completed week, for consistency's "last week" contract — the
     # bump below makes clock.week the week being simulated, not the past one
-    prev_week = state["meta"]["clock"]["week"]
     week = prev_week + 1
     state["meta"]["clock"]["week"] = week
     template = TEMPLATE_FILE.read_text(encoding="utf-8")
@@ -275,7 +282,11 @@ def write_chronicle(state, week, outcomes, held=()):
     if match:
         title = match.group(1).strip()
         prose = prose[:match.start()].rstrip()
-    slug = re.sub(r"[^a-z0-9]+", "-", (title or "the week").lower()).strip("-")
+    # cap the slug: the model was asked for 3-6 words but a disobedient
+    # 150-char title line must not push the filename past Windows MAX_PATH
+    # and kill the week AFTER its spend (spine caps entity stems at 80 too)
+    slug = re.sub(r"[^a-z0-9]+", "-", (title or "the week").lower()) \
+        .strip("-")[:80].rstrip("-")
     out = _free_chronicle_path(week, slug or "untitled")
 
     table = ["", "---", "", "## Behind the screen", "",
