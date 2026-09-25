@@ -43,6 +43,8 @@ def make_map(tmp, name="tiny.map", *, include=(), map_name="Tinia", seed="12345"
         "provinces": [{"i": 1, "name": "The Shore", "burg": 2, "state": 1}],
         "religions": [{"i": 0, "name": "No religion"},
                       {"i": 1, "name": "The Cult", "type": "Cult"}],
+        "rivers": [{"i": 1, "name": "The Brume", "discharge": 42.5,
+                    "length": 12.3, "cells": [7, 8]}],
     }
     settings = {"seed": seed, "lore": {"name": map_name},
                 "graph": {"width": 1280, "height": 720}}
@@ -75,7 +77,7 @@ def import_to(tmpdir, path):
 
 def test_full_import(tmp):
     p = make_map(tmp, include=("features", "cultures", "states", "burgs",
-                               "provinces", "religions"))
+                               "provinces", "religions", "rivers"))
     out, doc, missing = import_to(tmp, p)
     ok("no sections missing on a well-formed dump", missing == [], str(missing))
     s = doc["summary"]
@@ -89,6 +91,10 @@ def test_full_import(tmp):
        str(doc["major_settlements"]))
     ok("slug from map name + seed suffix", out.name == "tinia-2345.yaml", out.name)
     ok("output went to the redirected dir", out.parent.name == "candidates")
+    ok("river imports from a .map (no graph arrays, no settlements)",
+       doc["rivers"] == [{"name": "The Brume", "discharge": 42.5,
+                          "length": 12.3, "settlements": []}],
+       str(doc["rivers"]))
 
 
 def test_missing_sections_are_reported_not_silent(tmp):
@@ -97,7 +103,8 @@ def test_missing_sections_are_reported_not_silent(tmp):
     p = make_map(tmp, include=("features", "burgs"))  # no states/cultures/...
     out, doc, missing = import_to(tmp, p)
     ok("missing sections named", set(missing) == {"cultures", "states",
-                                                  "provinces", "religions"},
+                                                  "provinces", "religions",
+                                                  "rivers"},
        str(missing))
     ok("burg section still parsed", doc["summary"]["settlements"] == 1)
 
@@ -159,11 +166,15 @@ def test_json_export_reports_no_missing(tmp):
             "features": [0, {"i": 1, "type": "ocean", "cells": 900}],
             "cultures": [0, {"i": 1, "name": "C", "base": 1, "expansionism": 1}],
             "states": [0, {"i": 1, "name": "S", "salesTax": 0, "cells": 10,
-                           "color": "#fff", "neighbors": []}],
+                           "color": "#fff", "neighbors": [], "culture": 1}],
             "burgs": [0, {"i": 1, "name": "B", "port": False, "state": 1,
                           "population": 1.0, "x": 1, "y": 2}],
             "provinces": [0],
             "religions": [0],
+            "cells": {"v": [[0, 1, 2]]},
+            "vertices": {"p": [[0, 0], [2, 0], [1, 4]]},
+            "rivers": [{"i": 1, "name": "The Brume", "discharge": 10,
+                        "length": 5, "cells": [0]}],
         },
     }
     p = pathlib.Path(tmp) / "full.json"
@@ -171,6 +182,14 @@ def test_json_export_reports_no_missing(tmp):
     out, doc, missing = import_to(tmp, p)
     ok("json export: nothing missing", missing == [], str(missing))
     ok("json export: placeholders dropped", doc["summary"]["settlements"] == 1)
+    ok("json export: nation culture resolved",
+       doc["nations"][0]["culture"] == "C", str(doc["nations"][0]))
+    ok("json export: river grounded to the burg it passes",
+       doc["rivers"] == [{"name": "The Brume", "discharge": 10.0,
+                          "length": 5.0, "settlements": ["B"]}],
+       str(doc["rivers"]))
+    ok("json export: river counted in summary",
+       doc["summary"]["rivers"] == 1, str(doc["summary"]))
 
 
 if __name__ == "__main__":

@@ -10,11 +10,13 @@ summary:
   cultures: 13
   religions: 17
   major_landmasses: 3
+  rivers: 41
 nations:
 - id: westckingia-9
   name: Westckingia
   kind: Nomadic
   capital: Uxbridge
+  culture: Angshire
   form_of_government: Theocracy
   burgs: 297
   provinces: 67
@@ -31,6 +33,7 @@ nations:
   name: Alegnania
   kind: Generic
   capital: Aciano
+  culture: Tallian
   form_of_government: Empire
   burgs: 131
   provinces: 30
@@ -45,6 +48,7 @@ nations:
   name: Nenapan
   kind: Nomadic
   capital: Tepec
+  culture: Nawatli
   form_of_government: Republic
   burgs: 84
   provinces: 18
@@ -58,6 +62,7 @@ nations:
   name: Capotlalaca
   kind: Nomadic
   capital: Chiltimil
+  culture: Nawatli
   form_of_government: Kingdom
   burgs: 88
   provinces: 21
@@ -73,6 +78,7 @@ nations:
   name: Bythosia
   kind: Hunting
   capital: Ablos
+  culture: Elladan
   form_of_government: Kingdom
   burgs: 99
   provinces: 22
@@ -87,6 +93,7 @@ nations:
   name: Larisia
   kind: Hunting
   capital: Abla
+  culture: Elladan
   form_of_government: Principality
   burgs: 81
   provinces: 19
@@ -99,6 +106,7 @@ nations:
   name: Gimsmoenia
   kind: Naval
   capital: Thorsvi
+  culture: Norse
   form_of_government: Principality
   burgs: 86
   provinces: 20
@@ -112,6 +120,7 @@ nations:
   name: Stornesia
   kind: Naval
   capital: Stornes
+  culture: Norse
   form_of_government: Bishopric
   burgs: 77
   provinces: 18
@@ -124,6 +133,7 @@ nations:
   name: Auvilonia
   kind: Generic
   capital: Montcres
+  culture: Luari
   form_of_government: Bishopric
   burgs: 58
   provinces: 12
@@ -135,6 +145,7 @@ nations:
   name: Setriver
   kind: Generic
   capital: Ischia
+  culture: Tallian
   form_of_government: Diocese
   burgs: 22
   provinces: 5
@@ -147,6 +158,7 @@ nations:
   name: Ormsterke
   kind: Nomadic
   capital: Skipton
+  culture: Angshire
   form_of_government: Diocese
   burgs: 26
   provinces: 7
@@ -316,3 +328,245 @@ major_settlements:
   kind: Generic
   x: 1062.8
   y: 563.8
+rivers:
+- name: Coullerelle
+  discharge: 309
+  length: 45.6
+  settlements:
+  - Auvillescom
+  - Boigny
+  - Chaindillerin
+  - Corvoy
+  - Montcres
+- name: Pegea
+  discharge: 292
+  length: 71.4
+  settlements:
+  - Aemamakynt
+  - Athrodolis
+  - Bhryra
+  - Karmend
+  - Meiamiapory
+  - Rhyrian
+- name: Echille
+  discharge: 212
+  length: 88.0
+  settlements:
+  - Bauvilles
+  - Conflansher
+  - Fatay
+  - Guillonvillon
+  - Mignevillon
+  - Sangenterain
+- name: Sydontikon
+  discharge: 184
+  length: 60.2
+  settlements:
+  - Delphi
+  - Dolynthyme
+  - Magrinase
+  - Nicolis
+- name: Monta
+  discharge: 174
+  length: 53.7
+  settlements:
+  - Griesburg
+  - Ischia
+  - Valnuo
+- name: Naupsos
+  discharge: 152
+  length: 26.9
+  settlements:
+  - Mege
+- name: Askros
+  discharge: 137
+  length: 29.0
+  settlements:
+  - Hubros
+  - Ithesmos
+  - Kapitriane
+  - Niceargy
+- name: Atry
+  discharge: 135
+  length: 31.8
+  settlements:
+  - Bacrigny
+- name: Acucanellet
+  discharge: 120
+  length: 61.1
+  settlements:
+  - Cotri
+  - Lonciglia
+  - Netta
+  - Tusolaro
+- name: Hyenes
+  discharge: 115
+  length: 20.8
+  settlements:
+  - Empolistos
+- name: Inoviabilu
+  discharge: 110
+  length: 32.5
+  settlements:
+  - Sorviovio
+- name: Eleuthela
+  discharge: 110
+  length: 31.2
+  settlements:
+  - Abla
+  - Dureva
+- name: Ventorum
+  discharge: 100
+  length: 27.3
+  settlements:
+  - Aeborum
+  - Cebovallen
+- name: Bilkesnes
+  discharge: 96
+  length: 57.8
+  settlements:
+  - Bilhustad
+  - Fjerdur
+  - Orsvolnes
+  - Reykkengi
+- name: Jipohti
+  discharge: 86
+  length: 33.8
+  settlements:
+  - Askog
+  - Porpan
+- name: Porokszihar
+  discharge: 84
+  length: 60.7
+  settlements:
+  - Asajaklos
+  - Bianyhalocsa
+  - Raludariget
+  - Vasvonyodha
+- name: Kelva
+  discharge: 84
+  length: 11.9
+  settlements:
+  - Liekki
+- name: Torvi
+  discharge: 81
+  length: 18.9
+  settlements:
+  - Suumarajar
+- name: Rocciatedivi
+  discharge: 78
+  length: 34.5
+  settlements:
+  - Bolforranel
+  - Salusolinice
+  - Vicejanani
+- name: Imbros
+  discharge: 78
+  length: 14.1
+  settlements: []
+- name: Lonovana
+  discharge: 77
+  length: 18.8
+  settlements:
+  - Dubrigentes
+  - Pullum
+- name: Ponia
+  discharge: 76
+  length: 33.2
+  settlements:
+  - Conialilia
+- name: Duriba
+  discharge: 76
+  length: 38.5
+  settlements:
+  - Bongis
+  - Folalove
+  - Matrix
+  - Romacanorum
+- name: Thetle
+  discharge: 75
+  length: 31.9
+  settlements:
+  - Hertfordle
+  - Thatcheap
+- name: Alydorint
+  discharge: 73
+  length: 24.1
+  settlements:
+  - Pseita
+- name: Bellere
+  discharge: 68
+  length: 19.8
+  settlements: []
+- name: Sgurro
+  discharge: 67
+  length: 19.6
+  settlements:
+  - Ceccoscalero
+  - Collo
+- name: Akleron
+  discharge: 66
+  length: 12.8
+  settlements:
+  - Picea
+  - Pyrega
+- name: Channe
+  discharge: 64
+  length: 29.1
+  settlements:
+  - Meungran
+  - Oyers
+- name: Dorgeau
+  discharge: 64
+  length: 15.0
+  settlements:
+  - Arancy
+- name: Phorysthi
+  discharge: 58
+  length: 22.5
+  settlements: []
+- name: Cleorough
+  discharge: 57
+  length: 23.0
+  settlements:
+  - Quatbuton
+- name: Cotrice
+  discharge: 57
+  length: 19.1
+  settlements:
+  - Guarne
+  - Segnanonena
+- name: Valcaucala
+  discharge: 55
+  length: 30.8
+  settlements:
+  - Belekloszati
+  - Pakszodhaztes
+- name: Durton
+  discharge: 53
+  length: 19.6
+  settlements: []
+- name: Sellandra
+  discharge: 52
+  length: 18.4
+  settlements:
+  - Thorsvi
+- name: Malva
+  discharge: 51
+  length: 16.0
+  settlements: []
+- name: Osford
+  discharge: 46
+  length: 22.2
+  settlements:
+  - Uxbridge
+- name: Wargravedi
+  discharge: 44
+  length: 19.8
+  settlements:
+  - Stotbury
+  - Wiscom
+- name: Cortes
+  discharge: 40
+  length: 12.8
+  settlements: []

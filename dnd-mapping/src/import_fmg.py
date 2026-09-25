@@ -37,6 +37,7 @@ _SIGNATURES = {
     "burgs": '"port":',
     "provinces": '"burg":',
     "religions": '"No religion"',
+    "rivers": '"discharge":',
 }
 
 
@@ -111,6 +112,51 @@ def slugify(name):
     return s or "unnamed"
 
 
+# Rivers: FMG names every river and gives its course as a cell-id polyline.
+# Lore grounding wants names and which settlements they touch, not geometry:
+# each river lists the burgs within RIVER_NEAR map units of its course
+# (cell centers), capped, and only the RIVER_LIMIT biggest by discharge are
+# kept so the file stays terse (the summary still counts them all).
+RIVER_LIMIT = 40
+RIVER_NEAR = 5.0  # map units on the FMG grid (maps are typically 1280x720)
+
+
+def _river_settlements(pack, burgs, rivers):
+    """{river_index: [burg names within RIVER_NEAR of the course]}.
+    Needs the graph arrays (cells.v, vertices.p) — full JSON exports have
+    them; a .map-section import gracefully yields no settlement lists."""
+    cells = pack.get("cells")
+    vertices = pack.get("vertices")
+    cells_v = cells.get("v") if isinstance(cells, dict) else None
+    verts_p = vertices.get("p") if isinstance(vertices, dict) else None
+    if not cells_v or not verts_p:
+        return {}
+    centers = []
+    for vlist in cells_v:
+        pts = [verts_p[j] for j in vlist if 0 <= j < len(verts_p)]
+        if pts:
+            centers.append((sum(p[0] for p in pts) / len(pts),
+                            sum(p[1] for p in pts) / len(pts)))
+        else:
+            centers.append(None)
+    near_limit = RIVER_NEAR * RIVER_NEAR
+    out: dict[int, list] = {}
+    for b in burgs:
+        bx, by = b.get("x", 0), b.get("y", 0)
+        best = None
+        for r in rivers:
+            for ci in r.get("cells", []):
+                c = centers[ci] if isinstance(ci, int) and ci < len(centers) else None
+                if c is None:
+                    continue
+                d2 = (c[0] - bx) ** 2 + (c[1] - by) ** 2
+                if d2 <= near_limit and (best is None or d2 < best[0]):
+                    best = (d2, r["i"])
+        if best is not None:
+            out.setdefault(best[1], []).append(b["name"])
+    return out
+
+
 def summarize(info, pack):
     states = [s for s in pack.get("states", []) if s.get("i", 0) != 0]
     burgs = [b for b in pack.get("burgs", []) if b.get("i", 0) != 0 and b.get("name")]
@@ -126,6 +172,7 @@ def summarize(info, pack):
     burgs_by_state = {}
     for b in burgs:
         burgs_by_state.setdefault(b.get("state"), []).append(b)
+    culture_by_id = {c["i"]: c["name"] for c in cultures}
 
     def burg_name(i):
         return next((b["name"] for b in burgs if b.get("i") == i), None)
@@ -138,6 +185,7 @@ def summarize(info, pack):
             "name": s["name"],
             "kind": s.get("type", "Generic"),
             "capital": burg_name(s.get("capital")),
+            "culture": culture_by_id.get(s.get("culture")),
             "form_of_government": s.get("formName"),
             "burgs": len(own),
             "provinces": sum(
@@ -167,6 +215,16 @@ def summarize(info, pack):
         "y": round(b.get("y", 0), 1),
     } for b in settlements]
 
+    rivers_all = [r for r in pack.get("rivers", []) if isinstance(r, dict)]
+    on_river = _river_settlements(pack, burgs, rivers_all)
+    rivers = [{
+        "name": r.get("name") or f"river-{r.get('i')}",
+        "discharge": round(r.get("discharge", 0), 1),
+        "length": round(r.get("length", 0), 1),
+        "settlements": sorted(set(on_river.get(r["i"], [])))[:6],
+    } for r in sorted(rivers_all, key=lambda r: -r.get("discharge", 0))
+        [:RIVER_LIMIT]]
+
     return {
         "meta": {
             "source": "Azgaar Fantasy Map Generator",
@@ -181,6 +239,7 @@ def summarize(info, pack):
             "cultures": len(cultures),
             "religions": len(religions),
             "major_landmasses": len(features),
+            "rivers": len(rivers_all),
         },
         "nations": nations,
         "cultures": [{
@@ -189,6 +248,7 @@ def summarize(info, pack):
             "expansionism": c.get("expansionism"),
         } for c in cultures],
         "major_settlements": major_settlements,
+        "rivers": rivers,
     }
 
 
