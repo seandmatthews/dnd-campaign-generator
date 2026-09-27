@@ -303,7 +303,7 @@
       try {
         await S.api(S.campUrl('/simulation/state'), { method: 'POST', body: body });
         S.toast('Simulation created — factions are live below. Propose week 1 when ready.', 'ok');
-        S.showTab('sim'); // re-render: the real sim view with the run button
+        S.rerenderIfCurrent('sim'); // re-render: the real sim view with the run button
       } catch (err) {
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
@@ -331,6 +331,19 @@
         rows.push('<tr><td>' + S.esc(fid) + ' &middot; ' + S.esc(k) +
           '</td><td class="num">' + S.esc(String(ch.before)) + ' &rarr; ' +
           S.esc(String(ch.after)) + '</td></tr>');
+      });
+    });
+    // set_field changes (goal/kind/secret) — a session that moved a fact
+    // must show the before/after, not just the history lines that justify it
+    const flds = (diff && diff.fields) || {};
+    Object.keys(flds).forEach((fid) => {
+      Object.keys(flds[fid]).forEach((k) => {
+        const ch = flds[fid][k] || {};
+        const show = (v) => S.esc(
+          v === null || v === undefined || v === '' ? '(unset)' : String(v));
+        rows.push('<tr><td>' + S.esc(fid) + ' &middot; ' + S.esc(k) +
+          '</td><td class="num">' + show(ch.before) + ' &rarr; ' +
+          show(ch.after) + '</td></tr>');
       });
     });
     const evs = (diff && diff.events_added) || [];
@@ -455,7 +468,11 @@
           '<span class="muted form-note">Accept publishes as one step; discard keeps the audit receipt only.</span>' +
         '</div>' +
         '<div class="proposal-error"></div>';
-      if (chron) panel.querySelector('.chronicle').innerHTML = S.md(chron.markdown || '');
+      // the chronicle node exists only in the non-goals branch above; guard
+      // the query so a future bundle kind carrying a chronicle degrades to
+      // no chronicle block instead of dropping the whole panel into catch
+      const chronNode = chron && panel.querySelector('.chronicle');
+      if (chronNode) chronNode.innerHTML = S.md(chron.markdown || '');
 
       const errBox = panel.querySelector('.proposal-error');
       const acceptBtn = panel.querySelector('.proposal-accept');
@@ -490,7 +507,7 @@
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
               ' — use the Retry snapshot button above.', 'error');
           }
-          S.showTab('sim');
+          S.rerenderIfCurrent('sim');
         } catch (err) {
           errBox.innerHTML = '';
           errBox.appendChild(S.errorPanel(err));
@@ -511,7 +528,7 @@
           await S.api(S.campUrl('/simulation/proposal/' +
             encodeURIComponent(p.proposal_id) + '/discard'), { method: 'POST' });
           S.toast('Proposal discarded — the campaign never changed.', 'ok');
-          S.showTab('sim');
+          S.rerenderIfCurrent('sim');
         } catch (err) {
           errBox.innerHTML = '';
           errBox.appendChild(S.errorPanel(err));
@@ -578,7 +595,7 @@
           await S.api(S.campUrl('/simulation/forecast/' +
             encodeURIComponent(f.forecast_id) + '/discard'), { method: 'POST' });
           S.toast('Forecast discarded — the campaign never changed.', 'ok');
-          S.showTab('sim');
+          S.rerenderIfCurrent('sim');
         } catch (err) {
           errBox.innerHTML = '';
           errBox.appendChild(S.errorPanel(err));
@@ -630,16 +647,19 @@
           method: 'POST', body: {}
         });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+        // 50 min: the server's own watchdog for this job sits at 2800 s
+        // (~47 min) — the default 31-min poll cap used to give up while the
+        // job was still working and stage a proposal nobody was watching
         return S.pollJob(resp.job_id, (line) => {
           logBox.textContent += String(line == null ? '' : line) + '\n';
           logBox.scrollTop = logBox.scrollHeight;
-        });
+        }, 50 * 60 * 1000);
       })().then((result) => {
         const r = result || {};
         if (r.staged) {
           S.toast(r.proposed + ' goal update' + (r.proposed === 1 ? '' : 's') +
             ' proposed — review it above, then accept or discard.', 'ok');
-          S.showTab('sim'); // re-render: the proposal panel leads the tab
+          S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
         } else {
           const jobFindings = Array.isArray(r.findings) ? r.findings : [];
           errBox.innerHTML = '';
@@ -721,7 +741,7 @@
         }, n * 31 * 60 * 1000 + 5 * 60 * 1000);
       })().then(() => {
         S.toast('Forecast staged — read it above, then discard it.', 'ok');
-        S.showTab('sim'); // re-render: the forecast panel leads with the weeks
+        S.rerenderIfCurrent('sim'); // re-render: the forecast panel leads with the weeks
       }).catch((err) => {
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
@@ -864,7 +884,7 @@
       try {
         await S.api(S.campUrl('/simulation/session'), { method: 'POST', body: body });
         S.toast('Session staged — review the proposal above, then accept.', 'ok');
-        S.showTab('sim');
+        S.rerenderIfCurrent('sim');
       } catch (err) {
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
@@ -1188,7 +1208,7 @@
           (held.length ? ' (' + held.length + ' faction' + (held.length === 1 ? '' : 's') + ' held)' : ''),
           'ok'
         );
-        S.showTab('sim'); // re-render: the proposal panel leads the tab
+        S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
       }).catch((err) => {
         runErr.innerHTML = '';
         runErr.appendChild(S.errorPanel(err));

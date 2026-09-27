@@ -137,6 +137,7 @@
     btn.dataset.label = btn.textContent;
     btn.textContent = 'Really revoke?';
     btn.classList.add('btn-armed');
+    btn.setAttribute('aria-live', 'assertive');
     setTimeout(() => {
       if (!btn.isConnected) return;
       delete btn.dataset.armed;

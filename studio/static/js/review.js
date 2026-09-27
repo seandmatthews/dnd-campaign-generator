@@ -44,6 +44,7 @@
     btn.dataset.label = btn.textContent;
     btn.textContent = 'Really delete?';
     btn.classList.add('btn-armed');
+    btn.setAttribute('aria-live', 'assertive'); // the second chance must be announced
     setTimeout(() => {
       if (!btn.isConnected) return;
       delete btn.dataset.armed;
@@ -57,14 +58,14 @@
     const resp = await S.api(S.campUrl('/review/' + path), { method: 'POST', body: body });
     const n = resp && (path === 'approve' ? resp.approved : resp.deleted);
     S.toast((path === 'approve' ? 'Approved ' : 'Deleted ') +
-      (n != null ? n : '') + (n === 1 ? ' entry' : ' entries'), 'ok');
+      (n != null ? n : '?') + (n === 1 ? ' entry' : ' entries'), 'ok');
     const snap = resp && resp.snapshot;
     if (snap && (snap.state === 'failed' || snap.state === 'unavailable')) {
       // the files changed fine; only the undo-trail commit did not happen
       S.toast('Published, but the history snapshot ' + snap.state +
         ' — use the Retry snapshot button at the top of this tab.', 'error');
     }
-    S.showTab('review'); // refresh: the queue is the file state, re-read it
+    S.rerenderIfCurrent('review'); // refresh: the queue is the file state
   }
 
   function actionButtons(item, revision) {
@@ -140,7 +141,7 @@
     card.querySelector('.review-body').textContent = String(item.body == null ? '' : item.body);
     const slot = findingsSlot(item.findings);
     if (slot) card.appendChild(slot);
-    card.appendChild(actionButtons(item, item.revision));
+    card.appendChild(actionButtons(item, revision));
     return card;
   }
 

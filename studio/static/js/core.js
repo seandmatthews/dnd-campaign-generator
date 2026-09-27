@@ -297,6 +297,19 @@
       });
       overlay.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') done(false);
+        if (ev.key === 'Tab') {
+          // minimal focus trap: the dialog is modal, Tab must not walk
+          // into the page behind it
+          const focusables = Array.from(
+            overlay.querySelectorAll('button')).filter((b) => !b.disabled);
+          if (!focusables.length) return;
+          const idx = focusables.indexOf(document.activeElement);
+          ev.preventDefault();
+          const next = ev.shiftKey
+            ? focusables[(idx - 1 + focusables.length) % focusables.length]
+            : focusables[(idx + 1) % focusables.length];
+          next.focus();
+        }
       });
       root.appendChild(overlay);
       const btn = overlay.querySelector('[data-act="confirm"]');
@@ -704,8 +717,11 @@
 
     let remembered = null;
     try { remembered = localStorage.getItem('campaign-studio.campaign'); } catch (_) {}
-    await refreshCampaigns(remembered);
-    showTab(Studio.state.activeTab);
+    const campaignsOk = await refreshCampaigns(remembered);
+    if (campaignsOk) showTab(Studio.state.activeTab);
+    // a failed list left the error panel in the active section: rendering a
+    // tab now would wipe it with 'No campaign selected' advice that cannot
+    // work while the server is down
     checkSetup(); // fire-and-forget: the strip appears only if setup is incomplete
   }
 
@@ -714,6 +730,13 @@
   Studio.el = el;
   Studio.fmtInt = fmtInt;
   Studio.api = api;
+  // refresh a tab's content only if the user is still looking at it: a job
+  // finishing server-side must not yank the DM across tabs (or wipe a form
+  // they are typing in) — the caller's .then just skips the re-render
+  Studio.rerenderIfCurrent = function(name) {
+    if (Studio.state.activeTab === name) showTab(name);
+  };
+
   Studio.pollJob = pollJob;
   Studio.md = md;
   Studio.confirmRun = confirmRun;
