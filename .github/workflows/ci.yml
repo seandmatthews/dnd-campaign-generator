@@ -11,13 +11,23 @@ jobs:
     # verification ladder, the FMG importer (synthetic fixtures), the studio
     # API suite, and the JS escape harness. The integration tier needs the
     # ignored tools/ tree (FMG + settlemaker builds) and stays local.
-    runs-on: ubuntu-latest
+    #
+    # Matrix: this is a Windows-first py3.10 app (junction handling, MAX_PATH
+    # logic, WinError-32 log rotation are all Windows paths), so at least one
+    # Windows leg must run — an ubuntu-only CI proved nothing about the
+    # platform the code actually ships on.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.10", "3.11"]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - uses: actions/setup-node@v4
         with:
@@ -26,7 +36,12 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyyaml pytest fastapi "uvicorn[standard]" pydantic httpx
+          pip install pyyaml pytest fastapi "uvicorn[standard]" pydantic httpx websockets
+
+      - name: Lint (runtime-crash class: syntax errors, undefined names)
+        run: |
+          pip install ruff
+          ruff check agentic-simulator/src agentic-simulator/tests studio dnd-mapping/src run-tests.py
 
       - name: Fast tier
         run: python run-tests.py

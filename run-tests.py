@@ -24,7 +24,9 @@ ROOT = Path(__file__).resolve().parent
 # The fast tier. verification/tests is a zero-dependency direct-run script
 # (no test_ functions for pytest to collect), so it runs via its documented
 # runner: python verification/tests/test_check.py. The JS suite is skipped
-# (with a note) when node is not installed.
+# (with a note) when node is not installed. Entries are (name, cmd) or
+# (name, cmd, cwd) — cwd defaults to ROOT (table-companion is its own
+# project whose tests import `server` relative to its own root).
 FAST_SUITES = [
     ("agentic-simulator",
      [sys.executable, "-m", "pytest", "agentic-simulator/tests", "-q"]),
@@ -32,6 +34,9 @@ FAST_SUITES = [
     ("dnd-mapping", [sys.executable, "dnd-mapping/tests/test_import_fmg.py"]),
     ("dnd-mapping-battlemap", [sys.executable, "dnd-mapping/tests/test_battlemap.py"]),
     ("studio", [sys.executable, "-m", "pytest", "studio/tests", "-q"]),
+    ("table-companion",
+     [sys.executable, "-m", "pytest", "tests", "-q"],
+     ROOT / "table-companion"),
 ]
 
 _node = shutil.which("node")
@@ -49,11 +54,19 @@ INTEGRATION = ("integration",
                [sys.executable, "-m", "pytest", "studio/tests",
                 "-m", "integration", "-q"])
 
+# What the integration tier needs that git does not carry (campaigns/ and
+# tools/ are gitignored): without these it error-spams instead of skipping.
+INTEGRATION_NEEDS = [
+    ROOT / "campaigns" / "ruravaqan" / "simulation" / "state.yaml",
+    ROOT / "dnd-mapping" / "tools" / "Fantasy-Map-Generator",
+    ROOT / "dnd-mapping" / "tools" / "settlemaker" / "dist" / "index.js",
+]
 
-def run_suite(name, cmd):
+
+def run_suite(name, cmd, cwd=None):
     print(f"\n=== {name} ===  ({' '.join(cmd)})", flush=True)
     start = time.monotonic()
-    proc = subprocess.run(cmd, cwd=str(ROOT))  # inherits stdio: streams live
+    proc = subprocess.run(cmd, cwd=str(cwd or ROOT))  # stdio streams live
     secs = time.monotonic() - start
     ok = proc.returncode == 0
     print(f"--- {name}: {'PASS' if ok else 'FAIL (rc=%d)' % proc.returncode}"
@@ -69,11 +82,22 @@ def main():
         print(f"usage: python run-tests.py [--all]  (unknown args: {unknown})")
         return 2
 
-    suites = list(FAST_SUITES) + ([INTEGRATION] if all_tiers else [])
-    tier = "fast + integration" if all_tiers else "fast"
+    suites = list(FAST_SUITES)
+    tier = "fast"
+    if all_tiers:
+        missing = [p for p in INTEGRATION_NEEDS if not p.exists()]
+        if missing:
+            print("note: skipping the integration tier — missing (gitignored) "
+                  "prerequisites:\n  " + "\n  ".join(str(p) for p in missing)
+                  + "\n  the tier runs on the machines that have them; see "
+                    "studio/tests/test_integration.py")
+        else:
+            suites.append(INTEGRATION)
+            tier = "fast + integration"
     print(f"run-tests.py: {len(suites)} suite(s), {tier} tier, root {ROOT}")
 
-    results = [run_suite(name, cmd) for name, cmd in suites]
+    results = [run_suite(name, cmd, cwd)
+               for name, cmd, cwd in [(s + (None,))[:3] for s in suites]]
 
     width = max(len(name) for name, _, _ in results)
     print("\n=== summary ===")

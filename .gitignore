@@ -33,3 +33,7 @@ llm.env
 
 # uv
 .venv/
+
+# the table companion is its own git repository (ICRPG table tool, see its
+# DESIGN.md); canon snapshots and the ICRPG rules PDF live there, never here
+table-companion/
