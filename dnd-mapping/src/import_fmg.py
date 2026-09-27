@@ -22,6 +22,7 @@ Usage:
   python src/import_fmg.py --all          # everything in worlds/raw/
 """
 
+import hashlib
 import json
 import pathlib
 import re
@@ -70,7 +71,8 @@ def load_fmg(path):
         }
         return info, settings, pack, set(_SIGNATURES)
 
-    lines = text.split("\n")
+    # CR-tolerant: a dump round-tripped through a Windows editor carries \r\n
+    lines = re.split("\r?\n", text)
     header = lines[0].split("|")
 
     def section_json(signature):
@@ -321,8 +323,17 @@ def import_file(path):
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{slug}.yaml"
+    text = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100)
+    if out.exists() and out.read_text(encoding="utf-8") != text:
+        # same name and last-four seed digits but genuinely different
+        # content: widen the suffix with a full-seed hash instead of
+        # silently overwriting a different world's candidate
+        widen = hashlib.sha256(
+            str(seed).encode("utf-8")).hexdigest()[:6]
+        slug = f"{slug}-{widen}"
+        out = OUT_DIR / f"{slug}.yaml"
     with open(out, "w", encoding="utf-8") as f:
-        yaml.safe_dump(doc, f, sort_keys=False, allow_unicode=True, width=100)
+        f.write(text)
     return out, doc, missing
 
 
@@ -332,7 +343,10 @@ def main():
         print(__doc__)
         sys.exit(1)
     paths = (
-        sorted(p for p in RAW_DIR.glob("candidate-*.map"))
+        sorted(p for p in RAW_DIR.iterdir()
+               if p.is_file() and p.suffix in (".map", ".json")
+               and (p.stem.startswith("candidate-")
+                    or p.stem.startswith("headless-")))
         if args == ["--all"]
         else [pathlib.Path(a) for a in args]
     )

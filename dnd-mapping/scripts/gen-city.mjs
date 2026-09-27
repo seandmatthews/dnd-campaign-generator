@@ -53,7 +53,7 @@ const usage = (code) => {
       "  --world   FMG world dump: full JSON export, headless dump, or .map save",
       "  --burg    burg name (case-insensitive) or burg index (the dump's `i`)",
       "  --out     output directory (created; <slug>.svg, <slug>.geojson, params.yaml)",
-      "  --seed    optional settlemaker seed; default: world seed mod 1e6",
+      "  --seed    optional settlemaker seed; default: world seed mod 1e6 (text seeds FNV-1a-hash to 0..999999)",
     ].join("\n"),
   );
   process.exit(code);
@@ -90,7 +90,8 @@ async function loadWorld(path) {
   // .map save: pipe-separated header | settings JSON | ... positional
   // sections embedded among SVG lines. Sections are found by content
   // signature (unique keys), never by position — see import_fmg.py.
-  const lines = text.split("\n");
+  // CR-tolerant: a .map round-tripped through a Windows editor carries \r\n
+  const lines = text.split(/\r?\n/);
   const header = lines[0].split("|");
   let settings = {};
   try {
@@ -153,7 +154,8 @@ function findBurg(burgs, arg) {
   const wanted = String(arg).trim();
   const byId = /^\d+$/.test(wanted) ? burgs.find((b) => b.i === Number(wanted)) : null;
   if (byId) return byId;
-  const byName = burgs.filter((b) => b.name?.toLowerCase() === wanted.toLowerCase());
+  const byName = burgs.filter((b) => typeof b.name === "string"
+      && b.name.toLowerCase() === wanted.toLowerCase());
   if (byName.length === 1) return byName[0];
   if (byName.length > 1) {
     console.error(`burg "${wanted}": ambiguous, ${byName.length} burgs share the name (ids ${byName.map((b) => b.i).join(", ")}) — pass the index`);
@@ -298,12 +300,13 @@ function paramsYaml({ world, burg, record, roadEntries, seed, result, oceanSourc
     [
       "# Provenance record — regenerate with scripts/gen-city.mjs, never hand-edit outputs.",
       `generator: scripts/gen-city.mjs`,
-      `source_map: ${world.source}`,
+      `source_map: ${yamlStr(world.source)}`,
       `world_map_name: ${yamlStr(world.mapName)}`,
       `fmg_version: ${yamlStr(world.version)}`,
       `source_seed: ${yamlStr(world.seed)}`,
       `settlemaker_version: 3.0.1`,
       `seed: ${seed}`,
+      `name: ${yamlStr(burg.name)}`, // the studio Maps tab reads name|label first
       `burg_name: ${yamlStr(burg.name)}`,
       `burg_id: ${burg.i}`,
       `burg_input:`,
@@ -353,6 +356,10 @@ if (!world.burgs.length) {
   process.exit(1);
 }
 const burg = findBurg(world.burgs, opt.burg);
+if (!Number.isFinite(burg.x) || !Number.isFinite(burg.y)) {
+  console.error(`burg ${JSON.stringify(burg.name ?? burg.i)} has no valid coordinates in the dump - cannot derive a position`);
+  process.exit(2);
+}
 
 const isPort = Boolean(burg.port);
 const population = Math.round((burg.population ?? 0) * 1000); // dump is in thousands
@@ -391,10 +398,35 @@ const record = {
 };
 
 const rawSeed = String(opt.seed !== undefined ? opt.seed : world.seed ?? "").trim();
-const seed = opt.seed !== undefined ? Number(rawSeed) : (rawSeed === "" ? NaN : Number(rawSeed) % 1e6);
+// Numeric seeds pass through; text seeds (world names like "my-world") hash
+// to a stable number — Number() gives NaN, and the same world must always
+// build the same city, so the derivation is deterministic, never random.
+const seedFromText = (s) => {
+  // FNV-1a 32-bit over UTF-16 code units: deterministic per machine and
+  // per world, which is the requirement — but NOT byte-canonical FNV, so a
+  // non-ASCII world name will not match a byte-wise FNV in another
+  // language. Never reuse this value as a cross-tool identity.
+  let h = 2166136261; // FNV-1a 32-bit
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0) % 1e6;
+};
+const numeric = Number(rawSeed);
+// one derivation for every path: mod 1e6 applies to an explicit numeric
+// --seed too, so `--seed <the world's own seed>` reproduces the default
+// city instead of silently building a different one
+const seed = rawSeed === "" ? NaN
+  : Number.isFinite(numeric)
+    ? ((numeric % 1e6) + 1e6) % 1e6
+    : seedFromText(rawSeed);
 if (rawSeed === "" || !Number.isFinite(seed)) {
   console.error(`cannot derive a seed from world seed ${JSON.stringify(world.seed)} — pass --seed`);
   process.exit(2);
+}
+if (!Number.isFinite(numeric)) {
+  console.log(`seed: ${seed} (FNV-1a hashed from ${JSON.stringify(rawSeed)})`);
 }
 
 const settlemaker = await import(pathToFileURL(join(ROOT, "tools", "settlemaker", "dist", "index.js")).href);
