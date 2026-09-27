@@ -221,6 +221,35 @@ def test_cli_usage_and_missing_state_errors():
     print("  errors: usage -> 2, unreadable state -> 1  OK")
 
 
+def test_faction_kind_may_be_omitted():
+    """The studio's authoring form only writes `kind` when the DM fills it
+    in, so a hand-named sandbox can hold kindless factions — the view (and
+    with it every live week) must degrade to 'unknown', never KeyError."""
+    state = mini_state()
+    for f in state["factions"]:
+        f.pop("kind", None)
+    view = faction_view(state, "mint")
+    assert all(o["kind"] == "unknown" for o in view["others"]), view["others"]
+    print("  views: a kindless faction degrades to 'unknown', no KeyError  OK")
+
+
+def test_faction_name_and_resources_may_be_omitted():
+    """validate_state checks only `id`, so a hand-edited faction can lack
+    name/resources too — the crash class this used to be is a week dying
+    in faction_view AFTER earlier factions spent their LLM calls."""
+    state = mini_state()
+    for f in state["factions"]:
+        f.pop("resources", None)
+        f.pop("name", None)
+    view = faction_view(state, "mint")
+    assert len(view["others"]) == len(state["factions"]) - 1
+    for o in view["others"]:
+        assert o["name"], "a nameless faction falls back to its id"
+        assert o["apparent_strength"] is not None, \
+            "missing resources degrade like 'none' muscle"
+    print("  views: a nameless, resourceless faction degrades, no KeyError  OK")
+
+
 def test_state_default_points_at_project_root():
     assert views.STATE_FILE == ROOT / "world" / "state.yaml", \
         "the default is anchored to the project root, not the cwd"
@@ -237,6 +266,8 @@ if __name__ == "__main__":
         test_facts_visibility_public_restricted_and_dm_only,
         test_rumors_window_keeps_recent_and_counts_the_omitted,
         test_rumors_window_boundary_week_still_rides,
+        test_faction_kind_may_be_omitted,
+        test_faction_name_and_resources_may_be_omitted,
     ]:
         fn()
     print("all views tests passed")

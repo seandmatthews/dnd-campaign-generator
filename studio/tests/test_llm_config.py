@@ -186,22 +186,59 @@ def test_zai_hint_only_for_zai_urls(monkeypatch, tmp_path):
 # ------------------------------------------------------------ run metering
 
 def _spendable(monkeypatch, tmp_path):
+    """A working provider over a patched urlopen — NOT a stubbed
+    _post_json: the run meter lives inside _post_json, so a stub would
+    bypass the very metering these tests assert on."""
     _isolate(monkeypatch, tmp_path)
     f = tmp_path / "llm.env"
     f.write_text("LLM_API_KEY=k\n", encoding="utf-8")
     monkeypatch.setattr(llm_client, "ENV_FILE", f)
-    monkeypatch.setattr(llm_client, "_post_json", lambda cfg, body, timeout: {
-        "choices": [{"message": {"content": "x"}, "finish_reason": "stop"}]})
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [
+                {"message": {"content": "x"}, "finish_reason": "stop"}],
+                "usage": {}}).encode()
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen",
+                        lambda req, timeout=None: FakeResp())
 
 
 def test_budget_ceiling_stops_between_calls(monkeypatch, tmp_path):
     """begin_run resets; limit=1 admits one POST; the second raises
-    BudgetExceeded between calls instead of spending without a bound."""
+    BudgetExceeded before leaving the machine instead of spending without
+    a bound."""
     _spendable(monkeypatch, tmp_path)
     llm_client.begin_run(limit=1)
     assert llm_client.complete("a") == "x"
     with pytest.raises(llm_client.BudgetExceeded, match="ceiling"):
         llm_client.complete("b")
+
+
+def test_failed_posts_are_metered_too(monkeypatch, tmp_path):
+    """The regression: the counter only moved on SUCCESS, so failing
+    requests (HTTP retries included) spent unbounded while the meter sat
+    at zero. Every attempt must count before it is made."""
+    import urllib.error
+    _spendable(monkeypatch, tmp_path)
+
+    def failing(req, timeout=None):
+        raise urllib.error.HTTPError("url", 429, "rate limited", {}, None)
+
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", failing)
+    monkeypatch.setattr(llm_client.time, "sleep", lambda s: None)
+    llm_client.begin_run(limit=1)
+    # attempt 1 meters calls=1 and fails 429; the retry must see the
+    # ceiling and raise BEFORE a second request leaves the machine
+    with pytest.raises(llm_client.BudgetExceeded, match="ceiling"):
+        llm_client.complete("a")
+    assert llm_client.run_usage()["calls"] == 1, "the failed attempt counts"
 
 
 def test_budget_is_thread_local(monkeypatch, tmp_path):

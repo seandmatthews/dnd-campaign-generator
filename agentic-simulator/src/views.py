@@ -93,10 +93,13 @@ def faction_view(state, faction_id):
         others.append(
             {
                 "id": f["id"],
-                "name": f["name"],
-                "kind": f["kind"],
+                # name/resources may be missing from a hand-edited state
+                # (validate_state checks only id) — the view degrades,
+                # it never KeyErrors the week mid-spend
+                "name": f.get("name") or f["id"],
+                "kind": f.get("kind") or "unknown",
                 "apparent_strength": _OUTSIDER_STRENGTH.get(
-                    f["resources"].get("muscle", "none")
+                    (f.get("resources") or {}).get("muscle", "none")
                 ),
                 "posture_toward_you": f.get("disposition", {}).get(
                     faction_id, "unknown"

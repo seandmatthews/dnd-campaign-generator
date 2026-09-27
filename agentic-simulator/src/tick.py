@@ -36,11 +36,15 @@ Robustness: a faction whose LLM proposal fails holds instead of aborting
 the week; per-run budget exhaustion (LLM_MAX_CALLS) is different — it
 aborts the whole week BEFORE anything is written (exit 3, no state, no
 chronicle, no replay), because an all-holds week saved as canon would be
-indistinguishable from a quiet week. A narrator failure leaves the ledger
-as the record. Dice roll from a per-week seeded RNG recorded in
-meta.rng_seeds — a week is replayable by seeding resolve with that number.
+indistinguishable from a quiet week. Every metered POST attempt spends the
+ceiling, retries included, so a hard-failing provider can exhaust the
+budget with zero proposals — that aborts too (raise LLM_MAX_CALLS and
+retry). A narrator failure leaves the ledger as the record. Dice roll from
+a per-week seeded RNG recorded in meta.rng_seeds — a week is replayable by
+seeding resolve with that number.
 """
 
+import copy
 import hashlib
 import pathlib
 import random
@@ -176,9 +180,11 @@ def run_live(state):
     # explicit per-run call ceiling, checked between calls: LLM_MAX_CALLS
     # when set, else a default that scales with the roster — a week is ~2
     # calls per faction (proposal + one validation retry) plus narration,
-    # and the old flat 24 exhausted itself mid-week on a large roster
+    # and every metered POST attempt spends the ceiling, retries included,
+    # so the default leaves one spare attempt-set per faction (the old flat
+    # 24 exhausted itself mid-week on a large roster)
     llm.begin_run(limit=llm.env_limit()
-                  or max(24, 2 * len(state["factions"]) + 4))
+                  or max(24, 3 * len(state["factions"]) + 6))
 
     rumors.spread(state, state.get("rumors", []))   # rumors move before actions do
 
@@ -216,6 +222,11 @@ def run_live(state):
         print(f"  {faction['id']:<14} target={p['target']:<14} risk={p['risk_acceptance']:<6} {p['action']}")
 
     print("resolution:")
+    # the resolver's exact input, frozen before it (or apply_outcomes) can
+    # touch the live object — the replay stores this so a week can be
+    # re-resolved AFTER the state has moved on (the next bug the old
+    # hash-only scheme had: verification failed immediately post-week)
+    replay_input = copy.deepcopy(state)
     outcomes = resolve_tick(proposals, state)
     for o in outcomes:
         kind = "defensive" if o.get("defensive") else \
@@ -233,22 +244,30 @@ def run_live(state):
     # re-proposes); the old order (chronicle first) could leave a chronicle
     # for a week the state never recorded.
     save_state(state)
-    save_replay(week, seed, proposals, outcomes, base_state_sha)
+    save_replay(week, seed, proposals, outcomes, base_state_sha, replay_input)
     chronicle = write_chronicle(state, week, outcomes, held)
     print(f"week {week} written (rng seed {seed}); chronicle: {chronicle.name}")
 
 
 # ------------------------------------------------------------- replay trail
 
-def save_replay(week, seed, proposals, outcomes, base_state_sha):
+def save_replay(week, seed, proposals, outcomes, base_state_sha,
+                base_state=None):
     """Persist everything the resolver consumed — normalized proposals,
-    base-state identity, rule version, seed, and the outcomes it produced —
-    so the week can be re-resolved offline (`--replay`) with no network
-    and verified to produce the same result."""
+    the exact input state it resolved against, base-state identity, rule
+    version, seed, and the outcomes it produced — so the week can be
+    re-resolved offline (`--replay`) with no network and verified to
+    produce the same result, even after the live state has moved on.
+
+    Same-week reruns version like chronicles (week-N-2.yaml after a rewind
+    and re-run) so an old chronicle's replay trail is never silently
+    replaced by the new run's record. Schema 2 (base_state embedded) is
+    written only when a base_state was supplied; verification against such
+    a replay is self-consistency — the file attests to itself, there is no
+    external hash to check."""
     replay_dir = ROOT / "world" / "replay"
     replay_dir.mkdir(parents=True, exist_ok=True)
     doc = {
-        "schema_version": 1,
         "rule_version": resolve.RULE_VERSION,
         "week": week,
         "seed": seed,
@@ -256,7 +275,14 @@ def save_replay(week, seed, proposals, outcomes, base_state_sha):
         "proposals": proposals,
         "outcomes": outcomes,
     }
+    if base_state is not None:
+        doc["schema_version"] = 2
+        doc["base_state"] = base_state
     path = replay_dir / f"week-{week}.yaml"
+    n = 2
+    while path.exists():
+        path = replay_dir / f"week-{week}-{n}.yaml"
+        n += 1
     with open(path, "w", encoding="utf-8") as f:
         yaml.safe_dump(doc, f, sort_keys=False, allow_unicode=True, width=100)
     return path
@@ -265,32 +291,60 @@ def save_replay(week, seed, proposals, outcomes, base_state_sha):
 def replay_verify(path):
     """Re-resolve a saved week from its replay file — fixed seed, stored
     proposals, no model — and compare against the recorded outcomes.
-    Returns (ok, message). A rule_version mismatch refuses the comparison:
-    the rules changed, so sameness would be meaningless. A base-state hash
-    mismatch refuses too: the state file has moved on since the week ran,
-    so the re-resolution would judge the outcomes against data the week
-    never saw (later weeks, DM edits) — 'verified' would be a lie."""
-    doc = yaml.safe_load(open(path, encoding="utf-8"))
-    if doc.get("rule_version") != resolve.RULE_VERSION:
-        return False, (f"replay file is rule version {doc.get('rule_version')}, "
-                       f"resolver is {resolve.RULE_VERSION} — not comparable")
-    base_sha = doc.get("base_state_sha256")
-    if base_sha:
-        current_sha = hashlib.sha256(
-            pathlib.Path(STATE_FILE).read_bytes()).hexdigest()
-        if current_sha != base_sha:
-            return False, (f"week {doc.get('week')} cannot be verified: "
-                           "world/state.yaml has changed since the week ran "
-                           "(base-state hash mismatch) — the outcomes were "
-                           "resolved against a state that no longer exists")
-    state = load_state(STATE_FILE)
-    resolve.set_rng(doc["seed"])
-    recomputed = resolve_tick(doc["proposals"], state)
+    Returns (ok, message); a structurally broken file is a message, never a
+    traceback. A rule_version mismatch refuses the comparison: the rules
+    changed, so sameness would be meaningless.
+
+    Schema 2 replays carry the resolver's exact input state (`base_state`),
+    so verification is self-contained — the live state may have moved on
+    (the next week ran; a completed week ALWAYS has) and the replay still
+    verifies. Schema 1 replays carried only the input state's file hash,
+    which is compared against the live state file: any later change refuses
+    the comparison, because the re-resolution would otherwise judge the
+    outcomes against data the week never saw — 'verified' would be a lie."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = yaml.safe_load(f)
+        if not isinstance(doc, dict):
+            raise ValueError("not a mapping")
+        missing = [k for k in ("seed", "proposals", "outcomes")
+                   if k not in doc]
+        if missing:
+            raise ValueError(f"missing {', '.join(missing)}")
+        if doc.get("rule_version") != resolve.RULE_VERSION:
+            return False, (
+                f"replay file is rule version {doc.get('rule_version')}, "
+                f"resolver is {resolve.RULE_VERSION} — not comparable")
+        base_state = doc.get("base_state")
+        if isinstance(base_state, dict):
+            state = copy.deepcopy(base_state)
+        else:
+            base_sha = doc.get("base_state_sha256")
+            if base_sha:
+                current_sha = hashlib.sha256(
+                    pathlib.Path(STATE_FILE).read_bytes()).hexdigest()
+                if current_sha != base_sha:
+                    return False, (
+                        f"week {doc.get('week')} cannot be verified: "
+                        "world/state.yaml has changed since the week ran "
+                        "(base-state hash mismatch) — the outcomes were "
+                        "resolved against a state that no longer exists")
+            state = load_state(STATE_FILE)
+        resolve.set_rng(doc["seed"])
+        recomputed = resolve_tick(doc["proposals"], state)
+    except (OSError, yaml.YAMLError, KeyError, ValueError, TypeError) as e:
+        return False, f"replay file is unreadable or malformed: {e}"
     if recomputed == doc["outcomes"]:
         return True, f"week {doc.get('week')} replays identically"
-    diffs = [f"{a}:{r['margin']:+d}" for a, r in
-             zip([o["actor"] for o in doc["outcomes"]],
-                 [o for o in recomputed if o not in doc["outcomes"]][:5])]
+    # outcomes are index-aligned by construction (same proposals, same
+    # order) — diff pairwise, never positionally against a filtered list
+    if len(recomputed) != len(doc["outcomes"]):
+        return False, (f"week {doc.get('week')} diverged: "
+                       f"{len(doc['outcomes'])} recorded outcomes vs "
+                       f"{len(recomputed)} recomputed")
+    diffs = [f"{r.get('actor', '?')}:{r.get('margin', 0):+d}"
+             f"!={s.get('margin', 0):+d}"
+             for r, s in zip(doc["outcomes"], recomputed) if r != s][:5]
     return False, f"week {doc.get('week')} diverged ({diffs})"
 
 

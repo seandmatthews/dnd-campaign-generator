@@ -123,9 +123,19 @@ def _post_json(cfg, body, timeout, attempts=3):
     """One POST-and-parse with backoff on transient failures; the config is
     resolved once per call, not per attempt. Raises RuntimeError with a body
     snippet (and, for Z.ai 401/1113, the doctor's hint) — never a bare
-    HTTPError."""
+    HTTPError. The per-run ceiling is checked and the call counted BEFORE
+    every attempt, retries included: a failed POST burns provider time just
+    like a successful one, and an unmetered retry loop could spend past the
+    ceiling with the counter still at zero."""
     last = None
     for attempt in range(attempts):
+        b = _budget()
+        if b["calls"] >= b["limit"]:
+            raise BudgetExceeded(
+                f"per-run LLM ceiling reached ({b['limit']} calls, "
+                f"~{b['tokens']} tokens metered) — run stopped "
+                "incomplete; raise LLM_MAX_CALLS or split the work")
+        b["calls"] += 1
         if attempt:
             time.sleep(min(2 ** (attempt - 1), 4))
         req = urllib.request.Request(
@@ -213,7 +223,10 @@ def run_usage():
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
     """Ask the model; on ANY finish_reason == "length", double max_tokens up
-    to max_budget (24576) and retry, keeping the longest content seen."""
+    to max_budget (24576) and retry, keeping the longest content seen. The
+    per-run ceiling is enforced inside _post_json, before EVERY POST —
+    initial calls, length-extension retries, and HTTP retries alike — so no
+    attempt can spend past it (a failed attempt is metered too)."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -228,14 +241,8 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     }
     best = ""
     while True:
-        b = _budget()
-        if b["calls"] >= b["limit"]:
-            raise BudgetExceeded(
-                f"per-run LLM ceiling reached ({b['limit']} calls, "
-                f"~{b['tokens']} tokens metered) — run stopped "
-                "incomplete; raise LLM_MAX_CALLS or split the work")
         data = _post_json(cfg, body, timeout)
-        b["calls"] += 1
+        b = _budget()
         usage = data.get("usage") or {}
         if usage:
             b["tokens"] += int(usage.get("total_tokens") or 0)

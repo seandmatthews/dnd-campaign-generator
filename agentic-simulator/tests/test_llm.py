@@ -43,17 +43,42 @@ def test_extract_yaml_from_fences():
     print("  extract: yaml/json fences and bare YAML all parse  OK")
 
 
+def _fake_urlopen_factory(respond):
+    """A urlopen replacement driven by respond(attempt) -> dict|exception."""
+    state = {"attempt": 0}
+
+    def fake_urlopen(req, timeout=None):
+        state["attempt"] += 1
+        out = respond(state["attempt"])
+        if isinstance(out, Exception):
+            raise out
+
+        class Resp:
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def read(self):
+                return json.dumps(out).encode()
+        return Resp()
+    return fake_urlopen
+
+
 def test_budget_ceiling_stops_between_calls():
-    """The per-run ceiling: begin_run resets, limit=1 admits one call, the
-    second raises BudgetExceeded instead of spending without a bound."""
-    saved_post, saved_budget = llm._post_json, dict(llm._BUDGET)
+    """The per-run ceiling: begin_run resets, limit=1 admits one POST, the
+    second raises BudgetExceeded instead of spending without a bound. The
+    meter lives inside _post_json — every attempt is counted before it is
+    made — so the real _post_json must run here (patched urlopen, no
+    network), not a stub that would bypass the meter."""
+    saved_urlopen, saved_budget = llm.urllib.request.urlopen, dict(llm._BUDGET)
     saved_key = os.environ.get("LLM_API_KEY")
     os.environ["LLM_API_KEY"] = "test-key"
+    saved_resolve = llm.resolve_config
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
 
-    def fake_post(cfg, body, timeout, attempts=3):
-        return response("ok")
-
-    llm._post_json = fake_post
+    llm.urllib.request.urlopen = _fake_urlopen_factory(
+        lambda attempt: response("ok"))
     try:
         llm.begin_run(limit=1)
         assert llm.complete("prompt one") == "ok"
@@ -69,7 +94,7 @@ def test_budget_ceiling_stops_between_calls():
         usage = llm.run_usage()
         assert usage["calls"] == 2, "the meter counts every POST"
     finally:
-        llm._post_json = saved_post
+        llm.urllib.request.urlopen, llm.resolve_config =             saved_urlopen, saved_resolve
         llm._BUDGET.clear()
         llm._BUDGET.update(saved_budget)
         if saved_key is None:
@@ -82,29 +107,32 @@ def test_budget_ceiling_stops_between_calls():
 def test_budget_is_rechecked_on_length_retries():
     """The ceiling must be re-checked before EVERY POST: a finish_reason
     'length' retry loop used to be unmetered and could spend past it."""
-    saved_post, saved_budget = llm._post_json, dict(llm._BUDGET)
+    saved_urlopen, saved_budget = llm.urllib.request.urlopen, dict(llm._BUDGET)
     saved_key = os.environ.get("LLM_API_KEY")
     os.environ["LLM_API_KEY"] = "test-key"
+    saved_resolve = llm.resolve_config
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
     seq = [response("half a thought", finish="length"),
            response("a complete thought at last", finish="stop")]
-    calls = []
+    posts = []
 
-    def fake_post(cfg, body, timeout, attempts=3):
-        calls.append(body["max_tokens"])
-        return seq[min(len(calls), len(seq)) - 1]
+    def respond(attempt):
+        posts.append(1)
+        return seq[min(len(posts), len(seq)) - 1]
 
-    llm._post_json = fake_post
+    llm.urllib.request.urlopen = _fake_urlopen_factory(respond)
     try:
         llm.begin_run(limit=1)
         # the first POST returns finish=length; the retry must see calls
         # (1) >= limit (1) and raise, never POST again
         llm.complete("prompt", max_tokens=16, max_budget=64)
     except llm.BudgetExceeded:
-        assert len(calls) == 1, "stopped between calls, having spent one"
+        assert len(posts) == 1, "stopped between posts, having spent one"
     else:
         raise AssertionError("the length retry must hit the ceiling at limit=1")
     finally:
-        llm._post_json = saved_post
+        llm.urllib.request.urlopen, llm.resolve_config =             saved_urlopen, saved_resolve
         llm._BUDGET.clear()
         llm._BUDGET.update(saved_budget)
         if saved_key is None:
@@ -112,6 +140,57 @@ def test_budget_is_rechecked_on_length_retries():
         else:
             os.environ["LLM_API_KEY"] = saved_key
     print("  budget: length-extension retries are metered too  OK")
+
+
+def test_failed_posts_are_metered_too():
+    """The regression: the counter only moved on SUCCESS, so a run of
+    failing requests (HTTP retries included) spent unbounded while the
+    meter sat at zero. Every attempt — failed or retried — must count
+    against the ceiling before it is made."""
+    saved_urlopen, saved_budget = llm.urllib.request.urlopen, dict(llm._BUDGET)
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    saved_resolve = llm.resolve_config
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
+
+    def respond(attempt):
+        raise urllib.error.HTTPError("url", 429, "rate limited", {}, None)
+
+    llm.urllib.request.urlopen = _fake_urlopen_factory(respond)
+    saved_sleep = llm.time.sleep
+    llm.time.sleep = lambda s: None
+    try:
+        llm.begin_run(limit=1)
+        # attempt 1 meters calls=1, fails 429; the HTTP retry must see the
+        # ceiling and raise BEFORE a second request leaves the machine
+        try:
+            llm.complete("prompt")
+        except llm.BudgetExceeded:
+            pass
+        else:
+            raise AssertionError("the HTTP retry must hit the ceiling")
+        assert llm.run_usage()["calls"] == 1, "the failed attempt is metered"
+        llm.begin_run(limit=10)
+        try:
+            llm.complete("prompt")
+            raise AssertionError("expected RuntimeError after 3 attempts")
+        except llm.BudgetExceeded:
+            raise AssertionError("limit 10 must not trip on 3 attempts")
+        except RuntimeError as e:
+            assert "429" in str(e), f"the readable HTTP error surfaces: {e}"
+        assert llm.run_usage()["calls"] == 3, "all three attempts metered"
+    finally:
+        llm.urllib.request.urlopen = saved_urlopen
+        llm.time.sleep = saved_sleep
+        llm.resolve_config = saved_resolve
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    print("  budget: failed posts and HTTP retries are metered too  OK")
 
 
 def test_empty_choices_is_a_readable_error_not_indexerror():
@@ -297,13 +376,17 @@ def test_post_json_retries_transient_http_errors():
             raise urllib.error.HTTPError("url", 429, "rate limited", {}, None)
         return FakeResp()
     saved_urlopen, saved_sleep = llm.urllib.request.urlopen, llm.time.sleep
+    saved_budget = dict(llm._BUDGET)
     llm.urllib.request.urlopen = fake_urlopen
     llm.time.sleep = lambda s: None
+    llm.begin_run(limit=100)  # direct _post_json calls are metered now too
     try:
         with contextlib.redirect_stderr(io.StringIO()):
             data = llm._post_json({"key": "test-key", "url": llm.API_URL}, {}, 5)
     finally:
         llm.urllib.request.urlopen, llm.time.sleep = saved_urlopen, saved_sleep
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
     assert len(attempts) == 3 and data["choices"][0]["message"]["content"] == "ok"
     print("  post: transient 429 retried with backoff  OK")
 
@@ -312,7 +395,9 @@ def test_post_json_hard_errors_become_readable_runtimeerrors():
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError("url", 401, "Unauthorized", {}, None)
     saved_urlopen = llm.urllib.request.urlopen
+    saved_budget = dict(llm._BUDGET)
     llm.urllib.request.urlopen = fake_urlopen
+    llm.begin_run(limit=100)
     try:
         try:
             llm._post_json({"key": "test-key", "url": llm.API_URL}, {}, 5)
@@ -321,6 +406,8 @@ def test_post_json_hard_errors_become_readable_runtimeerrors():
             assert "401" in str(e), f"readable error, got: {e}"
     finally:
         llm.urllib.request.urlopen = saved_urlopen
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
     print("  post: hard HTTP errors raise readable RuntimeError  OK")
 
 
@@ -449,6 +536,7 @@ if __name__ == "__main__":
         test_complete_budget_doubling_keeps_longest,
         test_budget_ceiling_stops_between_calls,
         test_budget_is_rechecked_on_length_retries,
+        test_failed_posts_are_metered_too,
         test_empty_choices_is_a_readable_error_not_indexerror,
         test_find_key_env_wins_and_fallback_walks_rules,
         test_legacy_key_scan_prefers_the_coding_plan_rule,

@@ -6,6 +6,7 @@ Zero dependencies — run directly:  python tests/test_tick.py
 
 import pathlib
 import sys
+import shutil
 import tempfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
@@ -109,6 +110,7 @@ def test_event_record_carries_structured_fields():
 
 
 def test_chronicle_rerun_never_overwrites():
+    saved_narrate = tick.llm.narrate_week
     tick.llm.narrate_week = lambda *a, **k: "TITLE: The Quiet Week\nNothing happened."
     with tempfile.TemporaryDirectory() as d:
         original_dir = tick.CHRONICLE_DIR
@@ -122,10 +124,12 @@ def test_chronicle_rerun_never_overwrites():
             assert "The Quiet Week" in first.read_text(encoding="utf-8")
         finally:
             tick.CHRONICLE_DIR = original_dir
+            tick.llm.narrate_week = saved_narrate
     print("  chronicle: same-week reruns never overwrite  OK")
 
 
 def test_chronicle_without_title_gets_fallback_slug():
+    saved_narrate = tick.llm.narrate_week
     tick.llm.narrate_week = lambda *a, **k: "No title line here."
     with tempfile.TemporaryDirectory() as d:
         original_dir = tick.CHRONICLE_DIR
@@ -136,10 +140,12 @@ def test_chronicle_without_title_gets_fallback_slug():
             assert out.name == "0006-the-week.md", f"got {out.name}"
         finally:
             tick.CHRONICLE_DIR = original_dir
+            tick.llm.narrate_week = saved_narrate
     print("  chronicle: titleless weeks land at a stable fallback name  OK")
 
 
 def test_chronicle_non_ascii_title_never_makes_an_empty_slug():
+    saved_narrate = tick.llm.narrate_week
     tick.llm.narrate_week = lambda *a, **k: "TITLE: 三周之围\nprose"
     with tempfile.TemporaryDirectory() as d:
         original_dir = tick.CHRONICLE_DIR
@@ -151,12 +157,14 @@ def test_chronicle_non_ascii_title_never_makes_an_empty_slug():
             assert out.exists(), "file written under the fallback name"
         finally:
             tick.CHRONICLE_DIR = original_dir
+            tick.llm.narrate_week = saved_narrate
     print("  chronicle: non-ASCII-only title falls back to 'untitled'  OK")
 
 
 def test_chronicle_survives_narrator_failure():
     def boom(*a, **k):
         raise RuntimeError("API down")
+    saved_narrate = tick.llm.narrate_week
     tick.llm.narrate_week = boom
     with tempfile.TemporaryDirectory() as d:
         original_dir = tick.CHRONICLE_DIR
@@ -169,6 +177,7 @@ def test_chronicle_survives_narrator_failure():
             assert "a acts" in text, "the ledger table is the record"
         finally:
             tick.CHRONICLE_DIR = original_dir
+            tick.llm.narrate_week = saved_narrate
     print("  chronicle: narrator failure keeps the ledger  OK")
 
 
@@ -182,6 +191,7 @@ def test_live_refuses_cityless_state_before_any_spend():
     def boom(*a, **k):
         raise AssertionError("llm.propose must not be reached")
 
+    saved_propose = tick.llm.propose
     tick.llm.propose = boom
     try:
         tick.run_live(s)
@@ -189,6 +199,8 @@ def test_live_refuses_cityless_state_before_any_spend():
         assert e.code == 2
     else:
         raise AssertionError("run_live must refuse a city-less state")
+    finally:
+        tick.llm.propose = saved_propose
     print("  live: a city-less state is refused before any spend  OK")
 
 
@@ -202,6 +214,7 @@ def test_live_refuses_a_float_week_before_any_spend():
     def boom(*a, **k):
         raise AssertionError("llm.propose must not be reached")
 
+    saved_propose = tick.llm.propose
     tick.llm.propose = boom
     try:
         tick.run_live(s)
@@ -209,6 +222,8 @@ def test_live_refuses_a_float_week_before_any_spend():
         assert e.code == 2
     else:
         raise AssertionError("run_live must refuse a non-integer clock")
+    finally:
+        tick.llm.propose = saved_propose
     print("  live: a float week is refused before any spend  OK")
 
 
@@ -267,10 +282,17 @@ def test_run_live_happy_path_writes_state_chronicle_and_replay():
         doc = _yaml.safe_load(replay.read_text(encoding="utf-8"))
         assert doc["seed"] == seed and doc["week"] == 5
         assert {p["actor"] for p in doc["proposals"]} == {"mint", "rival"}
+        assert isinstance(doc["base_state"], dict), \
+            "the replay carries the resolver's input state"
+        # the completed week IS the regression case: the live state has
+        # already advanced, and verification must hold anyway
+        ok, msg = tick.replay_verify(replay)
+        assert ok, f"replay must verify immediately after the week: {msg}"
         assert "HOLDS" not in out, "both factions proposed; nobody held"
     finally:
         tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
             tick.llm.narrate_week, tick.save_state = saved
+        shutil.rmtree(root, ignore_errors=True)
     print("  live: happy path writes state, chronicle, and the replay trail  OK")
 
 
@@ -325,6 +347,7 @@ def test_run_live_held_faction_format_is_the_studio_contract():
     finally:
         tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
             tick.llm.narrate_week, tick.save_state = saved
+        shutil.rmtree(root, ignore_errors=True)
     print("  live: HOLDS stdout + chronicle formats match the studio's parsers  OK")
 
 
@@ -375,14 +398,57 @@ def test_replay_same_seed_same_outcomes():
 
 def test_save_replay_and_replay_verify_round_trip():
     """save_replay persists seed + normalized proposals + rule version + the
-    base-state hash; replay_verify re-resolves offline and confirms the
-    record (and refuses a foreign rule version instead of comparing apples
-    to bolts)."""
+    resolver's input state; replay_verify re-resolves offline and confirms
+    the record (and refuses a foreign rule version instead of comparing
+    apples to bolts)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     try:
+        import hashlib as _hashlib
+        import copy as _copy
+        import yaml as _yaml
+        state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                 "factions": [{"id": "a", "resources": {"muscle": "low"}},
+                              {"id": "b", "resources": {}}],
+                 "events": []}
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        proposals = [{"actor": "a", "action": "a acts", "target": "b",
+                      "resources_committed": {"coin": "medium"},
+                      "risk_acceptance": "medium"}]
+        resolve.set_rng(777)
+        outcomes = resolve.resolve_tick(proposals, state)
+        base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+        path = tick.save_replay(4, 777, proposals, outcomes, base_sha,
+                                _copy.deepcopy(state))
+        ok, message = tick.replay_verify(path)
+        assert ok, message
+        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(doc["base_state"], dict), \
+            "the resolver's input state is preserved with the replay"
+        doc["rule_version"] = 99
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, message = tick.replay_verify(path)
+        assert not ok and "rule version" in message
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: save -> verify reproduces; version mismatch refuses  OK")
+
+
+def test_replay_verifies_after_the_state_moved_on():
+    """The regression: replay records the PRE-week state hash, so verifying
+    right after the completed week failed — the state file had already
+    advanced (an isolated completed run could never verify). Schema 2
+    replays carry the resolver's input state, so verification is
+    self-contained and the moved-on live state is irrelevant."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-next-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import copy as _copy
         import hashlib as _hashlib
         import yaml as _yaml
         state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
@@ -396,24 +462,26 @@ def test_save_replay_and_replay_verify_round_trip():
         resolve.set_rng(777)
         outcomes = resolve.resolve_tick(proposals, state)
         base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
-        path = tick.save_replay(4, 777, proposals, outcomes, base_sha)
+        path = tick.save_replay(5, 777, proposals, outcomes, base_sha,
+                                _copy.deepcopy(state))
+        # the week completed: the clock advanced, the event landed
+        state["meta"]["clock"]["week"] = 5
+        state["events"].append({"week": 5, "actor": "a", "text": "a acted"})
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
         ok, message = tick.replay_verify(path)
-        assert ok, message
-        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
-        doc["rule_version"] = 99
-        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
-        ok, message = tick.replay_verify(path)
-        assert not ok and "rule version" in message
+        assert ok, f"verification right after the week must hold: {message}"
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
-    print("  replay trail: save -> verify reproduces; version mismatch refuses  OK")
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: verification holds right after the week  OK")
 
 
 def test_replay_verify_refuses_a_changed_base_state():
-    """The regression: replay_verify recorded base_state_sha256 but never
-    checked it, so it 'verified' against whatever state exists NOW — after
-    later weeks or DM edits, the outcomes were judged against data the week
-    never saw. A hash mismatch must refuse the comparison outright."""
+    """Legacy (schema 1) replays carry only the input state's file hash, and
+    replay_verify must refuse when the live state no longer matches it: the
+    re-resolution would otherwise judge the outcomes against data the week
+    never saw. (Schema 2 replays embed the input state and do not take this
+    path — see test_replay_verifies_after_the_state_moved_on.)"""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-stale-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
     tick.ROOT = root
@@ -432,7 +500,12 @@ def test_replay_verify_refuses_a_changed_base_state():
         resolve.set_rng(777)
         outcomes = resolve.resolve_tick(proposals, state)
         base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+        # a schema-1 replay: no embedded base_state, hash-only identity
         path = tick.save_replay(4, 777, proposals, outcomes, base_sha)
+        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc.pop("base_state", None)
+        doc["schema_version"] = 1
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
         # the world moved on: a later week ran (or the DM hand-edited)
         state["meta"]["clock"]["week"] = 9
         state["events"].append({"week": 9, "actor": "a", "text": "later history"})
@@ -449,7 +522,8 @@ def test_replay_verify_refuses_a_changed_base_state():
         assert ok, message
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
-    print("  replay trail: a changed base state refuses to verify  OK")
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: a legacy changed-base-state replay refuses  OK")
 
 
 def test_live_refuses_a_state_without_events_before_any_spend():
@@ -540,7 +614,69 @@ def test_budget_exhaustion_aborts_the_week_before_any_canon_write():
     finally:
         tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
             tick.llm.narrate_week, tick.save_state, tick.load_state = saved
+        shutil.rmtree(root, ignore_errors=True)
     print("  live: budget exhaustion aborts the week, canon untouched  OK")
+
+
+def test_save_replay_rerun_versions_like_chronicles():
+    """A rewind-and-rerun must not silently replace the old week's replay
+    trail (the old chronicle would cite a record that no longer backs it):
+    the second save for the same week writes week-N-2.yaml and leaves the
+    first file byte-identical."""
+    import hashlib as _hashlib
+    import copy as _copy
+    import yaml as _yaml
+
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-ver-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                 "factions": [{"id": "a", "resources": {"muscle": "low"}},
+                              {"id": "b", "resources": {}}],
+                 "events": []}
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        proposals = [{"actor": "a", "action": "a acts", "target": "b",
+                      "resources_committed": {"coin": "medium"},
+                      "risk_acceptance": "medium"}]
+        resolve.set_rng(777)
+        outcomes = resolve.resolve_tick(proposals, state)
+        base_sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+        first = tick.save_replay(4, 777, proposals, outcomes, base_sha,
+                                 _copy.deepcopy(state))
+        first_bytes = first.read_bytes()
+        second = tick.save_replay(4, 777, proposals, outcomes, base_sha,
+                                  _copy.deepcopy(state))
+        assert first.name == "week-4.yaml" and second.name == "week-4-2.yaml"
+        assert first.read_bytes() == first_bytes, "the first record survives"
+        ok, msg = tick.replay_verify(second)
+        assert ok, msg
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: same-week rerun versions, first record intact  OK")
+
+
+def test_replay_verify_reports_malformed_files_not_tracebacks():
+    """replay_verify's contract is (ok, message): a missing, unparsable, or
+    truncated replay file is a readable refusal, never an exception out of
+    main --replay."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-bad-"))
+    try:
+        ok, msg = tick.replay_verify(root / "no-such-file.yaml")
+        assert not ok and "unreadable or malformed" in msg, msg
+        bad = root / "broken.yaml"
+        bad.write_text("{[ not yaml", encoding="utf-8")
+        ok, msg = tick.replay_verify(bad)
+        assert not ok and "unreadable or malformed" in msg, msg
+        truncated = root / "truncated.yaml"
+        truncated.write_text("week: 4\n", encoding="utf-8")
+        ok, msg = tick.replay_verify(truncated)
+        assert not ok and "unreadable or malformed" in msg, msg
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: broken files refuse with a message  OK")
 
 
 if __name__ == "__main__":
@@ -563,7 +699,10 @@ if __name__ == "__main__":
         test_chronicle_slug_is_capped,
         test_replay_same_seed_same_outcomes,
         test_save_replay_and_replay_verify_round_trip,
+        test_replay_verifies_after_the_state_moved_on,
         test_replay_verify_refuses_a_changed_base_state,
+        test_save_replay_rerun_versions_like_chronicles,
+        test_replay_verify_reports_malformed_files_not_tracebacks,
     ]:
         fn()
     print("all tick tests passed")

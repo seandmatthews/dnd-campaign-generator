@@ -132,9 +132,18 @@ def _post_json(cfg, body, timeout, attempts=3):
     """POST and parse one completion response, retrying transient failures
     with a short backoff. The config is resolved once per call, not per
     attempt. Hard HTTP errors raise RuntimeError carrying a body snippet —
-    never a bare HTTPError."""
+    never a bare HTTPError. The per-run ceiling is checked and the call
+    counted BEFORE every attempt, retries included: a failed POST burns
+    provider time just like a successful one, and an unmetered retry loop
+    could spend past the ceiling with the counter still at zero."""
     last = None
     for attempt in range(attempts):
+        if _BUDGET["calls"] >= _BUDGET["limit"]:
+            raise BudgetExceeded(
+                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
+                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+                "incomplete; raise LLM_MAX_CALLS to allow a longer run")
+        _BUDGET["calls"] += 1
         if attempt:
             time.sleep(min(2 ** (attempt - 1), 4))
         req = urllib.request.Request(
@@ -186,6 +195,12 @@ def env_limit():
     except ValueError:
         return None
 
+# Process-global, like the engine itself: run_live resets it in begin_run.
+# Safe today ONLY because the engine is a single-threaded CLI and the studio
+# serializes tick/goals as subprocesses under ENGINE_LOCK — an in-process
+# embedding (a route calling run_live directly) would share and clobber one
+# meter across concurrent runs. studio/llm_client.py uses a thread-local
+# meter for exactly this reason; mirror it here before ever embedding.
 _BUDGET = {"calls": 0, "tokens": 0, "limit": env_limit() or 24}
 
 
@@ -210,8 +225,9 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     mid-sentence one — with finish_reason "length". When that happens,
     double the budget and retry, keeping the longest answer seen. Token
     usage is printed to stderr per call so cost is never invisible. The
-    per-run ceiling is re-checked before EVERY POST, including the
-    length-extension retries, so a single call cannot spend past it."""
+    per-run ceiling is enforced inside _post_json, before EVERY POST —
+    initial calls, length-extension retries, and HTTP retries alike — so no
+    attempt can spend past it (a failed attempt is metered too)."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -227,18 +243,13 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     }
     best = ""
     while True:
-        if _BUDGET["calls"] >= _BUDGET["limit"]:
-            raise BudgetExceeded(
-                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
-                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
-                "incomplete; raise LLM_MAX_CALLS to allow a longer run")
         data = _post_json(cfg, body, timeout)
-        _BUDGET["calls"] += 1
+        b = _BUDGET
         usage = data.get("usage") or {}
         if usage:
-            _BUDGET["tokens"] += int(usage.get("total_tokens") or 0)
-            print(f"  [llm] tokens (run meter ~{_BUDGET['calls']} calls / "
-                  f"~{_BUDGET['tokens']} tokens — estimates, not the "
+            b["tokens"] += int(usage.get("total_tokens") or 0)
+            print(f"  [llm] tokens (run meter ~{b['calls']} calls / "
+                  f"~{b['tokens']} tokens — estimates, not the "
                   f"provider's bill): prompt={usage.get('prompt_tokens', '?')} "
                   f"completion={usage.get('completion_tokens', '?')}", file=sys.stderr)
         choices = data.get("choices") if isinstance(data, dict) else None
