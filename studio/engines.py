@@ -47,10 +47,19 @@ def run_py(engine_root: Path, script: str, *args, timeout: int = 600,
     return _run(cmd, engine_root, timeout, on_line, env)
 
 
+def node_executable() -> str:
+    """The node binary Popen can actually launch. CreateProcess (Popen with
+    shell=False) resolves only .exe, while shutil.which honors PATHEXT and
+    can hand back a version manager's .cmd shim — doctor would green-light
+    it and every map job would die with 'engine not found for node'."""
+    return shutil.which("node.exe") or shutil.which("node") or "node"
+
+
 def run_node(engine_root: Path, *args, timeout: int = 600, on_line=None,
              env: dict = None):
     """[node, *args] with cwd=engine_root. Returns (rc, lines)."""
-    return _run(["node", *args], engine_root, timeout, on_line, env)
+    return _run([node_executable(), *args], engine_root, timeout, on_line,
+                env)
 
 
 def fmg_dir() -> Path:
@@ -86,9 +95,17 @@ def engine_state_backup_path() -> Path:
 
 
 def engine_replay_path(week) -> Path:
-    """The resolver's replay trail for one week (scratch; rides with the
-    proposal bundle)."""
-    return AGENTIC_SIMULATOR / "world" / "replay" / f"week-{week}.yaml"
+    """The resolver's newest replay trail for one week (scratch; rides with
+    the proposal bundle). Reruns version like chronicles — after a rewind
+    and re-run the record is week-N-2.yaml — so return the highest suffix
+    present; a fresh week still resolves to plain week-N.yaml."""
+    d = AGENTIC_SIMULATOR / "world" / "replay"
+    best = d / f"week-{week}.yaml"
+    n = 2
+    while (d / f"week-{week}-{n}.yaml").is_file():
+        best = d / f"week-{week}-{n}.yaml"
+        n += 1
+    return best
 
 
 def engine_chronicle_dir() -> Path:

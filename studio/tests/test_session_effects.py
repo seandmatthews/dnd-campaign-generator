@@ -61,7 +61,7 @@ def test_session_effects_end_to_end(client, tmp_spine_root):
                           "after": "none",
                           "reason": "The party destroyed the treasury."}],
                 week=7)
-    assert r.status_code == 202, r.text
+    assert r.status_code == 200, r.text
     pid = r.json()["proposal_id"]
     assert r.json()["kind"] == "session_effects"
 
@@ -110,7 +110,7 @@ def test_session_effects_end_to_end(client, tmp_spine_root):
 def test_session_proposal_blocks_second_session_and_discard_frees(
         client, tmp_spine_root):
     r = _submit(client, events=[{"actor": "wardens", "text": "Something."}])
-    assert r.status_code == 202
+    assert r.status_code == 200
     pid = r.json()["proposal_id"]
     r = _submit(client, events=[{"actor": "wardens", "text": "More."}])
     assert r.status_code == 409
@@ -120,7 +120,7 @@ def test_session_proposal_blocks_second_session_and_discard_frees(
     before = (tmp_spine_root / "testvale" / "simulation" / "state.yaml"
               ).read_bytes()
     r = _submit(client, events=[{"actor": "wardens", "text": "More."}])
-    assert r.status_code == 202
+    assert r.status_code == 200
     assert (tmp_spine_root / "testvale" / "simulation" / "state.yaml"
             ).read_bytes() == before
 
@@ -170,7 +170,7 @@ def test_session_accept_validates_base_revision(client, tmp_spine_root):
                                   "resource": "coin",
                                   "after": "none",
                                   "reason": "Treasury destroyed."}])
-    assert r.status_code == 202
+    assert r.status_code == 200
     pid = r.json()["proposal_id"]
     path = tmp_spine_root / "testvale" / "simulation" / "state.yaml"
     path.write_bytes(path.read_bytes() + b"# external edit\n")

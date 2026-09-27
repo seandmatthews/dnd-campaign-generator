@@ -12,6 +12,7 @@ legacy timeline-only reviews, and week effects land only on accept."""
 import hashlib
 import json
 
+import pytest
 import yaml
 
 import engines
@@ -217,6 +218,32 @@ def test_get_proposal_reads_bundle_and_accept_publishes_once(
     # the proposal is closed, so a NEW week can be generated
     assert client.get(
         "/api/campaign/testvale/simulation/proposal").json()["proposal"] is None
+
+
+def test_accept_reads_chronicle_meta_from_the_bundle_not_scratch(
+        client, tmp_spine_root, monkeypatch):
+    """The regression: acceptance parsed chronicle metadata from the SHARED
+    engine home — another campaign's week or a forecast clears that scratch
+    between staging and accept, and the accept died on FileNotFoundError
+    despite an intact bundle. The meta is pinned into the manifest at
+    staging time, so scratch disappearing must not matter."""
+    import shutil
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    shutil.rmtree(tmp_spine_root / "engine-home" / "chronicle")
+    r = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r.status_code == 200, r.text
+    assert r.json()["week"] == 4
+
+
+def test_chronicle_meta_from_texts_parses_the_bundle():
+    from routers.simulation import _chronicle_meta_from_texts
+    meta = _chronicle_meta_from_texts(
+        {"0004-the-gate.md": "# Week 4 — The Gate\n\nProse.\n"})
+    assert meta == {"week": 4, "title": "The Gate",
+                    "file": "simulation/chronicle/0004-the-gate.md"}
+    assert _chronicle_meta_from_texts({}) is None
 
 
 def test_accept_after_restart_is_still_idempotent(
@@ -443,6 +470,56 @@ def test_accept_and_discard_refuse_unknown_proposal_ids(
     r = client.post(
         f"/api/campaign/testvale/simulation/proposal/{pid}/discard")
     assert r.status_code == 409 and "not pending" in r.json()["error"]
+
+
+def test_damaged_bundle_discards_cleanly_and_frees_the_slot(
+        client, tmp_spine_root, monkeypatch):
+    """GET proposal maps a damaged bundle to a 422 that tells the DM to
+    discard it — the discard itself used to 500 on the same damage (raw
+    yaml.safe_load in set_status). Discard must stay the working exit."""
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    manifest_path = (tmp_spine_root / "testvale" / "simulation" /
+                     "proposals" / pid / "proposal.yaml")
+    manifest_path.write_text("{[ this is not yaml", encoding="utf-8")
+
+    # accept cannot even load the bundle (proposals.load refuses a damaged
+    # manifest) — the DM's exit is discard, exercised below; blind accept is
+    # refused at the set_status layer (unit-pinned in the non-dict test)
+    r = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r.status_code == 404
+
+    # discard replaces the unreadable manifest with a stub receipt
+    r = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/discard")
+    assert r.status_code == 200 and r.json()["discarded"] == pid
+    m = proposals.load("testvale", pid)["manifest"]
+    assert m["status"] == "discarded"
+    assert "unreadable" in m["decision_note"]
+
+    # the wedged slot is free: another week can stage a fresh proposal
+    job2 = _run_week(client, monkeypatch, tmp_spine_root)
+    assert job2["status"] == "done", job2["error"]
+    assert job2["result"]["proposal_id"] != pid
+
+
+def test_damaged_bundle_non_dict_manifest_unit(tmp_spine_root, monkeypatch):
+    """A manifest that parses but is not a mapping takes the same road."""
+    job_pid = "hand-damaged"
+    bdir = (tmp_spine_root / "testvale" / "simulation" /
+            "proposals" / job_pid)
+    (bdir / "artifacts").mkdir(parents=True)
+    (bdir / "proposal.yaml").write_text("- just\n- a list\n", encoding="utf-8")
+    with pytest.raises(proposals.ProposalError) as exc:
+        proposals.set_status("testvale", job_pid, "accepted")
+    assert "damaged" in str(exc.value)
+    m = proposals.set_status("testvale", job_pid, "discarded",
+                             decided_note="by hand")
+    assert m["status"] == "discarded" and "unreadable" in m["decision_note"]
+    assert yaml.safe_load(
+        (bdir / "proposal.yaml").read_text(encoding="utf-8"))["status"] == \
+        "discarded"
 
 
 def test_week_run_fast_fails_while_the_engine_is_busy(

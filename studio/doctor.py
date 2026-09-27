@@ -134,12 +134,17 @@ def _version_of(cmd, cwd=None):
 
 
 def check_node():
-    where = shutil.which("node")
-    if not where:
+    import engines
+    # resolve exactly what engines.run_node will launch: a version manager's
+    # .cmd shim satisfies shutil.which but CreateProcess (shell=False) can
+    # not execute it, so doctor used to green-light a node no job could run
+    where = engines.node_executable()
+    if where == "node":
         return _mk("node", False, "not on PATH",
                    fix="install Node 18+ (https://nodejs.org) — the map engines need it")
-    ran, line = _version_of(["node", "--version"])
-    return _mk("node", ran, f"on PATH at {where}" + (f" ({line})" if ran else f" ({line})"),
+    ran, line = _version_of([where, "--version"])
+    note = "" if where.lower().endswith(".exe") else         " (a non-.exe shim — jobs may not be able to launch it)"
+    return _mk("node", ran, f"launching {where}" + (f" ({line})" if ran else f" ({line})") + note,
                fix=None if ran else "node exists but would not run")
 
 

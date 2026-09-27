@@ -269,7 +269,7 @@ shapes in this document true.
 - `GET /api/campaign/{name}/simulation/proposal` → the pending bundle
   (`{"proposal":null}` when none): `{"proposal":{"proposal_id","kind",
   "status","base_week","proposed_week","created","run_record",
-  "base_revisions","input_set_revisions"},"diff":{clock,resources,fields,
+  "base_revisions","input_set_revisions (advisory: what the run READ, not enforced at accept)"},"diff":{clock,resources,fields,
   events_added,rumors_added,timeline_entries},"entries":[...],
   "updates":[...],"findings":[...],"chronicles":[{file,title,markdown}]}`.
   `kind` is `simulated_week` | `session_effects` | `goal_updates`;
@@ -296,7 +296,8 @@ shapes in this document true.
   "effects"?:[{"type":"set_resource","faction_id","resource":
   "coin|muscle|legitimacy","after":"none|low|medium|high","reason":str,
   "expected_before"?:str,"id"?:str} | {"type":"set_field","faction_id",
-  "field":"goal|kind|secret","after":str,"reason":str,...}]}` → 202,
+  "field":"goal|kind|secret","after":str,"reason":str,...}]}` → 200
+  (synchronous — the engine validation runs in-request),
   stages a `session_effects` proposal. Events are HISTORY ONLY (recorded
   verbatim, no mechanical effect); effects are the reviewed state changes,
   validated by the engine's own code via CLI (`src/effects.py --check`,

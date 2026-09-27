@@ -698,6 +698,14 @@ def name_candidates(campaign_dir, culture, count=8, hint=""):
     Fed-or-refused: no names-<culture>.txt, no generation (guardrail 4)."""
     campaign_dir = pathlib.Path(campaign_dir)
     count = max(1, min(12, int(count or 8)))
+    # culture is spliced into a filename below; a `..` or separator in it
+    # would read outside the campaign and ship the file to the provider
+    if not isinstance(culture, str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]{1,40}", culture.strip()):
+        raise FedOrRefused(
+            f"culture '{culture}' is not a valid culture tag (letters, "
+            "digits, '-' and '_' only)")
+    culture = culture.strip()
     style = _style_dir(campaign_dir)
     names_path = None
     for candidate in (style / f"names-{culture}.txt",

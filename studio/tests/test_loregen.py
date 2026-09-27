@@ -82,6 +82,31 @@ def test_names_route_422_without_seed_list(client, tmp_spine_root):
     assert "seed list" in r.json()["error"]
 
 
+@pytest.mark.parametrize("culture", [
+    "../../secret",
+    r"..\..\secret",
+    "a/b",
+    "..",
+    "shadian; drop table",
+    "names-shadian",
+])
+def test_names_refuse_unsafe_culture(tmp_spine_root, monkeypatch, culture):
+    """culture is spliced into lore/style/names-<culture>.txt — anything
+    separator-ish must be refused before a path is built, or a crafted
+    tag reads an arbitrary file and ships its contents to the provider."""
+    calls = _canned_llm(monkeypatch)
+    with pytest.raises(loregen.FedOrRefused):
+        loregen.name_candidates(tmp_spine_root / CAMP, culture, 5)
+    assert calls == []
+
+
+def test_names_route_422_on_unsafe_culture(client, tmp_spine_root):
+    r = client.post(f"/api/campaign/{CAMP}/lore/name",
+                    json={"culture": "../../secret", "count": 5})
+    assert r.status_code == 422
+    assert "culture" in r.json()["error"]
+
+
 # 2. The entries job: staging shape, lowest free N, findings, untouched spine
 
 

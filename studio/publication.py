@@ -55,6 +55,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 import uuid
@@ -128,6 +129,37 @@ def fingerprint_dir(path: Path) -> str:
         return ABSENT
     lines = sorted(
         f"{p.name}\t{file_revision(p)}" for p in path.iterdir() if p.is_file())
+    return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
+
+
+def fingerprint_dir_after(campaign_dir: Path, rel_dir: str,
+                          writes: list) -> str:
+    """fingerprint_dir as it will read once `writes` land: the batch's own
+    files replace or create direct children (revision = the staged bytes')
+    and deletes drop them; untouched children keep their on-disk revisions
+    (the transaction is atomic, so no mid-state is ever observable). A
+    draft's input_fingerprints must carry forward across its own approval —
+    approving one entry stubs pages into the pinned lore/entities, and a
+    stale fingerprint would 409 the next entry in the same draft. ABSENT
+    when the directory does not exist and the batch creates nothing in it."""
+    d = campaign_dir / rel_dir
+    members: dict = {}
+    if d.is_dir():
+        members = {p.name: file_revision(p)
+                   for p in d.iterdir() if p.is_file()}
+    prefix = rel_dir.rstrip("/") + "/"
+    for w in writes:
+        rel = str(w.get("path") or "")
+        rest = rel[len(prefix):] if rel.startswith(prefix) else None
+        if rest is None or "/" in rest:
+            continue  # outside the directory, or not a direct child
+        if w.get("delete"):
+            members.pop(rest, None)
+        else:
+            members[rest] = revision_of_bytes(w.get("text") or "")
+    if not members and not d.is_dir():
+        return ABSENT
+    lines = sorted(f"{name}\t{rev}" for name, rev in members.items())
     return hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
 
 
@@ -297,7 +329,17 @@ def unresolved_conflicts(name: str) -> list[dict]:
 def ensure_publishable(name: str) -> None:
     """Publication-path writers call this first: an unresolved recovery
     conflict blocks new publications (the pending files and state the new
-    write would build on are exactly what is in question)."""
+    write would build on are exactly what is in question), and so does an
+    OPEN transaction — a publication that crashed mid-flight and has not
+    been recovered. Building on half-published state converts the crash
+    into a boot-time conflict that parks the whole campaign; refusing here
+    keeps it a restart-away-from-fixed condition instead."""
+    open_txs = [t for t in transactions(name) if t["status"] == "open"]
+    if open_txs:
+        raise PublicationConflictError(
+            "an earlier publication crashed mid-flight and awaits "
+            "recovery — restart the studio to recover it, then write "
+            f"(transactions: {', '.join(t['transaction'] for t in open_txs)})")
     conflicts = unresolved_conflicts(name)
     if conflicts:
         files = sorted({f for c in conflicts for f in c["conflicts"]})
@@ -374,12 +416,20 @@ def publish(name: str, writes: list[dict], *, operation: str,
         "campaign": name,
         "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "status": "open",
+        # staged flips True once the images are on disk — a tx that died
+        # before that applied NOTHING (staging precedes every live write),
+        # so recovery drops it instead of parking the campaign
+        "staged": False,
         "idempotency_key": idempotency_key,
         "targets": [{k: v for k, v in t.items() if not k.startswith("_")}
                     for t in targets],
         "conflicts": [],
         "snapshot": None,
     }
+    # manifest before anything else: an OSError during image staging must
+    # not leave a manifest-less orphan that transactions() and recovery
+    # both skip forever
+    _write_json(tx_dir / "manifest.json", manifest)
     try:
         for t in targets:
             if t["_text"] is not None:
@@ -389,6 +439,7 @@ def publish(name: str, writes: list[dict], *, operation: str,
                 # "what was here" both read the manifest's ground truth
                 _write_image(tx_dir, "before", t["path"],
                              _read_live(d, t["path"]))
+        manifest["staged"] = True
         _write_json(tx_dir / "manifest.json", manifest)
         # ---- staging done; from here the transaction WILL be applied ----
         for t in targets:
@@ -435,7 +486,7 @@ def recover_campaign(name: str) -> dict:
     transactions whose history snapshot failed get one snapshot retry
     (pruned on success, retained otherwise). Never raises for one bad
     transaction — it parks and the rest recover."""
-    out = {"recovered": [], "conflicts": [], "pruned": []}
+    out = {"recovered": [], "conflicts": [], "pruned": [], "dropped": []}
     root = spine.campaign_dir(name) / TX_DIR_NAME
     if not root.is_dir():
         return out
@@ -448,6 +499,16 @@ def recover_campaign(name: str) -> dict:
                 _retry_snapshot(name, tx_dir, m, out)
             continue
         tx_id = m.get("transaction") or tx_dir.name
+        # staging never finished -> nothing was applied (staging precedes
+        # every live write), so drop the orphan instead of parking the
+        # campaign as a conflict it cannot resolve. Legacy open manifests
+        # predate the staged flag: assume staged and recover as before.
+        if not m.get("staged", True):
+            shutil.rmtree(tx_dir, ignore_errors=True)
+            log.info("dropped unstaged transaction %s for %s "
+                     "(crashed before any live write)", tx_id, name)
+            out["dropped"].append(tx_id)
+            continue
         conflicts = []
         try:
             for t in m.get("targets") or []:

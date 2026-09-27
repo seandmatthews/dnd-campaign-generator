@@ -152,14 +152,16 @@ def test_publish_refuses_unsafe_targets(tmp_spine_root):
         try:
             publication.publish("testvale", [{"path": bad, "text": "x"}],
                                 operation="bad")
-        except publication.PublicationError:
-            pass
+        except publication.PublicationError as e:
+            # the refusal names the rejected path — that is the contract;
+            # the old test additionally probed the real C:/ root, a read
+            # outside the sandbox this suite owns
+            # control characters are repr-escaped in the message
+            assert bad in str(e) or ascii(bad)[1:-1] in str(e), (bad, e)
         else:  # pragma: no cover
             raise AssertionError(f"unsafe target accepted: {bad!r}")
     assert not (tmp_spine_root.parent / "escape.yaml").exists()
     assert not (tmp_spine_root.parent / "evil.yaml").exists()
-    assert not pathlib.Path("C:/evil.yaml").exists(), \
-        "a drive-qualified target must be refused before any write"
 
 
 def test_stale_base_revision_conflicts_and_writes_nothing(tmp_spine_root):
@@ -568,3 +570,114 @@ def test_publication_resolve_discard_keeps_live_bytes(client, tmp_spine_root):
     # the conflict is cleared: publication writers work again
     publication.publish("testvale", [{"path": "lore/z.yaml", "text": "z"}],
                         operation="post-discard")
+
+
+# --------------------------------------------------- open-tx gating (2026-09-26)
+
+
+def test_open_transaction_blocks_new_publications(tmp_spine_root):
+    """A crashed-mid-flight (open, staged) transaction must refuse new
+    publications: building on half-published state used to be allowed and
+    converted the crash into a boot-time conflict at next restart."""
+    (tmp_spine_root / "testvale" / "lore").mkdir(parents=True, exist_ok=True)
+    (tmp_spine_root / "testvale" / "lore" / "a.yaml").write_text(
+        "before\n", encoding="utf-8")
+    with _crash_after(0):
+        try:
+            publication.publish("testvale",
+                                [{"path": "lore/a.yaml", "text": "after\n"}],
+                                operation="crasher")
+        except RuntimeError:
+            pass
+    open_txs = [t for t in publication.transactions("testvale")
+                if t["status"] == "open"]
+    assert open_txs, "the crashed publication is left open for recovery"
+    try:
+        publication.publish("testvale",
+                            [{"path": "lore/b.yaml", "text": "new\n"}],
+                            operation="follower")
+        raise AssertionError("publish must refuse while a tx is open")
+    except publication.PublicationConflictError as e:
+        assert "restart" in str(e), str(e)
+    assert not (tmp_spine_root / "testvale" / "lore" / "b.yaml").exists()
+    # and boot recovery clears the way again
+    out = publication.recover_campaign("testvale")
+    assert out["recovered"], out
+    publication.publish("testvale",
+                        [{"path": "lore/b.yaml", "text": "new\n"}],
+                        operation="post-recovery")
+
+
+def test_unstaged_transaction_is_dropped_not_parked(tmp_spine_root):
+    """An orphan whose staging never finished (staged: false, no images)
+    applied nothing by construction — recovery drops it instead of parking
+    the campaign as a conflict nothing can resolve. Legacy manifests without
+    the flag still take the roll-forward path."""
+    d = tmp_spine_root / "testvale"
+    (d / "lore").mkdir(parents=True, exist_ok=True)
+    tx_dir = d / publication.TX_DIR_NAME / "20260101T000000-deadbeef"
+    tx_dir.mkdir(parents=True)
+    (tx_dir / "manifest.json").write_text(json.dumps({
+        "schema_version": publication.MANIFEST_SCHEMA,
+        "transaction": "20260101T000000-deadbeef",
+        "operation": "orphan", "campaign": "testvale",
+        "status": "open", "staged": False,
+        "targets": [{"path": "lore/never.yaml", "delete": False,
+                     "before": publication.ABSENT,
+                     "after": publication.ABSENT}],
+        "conflicts": [], "snapshot": None,
+    }), encoding="utf-8")
+    out = publication.recover_campaign("testvale")
+    assert out["dropped"] == ["20260101T000000-deadbeef"], out
+    assert not tx_dir.exists(), "the orphan is gone"
+    assert not (d / "lore" / "never.yaml").exists(), "nothing was applied"
+    # the way is clear — no parked conflict
+    publication.ensure_publishable("testvale")
+
+
+def test_crash_inside_recovery_converges_on_next_boot(tmp_spine_root):
+    """Recovery itself can crash mid roll-forward (power loss during boot):
+    the tx stays open with some targets already applied; the NEXT recovery
+    must converge to complete, never double-apply or park."""
+    (tmp_spine_root / "testvale" / "lore").mkdir(parents=True, exist_ok=True)
+    (tmp_spine_root / "testvale" / "lore" / "a.yaml").write_text(
+        "a0\n", encoding="utf-8")
+    (tmp_spine_root / "testvale" / "lore" / "b.yaml").write_text(
+        "b0\n", encoding="utf-8")
+    with _crash_after(1):  # first live write lands, second crashes
+        try:
+            publication.publish(
+                "testvale",
+                [{"path": "lore/a.yaml", "text": "a1\n"},
+                 {"path": "lore/b.yaml", "text": "b1\n"}],
+                operation="two-target crash")
+        except RuntimeError:
+            pass
+    # recovery crashes halfway too
+    with _crash_after(0):
+        try:
+            publication.recover_campaign("testvale")
+        except RuntimeError:
+            pass
+    out = publication.recover_campaign("testvale")
+    assert out["recovered"], out
+    assert (tmp_spine_root / "testvale" / "lore" / "a.yaml").read_text(
+        encoding="utf-8") == "a1\n"
+    assert (tmp_spine_root / "testvale" / "lore" / "b.yaml").read_text(
+        encoding="utf-8") == "b1\n", "the second target still rolled forward"
+    open_txs = [t for t in publication.transactions("testvale")
+                if t["status"] == "open"]
+    assert not open_txs, "the transaction is complete, not wedged"
+
+
+def test_different_campaigns_do_not_block_each_other(tmp_spine_root):
+    """The per-campaign lock is per campaign: a held testvale lock must not
+    stop a publication to a different campaign."""
+    other = tmp_spine_root / "otherville"
+    other.mkdir(parents=True, exist_ok=True)
+    with spine.campaign_lock("testvale"):
+        pub = publication.publish(
+            "otherville", [{"path": "lore/x.yaml", "text": "x\n"}],
+            operation="parallel campaign")
+    assert pub["state"] == "published"
+    assert (other / "lore" / "x.yaml").read_text(encoding="utf-8") == "x\n"

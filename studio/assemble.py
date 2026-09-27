@@ -401,10 +401,10 @@ def build_entities(camp, state):
         entities.append(
             {
                 "id": fid,
-                "kind": f["kind"],
-                "name": f["name"],
+                "kind": f.get("kind") or "unknown",
+                "name": f.get("name") or fid,
                 "aliases": list(FACTION_ALIASES[fid]),
-                "note": f["goal"].strip(),
+                "note": (f.get("goal") or "").strip(),
             }
         )
     entities.extend(

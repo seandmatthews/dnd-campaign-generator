@@ -109,7 +109,7 @@ def test_integrated_completion_scenario(client, tmp_spine_root, monkeypatch,
                      "resource": "coin", "expected_before": "medium",
                      "after": "none",
                      "reason": TREASURY_TEXT}]})
-    assert r.status_code == 202, r.text
+    assert r.status_code == 200, r.text  # the session route is sync 200
     pid_session = r.json()["proposal_id"]
     r = client.post(f"/api/campaign/testvale/simulation/proposal/"
                     f"{pid_session}/accept")

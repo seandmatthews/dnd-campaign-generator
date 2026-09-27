@@ -65,14 +65,17 @@ def _save(name: str, doc: dict) -> None:
 
 
 def source_revision(name: str, fact: dict) -> str:
-    """The CURRENT revision of the fact's source file, or ABSENT."""
+    """The CURRENT revision of the fact's source file, or ABSENT. An unsafe
+    (traversal) path — possible in hand-edited canon written before
+    validation existed — reads as ABSENT, never probed."""
     rel = str(fact.get("source_file") or "")
     if not rel:
         return publication.ABSENT
     try:
-        return publication.file_revision(spine.campaign_dir(name) / rel)
-    except spine.CampaignNotFound:
+        target = publication._safe_target(spine.campaign_dir(name), rel)
+    except (spine.CampaignNotFound, publication.PublicationError):
         return publication.ABSENT
+    return publication.file_revision(target)
 
 
 def with_staleness(name: str, doc: dict) -> list:
@@ -130,8 +133,17 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
     if subjects is not None:
         fact["subjects"] = [str(s) for s in subjects]
     if source_file:
-        rel = str(source_file).replace("\\", "/")
-        rev = publication.file_revision(spine.campaign_dir(name) / rel)
+        # the path rides a validated target: a '..' or absolute rel would
+        # hash an arbitrary file outside the campaign (and re-hash it on
+        # every GET — a stale/fresh oracle) and pin the traversal into canon
+        try:
+            target = publication._safe_target(spine.campaign_dir(name),
+                                              str(source_file))
+        except publication.PublicationError as e:
+            raise KnowledgeError(str(e))
+        rel = target.relative_to(
+            spine.campaign_dir(name).resolve()).as_posix()
+        rev = publication.file_revision(target)
         if rev == publication.ABSENT:
             raise KnowledgeError(f"no such source file: {rel}")
         fact["source_file"] = rel

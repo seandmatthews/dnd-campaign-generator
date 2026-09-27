@@ -20,6 +20,7 @@ the existing source. Every drawn shape is a derived artifact of the dump.
 
 import json
 import math
+import re
 from pathlib import Path
 
 # parchment-atlas palette (schematic mode)
@@ -72,8 +73,11 @@ def _cell_path(points) -> str:
 
 
 def _state_color(state) -> str:
+    # fullmatch, not startswith: the color is interpolated into a fill
+    # attribute, so a crafted/corrupt dump value like '#"><svg' would
+    # otherwise corrupt (or inject into) the generated map.svg
     c = state.get("color") if isinstance(state, dict) else None
-    if isinstance(c, str) and c.startswith("#") and 4 <= len(c) <= 9:
+    if isinstance(c, str) and re.fullmatch(r"#[0-9a-fA-F]{3,8}", c):
         return c
     return LAND
 
@@ -175,7 +179,9 @@ def render_dump_svg(data: dict, out: Path) -> dict:
             continue
         n_st_cells = state_cell_counts.get(st.get("i"), 0)
         pole = st.get("pole")
-        if n_st_cells < _MIN_STATE_CELLS_FOR_LABEL or not pole:
+        # a malformed pole (wrong shape, non-numbers) must not raise inside
+        # the render — skip the label, keep the map
+        if n_st_cells < _MIN_STATE_CELLS_FOR_LABEL                 or not isinstance(pole, (list, tuple)) or len(pole) < 2                 or not all(isinstance(v, (int, float)) for v in pole[:2]):
             continue
         n_labels += 1
         size = 9 + min(7.0, math.sqrt(n_st_cells) / 4.0)

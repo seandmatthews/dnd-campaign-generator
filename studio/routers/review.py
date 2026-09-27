@@ -418,13 +418,31 @@ def _prior_result(name: str, body: ReviewBody, op: str,
                   content_fallback: str):
     """The recorded result for this exact request, when one exists. With a
     viewed revision the receipt is reachable even after the pending file is
-    gone (a full approval deletes it) — that retry must answer, not 404."""
-    if body.expected_revision:
-        prior = publication.receipt(
-            name, _idempotency_key(name, body, op, content_fallback))
-        if prior:
-            return {**prior, "idempotent": True}
-    return None
+    gone (a full approval deletes it) — that retry must answer, not 404.
+
+    The crash window (publish landed, receipt never written) is answered
+    from the transaction the publish recorded under the same idempotency
+    key, mirroring the accept route; the reconstructed counts carry
+    reconstructed: true so a client never mistakes them for a fresh read."""
+    if not body.expected_revision:
+        return None
+    key = _idempotency_key(name, body, op, content_fallback)
+    prior = publication.receipt(name, key)
+    if prior:
+        return {**prior, "idempotent": True}
+    tx = publication.transaction_for_key(name, key)
+    if tx is None:
+        return None
+    m = re.match(rf"{op} (\d+) pending entries",
+                 str(tx.get("operation") or ""))
+    result = {("approved" if op == "approve" else "deleted"):
+              int(m.group(1)) if m else 0,
+              "transaction": tx.get("transaction"),
+              "reconstructed": True}
+    if tx.get("snapshot"):
+        result["snapshot"] = tx["snapshot"]
+    publication.record_receipt(name, key, result)
+    return {**result, "idempotent": True}
 
 
 def _receipt_key(name: str, body: ReviewBody, op: str,
@@ -475,7 +493,13 @@ def post_approve(name: str, body: ReviewBody):
             for rel, rev in (doc.get("base_revisions") or {}).items():
                 base[str(rel)] = str(rev)
             for rel, fp in (doc.get("input_fingerprints") or {}).items():
-                current = publication.fingerprint_dir(d / rel)
+                try:
+                    fp_dir = publication._safe_target(d, str(rel))
+                except publication.PublicationError as e:
+                    # input_fingerprints is hand-editable; a traversal in it
+                    # must refuse, never probe directories outside the vault
+                    raise HTTPException(status_code=422, detail=str(e))
+                current = publication.fingerprint_dir(fp_dir)
                 if current != fp:
                     raise publication.RevisionConflict(
                         f"{rel} membership changed since this draft was "
@@ -518,6 +542,27 @@ def post_approve(name: str, body: ReviewBody):
                     if k not in set(chosen_idx)]
             if keep:
                 out_doc = {k: v for k, v in doc.items() if k != "entries"}
+                # the remaining entries' provenance must carry forward across
+                # what THIS approval itself changed: it rewrites timeline.yaml
+                # (which the draft pinned as a source) and stubs pages into
+                # pinned lore/entities — left stale, approving the next entry
+                # 409s against a base revision this very batch moved. The
+                # draft records the POST-write revision (what disk will hold
+                # once this publish lands); `base` itself keeps the draft's
+                # pre-write pin — it is checked against current disk, now.
+                pinned = dict(out_doc.get("base_revisions") or {})
+                for w in writes:
+                    rel = w["path"]
+                    if rel in pinned and not w.get("delete"):
+                        pinned[rel] = publication.revision_of_bytes(w["text"])
+                out_doc["base_revisions"] = pinned
+                fps = dict(out_doc.get("input_fingerprints") or {})
+                for rel in fps:
+                    prefix = rel.rstrip("/") + "/"
+                    if any(w["path"].startswith(prefix) for w in writes):
+                        fps[rel] = publication.fingerprint_dir_after(
+                            d, rel, writes)
+                out_doc["input_fingerprints"] = fps
                 out_doc["entries"] = keep
                 writes.append({
                     "path": inside,

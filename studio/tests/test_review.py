@@ -2,6 +2,11 @@
 pending-file traversal guards. check.py is real here (structural layer is
 zero-dep); the one findings-attachment test fakes it for determinism."""
 
+import unittest.mock as mock
+
+import pytest
+
+import publication
 import yaml
 
 LORE_PENDING = {
@@ -163,6 +168,53 @@ def test_approve_keeps_t_ids_and_refuses_duplicates(client, tmp_spine_root):
     assert not path.exists()
 
 
+def test_partial_approve_keeps_the_rest_approvable(client, tmp_spine_root):
+    """The regression: approving ONE entry of a multi-entry draft rewrote
+    timeline.yaml (and stubbed pages into pinned lore/entities), but the
+    remaining draft kept its original provenance — approving the next
+    entry 409'd, even after a refresh, against a base revision this very
+    approval had moved. The remaining entries' provenance must carry
+    forward across the approval's own writes."""
+    import publication
+    d = tmp_spine_root / "testvale"
+    doc = {
+        "entries": [
+            {"id": "p1-1", "when": "week 1", "title": "First",
+             "text": "First authored entry.", "source": "authored",
+             "new_names": ["Nocksbury"]},
+            {"id": "p1-2", "when": "week 1", "title": "Second",
+             "text": "Second authored entry.", "source": "authored"},
+        ],
+        "created": "2026-09-26T00:00:00+00:00", "focus": "",
+        # the provenance loregen writes: sources pinned by revision, fed
+        # directories pinned by membership fingerprint
+        "base_revisions": {
+            "lore/timeline.yaml":
+                publication.file_revision(d / "lore" / "timeline.yaml"),
+        },
+        "input_fingerprints": {
+            "lore/entities":
+                publication.fingerprint_dir(d / "lore" / "entities"),
+        },
+    }
+    path = _write_pending(tmp_spine_root, "lore/pending-entries-5.yaml", doc)
+    rel = "lore/pending-entries-5.yaml"
+
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": rel, "ids": ["p1-1"]})
+    assert r.status_code == 200, r.json()
+    assert r.json()["stubs"] == 1, "the new name was stubbed into the vault"
+    assert path.exists(), "the remaining entry stays pending"
+
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": rel, "all": True})
+    assert r.status_code == 200, \
+        f"the second approve must not 409 on its own approval's changes: {r.json()}"
+    titles = [e["title"] for e in _timeline_entries(tmp_spine_root)][-2:]
+    assert titles == ["First", "Second"], "both entries landed, in order"
+    assert not path.exists()
+
+
 def test_delete_removes_entries_and_empty_file(client, tmp_spine_root):
     path = _write_pending(tmp_spine_root, "lore/pending-entries-9.yaml", {
         "entries": [
@@ -211,3 +263,41 @@ def test_review_empty_queue(client, tmp_spine_root):
 def test_unknown_campaign_404(client, spine_root):
     r = client.get("/api/campaign/nosuch/review")
     assert r.status_code == 404 and "error" in r.json()
+
+
+def test_approve_retry_after_crash_between_publish_and_receipt(
+        client, tmp_spine_root, monkeypatch):
+    """The crash window: the approval PUBLISHED, then record_receipt died.
+    The retry's receipt lookup misses and the pending file is already gone
+    — the answer must be reconstructed from the transaction recorded under
+    the same idempotency key (mirroring the accept route), never a 404 with
+    the work landed but unacknowledged."""
+    import publication
+    _write_pending(tmp_spine_root, "lore/pending-entries-4.yaml",
+                   LORE_PENDING)
+    rel = "lore/pending-entries-4.yaml"
+    revision = publication.file_revision(
+        tmp_spine_root / "testvale" / rel)
+    body = {"file": rel, "all": True, "expected_revision": revision}
+
+    # record_receipt sits OUTSIDE the route's try: the injected crash
+    # propagates (that IS the crash-window scenario) with the publish landed
+    with mock.patch.object(publication, "record_receipt",
+                           side_effect=RuntimeError("injected crash")):
+        with pytest.raises(RuntimeError, match="injected crash"):
+            client.post("/api/campaign/testvale/review/approve", json=body)
+    assert not (tmp_spine_root / "testvale" / rel).exists()
+    assert any(e["id"] == "t0003" for e in _timeline_entries(tmp_spine_root)), \
+        "the approval actually landed"
+
+    r = client.post("/api/campaign/testvale/review/approve", json=body)
+    assert r.status_code == 200, r.text
+    assert r.json()["idempotent"] is True
+    assert r.json()["reconstructed"] is True
+    assert r.json()["approved"] == 1
+    assert r.json()["transaction"], "the original transaction is cited"
+    # a third retry is served from the recorded receipt: the same answer,
+    # still idempotent, nothing re-applied
+    r2 = client.post("/api/campaign/testvale/review/approve", json=body)
+    assert r2.status_code == 200 and r2.json() == r.json()
+    assert len(_timeline_entries(tmp_spine_root)) == 3,         "t0003 landed exactly once across all three calls"

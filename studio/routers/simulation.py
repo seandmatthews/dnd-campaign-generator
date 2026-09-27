@@ -574,13 +574,18 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
                       for fn in new_files}
         entries = build_week_entries(proposed_week,
                                      after_doc.get("events") or [])
+        # parse the chronicle meta NOW, while the engine home still holds
+        # this run's files — by accept time another campaign's week or a
+        # forecast may have replaced them (the bundle is the durable copy)
+        chron = _chronicle_meta(new_files)
         pid = proposals.create(
             name, base_week=base_week, proposed_week=proposed_week,
             base_revisions=base_revisions,
             input_set_revisions=input_set_revisions,
             artifacts={"state": new_state_text, "chronicles": chronicles,
                        "entries": entries, "replay": replay_text},
-            run_record=run_record, before_state=base_doc)
+            run_record=run_record, before_state=base_doc,
+            chronicle_meta=chron)
         log(f"proposed week {proposed_week} staged ({pid}) — nothing in the "
             "campaign has changed; review it, then accept or discard")
 
@@ -591,7 +596,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
         return {
             "proposal_id": pid, "status": "pending",
             "week": proposed_week, "base_week": base_week,
-            "chronicle": _chronicle_meta(new_files),
+            "chronicle": chron,
             "held": sorted(held), "timeline_entries": len(entries),
             "diff": diff,
         }
@@ -719,6 +724,33 @@ def _chronicle_meta(filenames: list) -> dict | None:
                 title = m.group(1)
     except (OSError, UnicodeDecodeError):
         pass
+    week_m = re.match(r"(\d{4})", fn)
+    return {"week": int(week_m.group(1)) if week_m else None,
+            "title": title, "file": f"simulation/chronicle/{fn}"}
+
+
+def _chronicle_meta_from_texts(texts: dict) -> dict | None:
+    """_chronicle_meta for a bundle's STAGED chronicles: the engine home's
+    scratch copies may be long gone (another campaign's week or a forecast
+    reuses it), so acceptance must read the bundle it is about to publish.
+    A bundle is one run's output — usually exactly one chronicle. For a
+    legacy rerun bundle carrying two, plain name-max picks the ORIGINAL
+    over the rewrite ('-2' sorts before '.'): rank by (week prefix, rerun
+    suffix) and take the newest rewrite, the run this bundle staged."""
+    if not texts:
+        return None
+
+    def _rank(fn: str):
+        m = re.match(r"(\d{4})-.*?(?:-(\d+))?\.md$", fn)
+        return (int(m.group(1)) if m else 0,
+                int(m.group(2)) if (m and m.group(2)) else 0, fn)
+
+    fn = max(texts, key=_rank)
+    title = fn
+    for ln in str(texts[fn] or "").splitlines()[:1]:
+        m = re.match(r"#\s*Week\s+\d+\s*[—–-]\s*(.+?)\s*$", ln)
+        if m:
+            title = m.group(1)
     week_m = re.match(r"(\d{4})", fn)
     return {"week": int(week_m.group(1)) if week_m else None,
             "title": title, "file": f"simulation/chronicle/{fn}"}
@@ -869,6 +901,11 @@ def get_proposal(name: str):
             "created": pending.get("created"),
             "run_record": pending.get("run_record") or {},
             "base_revisions": pending.get("base_revisions") or {},
+            # ADVISORY, deliberately not enforced at accept (unlike the
+            # review flow's fingerprints): a week publishes state/chronicle/
+            # timeline, and lore-page churn between generation and accept
+            # does not make the week stale. The field exists so the UI can
+            # show what the run read.
             "input_set_revisions": pending.get("input_set_revisions") or {},
         },
         "diff": bundle["diff"],
@@ -967,7 +1004,8 @@ def accept_proposal(name: str, pid: str):
                 writes.append({"path": rel, "text": bundle["chronicles"][fn]})
                 base[rel] = publication.ABSENT  # create-only: a file that
                 # appeared in the meantime is an external edit -> conflict
-            chron = _chronicle_meta(sorted(bundle["chronicles"]))
+            chron = manifest.get("chronicle") \
+                or _chronicle_meta_from_texts(bundle["chronicles"])
         try:
             pub = publication.publish(
                 name, writes, operation=_accept_operation(manifest),
@@ -992,8 +1030,17 @@ def accept_proposal(name: str, pid: str):
         if pub["state"] == "noop":
             result["noop"] = True
         publication.record_receipt(name, key, result)
-        proposals.set_status(name, pid, "accepted",
-                             decided_note="published; see the receipt")
+        # the week HAS landed and the receipt is recorded: a set_status
+        # failure here must not surface as a 500 for a publish that
+        # succeeded — the receipt repairs the status on retry
+        try:
+            proposals.set_status(name, pid, "accepted",
+                                 decided_note="published; see the receipt")
+        except proposals.ProposalError as e:
+            _log.error("accept of %s published but could not mark the "
+                       "bundle accepted (%s) — the receipt repairs it on "
+                       "retry", pid, e)
+            result["status_flip_failed"] = str(e)
         msg = _accept_message(name, manifest, chron)
         # vault stage 4 advisory decoration after publication, as before
         for fn in bundle["chronicles"]:
@@ -1031,7 +1078,10 @@ def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
 def _accept_operation(manifest: dict) -> str:
     kind = manifest.get("kind")
     if kind == "session_effects":
-        return f"accept session effects ({manifest.get('run_record', {}) .get('source') or 'session'})"
+        # `(x or {})`: an explicit null in a hand-edited manifest means the
+        # key EXISTS with value None — .get('run_record', {}) returns None
+        return (f"accept session effects ("
+                f"{(manifest.get('run_record') or {}).get('source') or 'session'})")
     if kind == "goal_updates":
         return "accept goal updates from the ledger"
     return f"accept week {manifest.get('proposed_week')} proposal"
@@ -1079,12 +1129,17 @@ def _effect_id(effect: dict) -> str:
     return "eff-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
 
 
-@router.post("/api/campaign/{name}/simulation/session", status_code=202)
+@router.post("/api/campaign/{name}/simulation/session")
 def post_session(name: str, body: SessionBody):
     """Record what happened at the table: history bullets + structured
     effects, validated by the ENGINE's own code (CLI subprocess — no
     imports across projects) and staged as a pending proposal. Nothing in
-    the campaign changes until the proposal is accepted."""
+    the campaign changes until the proposal is accepted.
+
+    Synchronous (200, not a job): the engine validation usually answers in
+    seconds; the worst case is two bounded subprocess calls (~2 min), which
+    a browser waits out fine but a 202-implied async contract would not —
+    there is no job to poll, so the status code must not promise one."""
     d = require_campaign(name)
     if not (d / "simulation" / "state.yaml").is_file():
         raise HTTPException(

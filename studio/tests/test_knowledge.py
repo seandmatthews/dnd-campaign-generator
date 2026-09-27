@@ -18,6 +18,7 @@ import yaml
 
 import engines
 import knowledge
+import publication
 import spine
 from conftest import client  # noqa: F401
 
@@ -192,3 +193,35 @@ def test_knowledge_writes_take_history_snapshots(client, tmp_spine_root):
                      json={"week": 1})
     assert rv.status_code == 200, rv.text
     assert rv.json()["snapshot"]["state"] == "committed", rv.json().get("snapshot")
+
+
+def test_source_file_traversal_is_refused_and_never_probed(
+        client, tmp_spine_root):
+    """source_file is spliced into a campaign-relative path and hashed: a
+    traversal must be refused at write time (nothing recorded, nothing
+    read), and a traversal path already sitting in hand-edited canon must
+    read as ABSENT (no stale/fresh oracle over arbitrary files)."""
+    outside = tmp_spine_root / "outside-secret.yaml"
+    outside.write_text("top secret bytes\n", encoding="utf-8")
+    r = _add(client, text="a fact sourced from nowhere",
+             visibility="public",
+             source_file="../../outside-secret.yaml")
+    assert r.status_code in (409, 422), r.text
+    # the refusal may echo the caller's own input, but never the outside
+    # file's bytes or its resolved absolute path
+    assert "top secret bytes" not in r.text
+    assert str(outside.resolve()) not in r.text
+    assert "outside the campaign" in r.text or "unsafe" in r.text
+    facts = client.get("/api/campaign/testvale/knowledge").json()["facts"]
+    assert all("outside-secret" not in (f.get("source_file") or "")
+               for f in facts)
+
+    # a traversal path in hand-edited canon: no probe, no hash, just ABSENT
+    doc = knowledge.load("testvale")
+    doc["facts"].append({"id": "fact-hand", "created": "x", "status":
+                         "current", "text": "t", "visibility": "dm_only",
+                         "approved": "x", "source_file": "../evil.txt",
+                         "source_revision": "0" * 64})
+    knowledge._save("testvale", doc)
+    assert knowledge.source_revision("testvale",
+                                     doc["facts"][-1]) == publication.ABSENT

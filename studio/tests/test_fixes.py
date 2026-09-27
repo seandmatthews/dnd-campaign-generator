@@ -241,7 +241,7 @@ def test_session_refuses_to_stage_when_canon_moves_during_prep(
     r2 = client.post("/api/campaign/testvale/simulation/session", json={
         "source": "session:test-10",
         "events": [{"text": "a quiet night"}]})
-    assert r2.status_code == 202, r2.text
+    assert r2.status_code == 200, r2.text  # the session route is sync 200
 
 
 def test_doctor_skips_the_simulator_probe_while_a_week_is_in_flight(
@@ -312,11 +312,13 @@ def test_job_log_is_bounded_during_the_run():
 
     jid = jobs.submit("test-noisy", noisy)
     deadline = time.time() + 5
+    rec = None
     while time.time() < deadline:
         rec = jobs.get(jid)
         if rec["log_tail"] and rec["log_tail"][-1] == "line 499":
             break
         time.sleep(0.02)
+    assert rec is not None and rec["log_tail"] and         rec["log_tail"][-1] == "line 499",         f"the producer never reached line 499 within 5s (descheduling on a loaded box, most likely): last={rec and rec['log_tail'] and rec['log_tail'][-1]!r}"
     assert rec["status"] == "running", rec
     assert len(rec["log_tail"]) == jobs.LOG_CAP, "bounded mid-run, not after"
     assert rec["log_tail"][0] == f"line {500 - jobs.LOG_CAP}"

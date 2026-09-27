@@ -72,11 +72,15 @@ def time_id() -> str:
 
 def create(name: str, *, base_week, proposed_week, base_revisions: dict,
            input_set_revisions: dict, artifacts: dict, run_record: dict,
-           before_state: dict, kind: str = "simulated_week") -> str:
+           before_state: dict, kind: str = "simulated_week",
+           chronicle_meta: dict | None = None) -> str:
     """Stage a new pending bundle from in-memory artifact texts. artifacts:
     {"state": text, "chronicles": {filename: text}, "entries": [dicts],
     "updates": [dicts], "findings": [str]}. kind: "simulated_week",
-    "session_effects", or "goal_updates". Returns the proposal id.
+    "session_effects", or "goal_updates". chronicle_meta: the week's
+    primary-chronicle summary (parsed at run time, while the engine home
+    still holds the files) — acceptance reads it from here, because the
+    scratch copies may be gone by then. Returns the proposal id.
     Caller holds the campaign lock."""
     d = spine.campaign_dir(name)
     if not (d / "campaign.yaml").is_file():
@@ -101,6 +105,8 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
             datetime.timezone.utc).isoformat(timespec="seconds"),
         "decided": None,
     }
+    if chronicle_meta:
+        manifest["chronicle"] = chronicle_meta
     state_text = artifacts.get("state") or ""
     (bdir / "artifacts" / "state.yaml").write_text(state_text,
                                                    encoding="utf-8")
@@ -147,21 +153,44 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
 def set_status(name: str, proposal_id: str, status: str,
                decided_note: str = "") -> dict:
     """pending -> accepted|discarded. The bundle stays on disk as the audit
-    receipt either way. Caller holds the campaign lock."""
+    receipt either way. Caller holds the campaign lock.
+
+    A damaged (unreadable) manifest can only be discarded: accept refuses to
+    apply bundle contents it could not read, while discard replaces the
+    manifest with a minimal stub receipt — that is the documented exit for a
+    wedged review slot (a damaged pending bundle blocks all new weeks)."""
     bdir = _bundle(name, proposal_id)
     manifest_path = bdir / "proposal.yaml"
     if not manifest_path.is_file():
         raise ProposalError(f"no such proposal: {proposal_id}")
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
-    if manifest.get("status") != "pending":
-        raise ProposalError(
-            f"proposal {proposal_id} is {manifest.get('status')!r}, "
-            "not pending")
-    manifest["status"] = status
-    manifest["decided"] = datetime.datetime.now(
+    try:
+        manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        manifest = None
+    now = datetime.datetime.now(
         datetime.timezone.utc).isoformat(timespec="seconds")
-    if decided_note:
-        manifest["decision_note"] = decided_note
+    if not isinstance(manifest, dict):
+        if status != "discarded":
+            raise ProposalError(
+                f"proposal {proposal_id}'s manifest is damaged (unreadable "
+                f"YAML) — refusing to {status} it blind; discard it instead")
+        manifest = {
+            "proposal_id": proposal_id,
+            "status": "discarded",
+            "decided": now,
+            "decision_note": (decided_note or "discarded by the DM") +
+                             " (the original manifest was unreadable; "
+                             "replaced by this stub)",
+        }
+    else:
+        if manifest.get("status") != "pending":
+            raise ProposalError(
+                f"proposal {proposal_id} is {manifest.get('status')!r}, "
+                "not pending")
+        manifest["status"] = status
+        manifest["decided"] = now
+        if decided_note:
+            manifest["decision_note"] = decided_note
     spine.write_text_atomic(manifest_path, yaml.safe_dump(
         manifest, sort_keys=False, allow_unicode=True, width=100))
     return manifest

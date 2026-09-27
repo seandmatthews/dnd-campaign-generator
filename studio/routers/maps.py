@@ -248,14 +248,17 @@ def post_city(name: str, body: CityBody):
             outputs = [p for p in sorted(out.iterdir()) if p.is_file()]
             if not outputs:
                 raise RuntimeError("gen-city.mjs produced no output files")
-            slug = spine.slugify(burg)
+            svg = next((p for p in outputs if p.suffix == ".svg"), None)
+            if svg is None:
+                raise RuntimeError("no .svg in gen-city output")
+            # the slug is the GENERATED FILE's stem, never the raw form
+            # value: `--burg 12` writes natabashe.svg, and a directory or
+            # ![[embed]] named after "12" would reference nothing
+            slug = spine.slugify(svg.stem)
             dest = d / "maps" / "cities" / slug
             for p in outputs:
                 engines.copy_file(p, dest / p.name)
                 log(f"copied {p.name} -> maps/cities/{slug}/")
-            svg = next((p for p in outputs if p.suffix == ".svg"), None)
-            if svg is None:
-                raise RuntimeError("no .svg in gen-city output")
             _stub_place_page(name, place, log)
             note = _companion_note(
                 dest, slug,
