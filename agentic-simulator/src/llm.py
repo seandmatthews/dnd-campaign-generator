@@ -51,6 +51,7 @@ VALID_RESOURCES = ("coin", "muscle", "legitimacy")
 VALID_LEVELS = ("none", "low", "medium", "high")
 _LEVEL_INDEX = {lvl: i for i, lvl in enumerate(VALID_LEVELS)}
 VALID_RISK = ("low", "medium", "high")
+VALID_INTENTS = ("ordinary", "work_project", "sabotage_project")
 
 # Transient HTTP statuses worth a retry: rate limit and gateway churn.
 _RETRYABLE = (429, 500, 502, 503, 504)
@@ -307,9 +308,111 @@ def _extract_yaml(text):
         return None
 
 
-def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=()):
+def _project_context(view):
+    """The proposal-time project tables, straight from the faction's own
+    view: `your_projects` (full detail, the owner's) and
+    `visible_projects` (coarse, rivals'). A model cannot invent a project
+    id, work a rival's project, or sabotage one it cannot see — the view is
+    the whole world it knows."""
+    own = view.get("your_projects") if isinstance(view, dict) else None
+    visible = view.get("visible_projects") if isinstance(view, dict) else None
+    pick = lambda lst: {str(x.get("id")): x
+                        for x in (lst or []) if isinstance(x, dict) and x.get("id")}
+    return {"own": pick(own), "visible": pick(visible)}
+
+
+def _validate_project_action(p, actor_id, ctx):
+    """Normalize intent/project_id against the view's project tables and
+    set the resolver target: work forces `self`, sabotage resolves to the
+    project's OWNER (a model cannot mark a targeted rival project as
+    `self` to obtain an uncontested roll). Raises ValueError — the caller
+    turns that into the bounded correction attempt."""
+    intent = str(p.get("intent") or "").strip() or "ordinary"
+    pid = str(p.get("project_id") or "").strip()
+    if intent not in VALID_INTENTS:
+        raise ValueError(
+            f"unknown intent {intent!r} (use one of "
+            f"{', '.join(VALID_INTENTS)}; omit intent for an ordinary week)")
+    if intent == "ordinary":
+        if not pid:
+            p.pop("project_id", None)
+            return
+        # a named project makes the intent unambiguous: own -> work,
+        # visible rival -> sabotage
+        if pid in ctx["own"]:
+            intent = "work_project"
+        elif pid in ctx["visible"]:
+            intent = "sabotage_project"
+        else:
+            raise ValueError(_unknown_project_error(pid, actor_id, ctx))
+    if not pid:
+        raise ValueError(
+            f"intent {intent} needs project_id — "
+            + _project_menu(actor_id, ctx))
+    if intent == "work_project":
+        proj = ctx["own"].get(pid)
+        if proj is None:
+            raise ValueError(
+                f"work_project targets YOUR OWN active project — {pid!r} is "
+                "not yours. " + _project_menu(actor_id, ctx))
+        if proj.get("status") != "active":
+            raise ValueError(
+                f"your project {pid!r} is {proj.get('status')!r}, not "
+                "active — propose an ordinary action this week")
+        if proj.get("requirements_met") is False:
+            raise ValueError(
+                "your project's requirements are unmet ("
+                + "; ".join(proj.get("requirements_unmet") or ["?"])
+                + ") — the work cannot progress this week; propose an "
+                  "ordinary action")
+        p["target"] = "self"
+    else:  # sabotage_project
+        proj = ctx["visible"].get(pid)
+        if proj is None:
+            raise ValueError(
+                f"sabotage_project targets a VISIBLE rival project — "
+                f"{pid!r} is not one. " + _project_menu(actor_id, ctx))
+        if proj.get("status") != "active":
+            raise ValueError(
+                f"project {pid!r} is {proj.get('status')!r}, not active")
+        owner = str(proj.get("faction_id") or "")
+        if not owner or owner == actor_id:
+            raise ValueError(
+                f"project {pid!r} has no valid rival owner — sabotage "
+                "targets another faction's project")
+        p["target"] = owner  # normalized: the roll is against the owner
+    p["intent"] = intent
+    p["project_id"] = pid
+    public = str(p.get("public_action") or "").strip()
+    if public:
+        p["public_action"] = " ".join(public.split())
+    else:
+        p.pop("public_action", None)
+
+
+def _project_menu(actor_id, ctx):
+    own = sorted(ctx["own"])
+    visible = sorted(ctx["visible"])
+    if not own and not visible:
+        return "(you know of no projects — omit intent and propose an " \
+               "ordinary action)"
+    return (f"your projects: {', '.join(own) or 'none'}; visible rival "
+            f"projects: {', '.join(visible) or 'none'}")
+
+
+def _unknown_project_error(pid, actor_id, ctx):
+    return (f"unknown project_id {pid!r} — " + _project_menu(actor_id, ctx))
+
+
+def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=(),
+              project_ctx=None):
     if not isinstance(p, dict) or not isinstance(p.get("action"), str) or not p["action"].strip():
         raise ValueError("missing or empty 'action'")
+    # project intent first: it may rewrite `target` (sabotage resolves to
+    # the project's owner) — the generic target check below then validates
+    # the FINAL target like any other proposal's
+    _validate_project_action(p, actor_id, project_ctx or
+                             {"own": {}, "visible": {}})
     # target identity (typed): 'self' when empty, else one of the known
     # faction ids (case-insensitive match canonicalized), the city's
     # districts, or 'world'. Anything else is REFUSED — an unknown target
@@ -375,12 +478,14 @@ def propose(view, template_text, actor_id):
     prompt = render_prompt(template_text, view)
     actual = view["you"]["resources"]
     known_ids = [o.get("id") for o in view.get("others", [])] + [actor_id, "world"]
-    districts = [str(d) for d in (view.get("city", {}) or {}).get("districts", [])]
+    districts = [str(d) for d in (view.get("your_place", {}) or {}).get("districts", [])]
+    project_ctx = _project_context(view)
     last_error = None
     for attempt in range(2):
         try:
             raw = complete(prompt + ("\n\nReply with the YAML block ONLY." if attempt else ""))
-            p = _validate(_extract_yaml(raw), actor_id, actual, known_ids, districts)
+            p = _validate(_extract_yaml(raw), actor_id, actual, known_ids,
+                          districts, project_ctx)
             return p
         except BudgetExceeded:
             raise  # the ceiling is checked before every POST, so a retry can
@@ -393,8 +498,10 @@ def propose(view, template_text, actor_id):
     raise RuntimeError(f"proposal for {actor_id} failed twice: {last_error}")
 
 
-def narrate_week(city, week, outcomes, state_summary):
-    """The chronicle's prose section — constrained to what the state backs."""
+def narrate_week(place_label, week, outcomes, state_summary):
+    """The chronicle's prose section — constrained to what the state backs.
+    place_label names the simulated places ("Tasospon", or a multi-place
+    campaign's "Tasospon, Harmouth, and the Kingdom of Skyleia")."""
     ledger = "\n".join(
         f"- week {o.get('week', week)} / {o['actor']}: "
         f"{'SUCCEEDED' if o['success'] else 'FAILED'}"
@@ -402,18 +509,18 @@ def narrate_week(city, week, outcomes, state_summary):
         f", margin {o['margin']:+d} — \"{o['action']}\""
         for o in outcomes
     )
-    prompt = f"""You are the chronicler of {city}. Write 250-350 words of chronicle
+    prompt = f"""You are the chronicler of {place_label}. Write 250-350 words of chronicle
 for week {week}, past tense, concrete and dry-witted, for a game master to review.
 
 You may ONLY state things that follow from this ledger of resolved actions and
-this summary of the city's factions. Invent no new facts, no new characters,
+this summary of the factions. Invent no new facts, no new characters,
 no dialogue. Do not resolve anything further. Slop is regression to the mean:
 no prophecies, no ancient evils, no tavern meetings, no "little did they know".
 
 LEDGER OF THE WEEK:
 {ledger}
 
-CITY STATE SUMMARY:
+FACTION STATE SUMMARY:
 {state_summary}
 
 End with a single line "TITLE: <3-6 word title>" for the chronicle file."""

@@ -15,10 +15,21 @@ reviews before anything changes:
     week: 7                     # optional in-world week (defaults to the
                                 # session record's week, then the clock)
 
-    type: set_field             # faction goal/kind/secret — allowlisted
+    type: set_field             # faction goal/kind/secret/species — allowlisted
     faction_id: bastard
     field: goal
     after: Engineer the wardens' fall from grace
+    ...
+
+    type: set_project_progress  # a project's counter, moved by the table
+    project_id: project-ferry-7b03
+    after: 2                    # integer, clamped to the project's target
+    expected_before: 1          # optional (current counter)
+    ...
+
+    type: set_project_status    # active | paused | abandoned — NEVER
+    project_id: project-ferry-7b03   # `completed`: completion is the
+    after: paused                    # mechanics' job, not a text effect
     ...
 
 Every effect is validated (type, entity ids, field allowlist, value
@@ -26,7 +37,9 @@ ranges, preconditions) BEFORE any write; one invalid effect refuses the
 whole batch — nothing lands half-reviewed. Applied effects append one
 sourced event each (the event is the audit trail; `why.py` reads it like
 any other event) and record the effect id under `meta.applied_effects`
-for deduplication.
+for deduplication. Reaching a project's target through set_project_progress
+invokes the SAME completion pass a weekly tick uses (projects.py) — never
+a second completion algorithm; `completed` is unreachable directly.
 
 This module is the SHARED application code: ingest.py's pending files and
 the studio's session proposals both land here, and the studio drives it
@@ -42,6 +55,9 @@ The session record carries optional history bullets alongside effects:
     events:                     # history ONLY — no mechanical effect
       - actor: mint
         text: The party broke into the mint's treasury at midnight.
+        place_ids: [mint-quarter]   # optional WHERE — stored with the
+                                    # event, never inferred from the
+                                    # actor's current place later
     effects: [...]
 
 Exit codes: 0 applied/valid, 1 validation or IO error, 2 usage.
@@ -53,14 +69,78 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from store import STATE_FILE
+from store import STATE_FILE, places_of
 from store import load_state as _store_load
 from store import save_state as _store_save
 
 RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
 RESOURCE_LEVELS = ("none", "low", "medium", "high")
-FIELD_KEYS = ("goal", "kind", "secret")
-EFFECT_TYPES = ("set_resource", "set_field")
+FIELD_KEYS = ("goal", "kind", "secret", "species")
+EFFECT_TYPES = ("set_resource", "set_field",
+                "set_project_progress", "set_project_status")
+PROJECT_EFFECT_TYPES = ("set_project_progress", "set_project_status")
+# `completed` is deliberately absent: completion happens ONLY through the
+# shared mechanics (a weekly tick or the session progress pass), never by
+# a typed effect's text field
+PROJECT_STATUS_AFTER = ("active", "paused", "abandoned")
+
+
+def _validate_project_effect(effect, state):
+    """The two project effect types: keyed on project_id (not faction),
+    refused outright on terminal projects — corrections reopen nothing."""
+    errs = []
+    import projects as _projects
+    pid = str(effect.get("project_id") or "").strip()
+    project = _projects.find_project(state, pid)
+    if project is None:
+        return [f"unknown project_id {pid!r}"]
+    status = project.get("status", "active")
+    if status in _projects.TERMINAL_STATUSES:
+        return [(f"project {pid!r} is {status} — terminal projects take no "
+                 "session effects")]
+    after = effect.get("after")
+    if effect["type"] == "set_project_progress":
+        if not isinstance(after, int) or isinstance(after, bool):
+            if isinstance(after, str) and after.strip().lstrip("-").isdigit():
+                after = int(after.strip())
+            else:
+                return [f"after {after!r} is not an integer counter"]
+        target = project.get("target", _projects.DEFAULT_TARGET)
+        if not (0 <= after <= target):
+            return [f"after {after!r} is outside 0..{target}"]
+        expected = effect.get("expected_before")
+        if expected not in (None, ""):
+            try:
+                expected = int(expected)
+            except (TypeError, ValueError):
+                return [(f"expected_before {effect.get('expected_before')!r} "
+                         "is not an integer")]
+            if expected != project.get("progress", 0):
+                return [(f"stale precondition: expected_before {expected!r} "
+                         f"but {pid} progress is "
+                         f"{project.get('progress', 0)!r}")]
+    else:  # set_project_status
+        after = str(after or "").strip()
+        if after not in PROJECT_STATUS_AFTER:
+            return [(f"after {after!r} is not one of "
+                     f"{', '.join(PROJECT_STATUS_AFTER)} — completion is "
+                     "never set directly")]
+        expected = effect.get("expected_before")
+        if expected not in (None, "") \
+                and str(expected) != str(project.get("status", "active")):
+            return [(f"stale precondition: expected_before {expected!r} but "
+                     f"{pid} status is {project.get('status')!r}")]
+        if after == "active" and status != "active":
+            owner = project.get("faction_id")
+            clash = next((p for p in _projects.projects_of(state)
+                          if p.get("status") == "active"
+                          and p.get("faction_id") == owner
+                          and p.get("id") != pid), None)
+            if clash is not None:
+                return [(f"{owner} already runs the active project "
+                         f"{clash.get('id')!r} — one active project per "
+                         "faction")]
+    return errs
 
 
 def validate_effect(effect, state):
@@ -75,6 +155,9 @@ def validate_effect(effect, state):
     etype = str(effect.get("type") or "").strip()
     if not eid:
         errs.append("missing id (a stable id is what makes re-approval safe)")
+    if etype in PROJECT_EFFECT_TYPES:
+        errs.extend(_validate_project_effect(effect, state))
+        return errs
     if etype not in EFFECT_TYPES:
         errs.append(f"unknown type {etype!r} (use one of {', '.join(EFFECT_TYPES)})")
         return errs
@@ -121,7 +204,40 @@ def validate_effect(effect, state):
 
 def _apply_one(state, effect, week):
     """Mutate state for one already-validated effect: the value change plus
-    exactly one sourced event. Returns the event."""
+    exactly one sourced event. Project effects route target-reaching
+    counters and resumes through projects.completion_pass — the SAME
+    completion a weekly tick uses. Returns the event."""
+    import projects as _projects
+    if effect["type"] in PROJECT_EFFECT_TYPES:
+        pid = effect["project_id"]
+        project = _projects.find_project(state, pid)
+        owner = project.get("faction_id")
+        if effect["type"] == "set_project_progress":
+            before = project.get("progress", 0)
+            project["progress"] = int(effect["after"])
+            detail = (f"progress {before} -> {project['progress']} "
+                      f"(target {project.get('target')})")
+        else:
+            before = project.get("status", "active")
+            project["status"] = str(effect["after"])
+            project.pop("completion_blocked", None)
+            detail = f"status {before} -> {project['status']}"
+        ev = {
+            "week": week,
+            "actor": owner,
+            "project_id": pid,
+            "text": f"{effect['reason']} ({detail})",
+            "effect": str(effect["id"]),
+        }
+        if effect.get("source"):
+            ev["source"] = str(effect["source"])
+        state.setdefault("events", []).append(ev)
+        state.setdefault("meta", {}).setdefault("applied_effects", []) \
+            .append(str(effect["id"]))
+        # reaching target (or resuming a project already at target) invokes
+        # the same deterministic completion pass a tick uses
+        _projects.completion_pass(state, week)
+        return ev
     fid = effect["faction_id"]
     faction = next(f for f in state["factions"] if f["id"] == fid)
     if effect["type"] == "set_resource":
@@ -199,6 +315,7 @@ def apply_session_record(record, state):
     errors = []
     # validate everything up front (against the pre-application state)
     known = {f["id"] for f in state.get("factions", [])} | {"world"}
+    place_ids = {p["id"] for p in places_of(state or {})}
     for i, ev in enumerate(record.get("events") or []):
         if not isinstance(ev, dict):
             errors.append(f"event {i + 1}: not a mapping")
@@ -209,6 +326,22 @@ def apply_session_record(record, state):
             errors.append(f"event {i + 1}: unknown actor {actor!r}")
         elif not text:
             errors.append(f"event {i + 1}: empty text")
+        # explicit event locations: the WHERE is stored with the event at
+        # creation, never inferred from the actor's current place later —
+        # the faction may have moved, or acted remotely
+        eplaces = ev.get("place_ids")
+        if eplaces is not None:
+            if not isinstance(eplaces, list) or \
+                    not all(str(x).strip() for x in eplaces):
+                errors.append(
+                    f"event {i + 1}: place_ids must be a list of place ids")
+            else:
+                unknown = [str(x).strip() for x in eplaces
+                           if str(x).strip() not in place_ids]
+                if unknown:
+                    errors.append(
+                        f"event {i + 1}: unknown place id(s): "
+                        + ", ".join(unknown))
     for i, effect in enumerate(record.get("effects") or []):
         if not isinstance(effect, dict):
             errors.append(f"effect {i + 1}: not a mapping")
@@ -233,6 +366,10 @@ def apply_session_record(record, state):
         entry = {"week": ev_week, "actor": actor, "text": text}
         if source:
             entry["source"] = source
+        eplaces = ev.get("place_ids")
+        if eplaces:
+            entry["place_ids"] = [str(x).strip() for x in eplaces
+                                  if str(x).strip()]
         state.setdefault("events", []).append(entry)
         events += 1
     return events, applied, []

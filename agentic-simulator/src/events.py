@@ -24,7 +24,12 @@ def action_text(ev):
 
 def claim_text(ev):
     """What a rumor may quote: the action, never the resolution — a failed
-    covert action does not travel with its margin attached."""
+    covert action does not travel with its margin attached. Project events
+    carry `public_action` when the work must not announce itself: a
+    restricted project's event is born with a project-free line, and the
+    rumor quotes that instead of the action text."""
+    if ev.get("public_action"):
+        return str(ev["public_action"])
     return ev["action"] if "action" in ev else ev.get("text", "")
 
 

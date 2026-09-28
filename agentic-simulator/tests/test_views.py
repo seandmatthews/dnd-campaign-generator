@@ -221,6 +221,32 @@ def test_cli_usage_and_missing_state_errors():
     print("  errors: usage -> 2, unreadable state -> 1  OK")
 
 
+def test_species_rides_views_when_present():
+    """Ancestry is observable the way a kind is: a rival's `species` shows
+    up in the others list, and the owner's whole-faction view carries it
+    for free (the view deepcopies `you`). Legacy factions without one omit
+    the key entirely — never a null in the prompt."""
+    state = mini_state()
+    state["factions"][0]["species"] = "dwarven"   # the mint
+    state["factions"][2]["species"] = "troll"     # the marsh gang
+    view = faction_view(state, "reliquary")
+    others = {o["id"]: o for o in view["others"]}
+    assert others["mint"]["species"] == "dwarven", others["mint"]
+    assert others["marsh_gang"]["species"] == "troll", others["marsh_gang"]
+    assert "species" not in view["you"], \
+        "the viewer has no species of its own here"
+    mine = faction_view(state, "mint")
+    assert mine["you"]["species"] == "dwarven", "you carries the full faction"
+    assert "species" not in others_of(faction_view(state, "marsh_gang"),
+                                      "reliquary"), \
+        "a faction without species is omitted, not null"
+    print("  views: species rides others + you when present, omitted when not  OK")
+
+
+def others_of(view, faction_id):
+    return {o["id"]: o for o in view["others"]}[faction_id]
+
+
 def test_faction_kind_may_be_omitted():
     """The studio's authoring form only writes `kind` when the DM fills it
     in, so a hand-named sandbox can hold kindless factions — the view (and
@@ -268,6 +294,7 @@ if __name__ == "__main__":
         test_rumors_window_boundary_week_still_rides,
         test_faction_kind_may_be_omitted,
         test_faction_name_and_resources_may_be_omitted,
+        test_species_rides_views_when_present,
     ]:
         fn()
     print("all views tests passed")

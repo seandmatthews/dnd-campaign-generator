@@ -33,13 +33,32 @@ Rules of engagement:
    One warning: every rival you contend with beyond the first gives you −2
    in all of your fights — besieged on all fronts, beleaguered on all
    fronts. Pick your enemies.
-5. You do not decide outcomes. A resolver rolls dice, and you will be told
+5. Projects. If your view lists `your_projects`, one of them is your
+   concrete undertaking, with a progress counter. Working toward it is
+   usually your best week:
+       intent: work_project
+       project_id: <id from your_projects>
+   If your view lists `visible_projects`, a rival's undertaking you know
+   of, you may work against it instead:
+       intent: sabotage_project
+       project_id: <id from visible_projects>
+   (leave `target` alone on both: work is yours, and sabotage is resolved
+   against the project's owner for you.) A successful week moves the
+   counter one step — yours up, theirs down. Work only when your
+   project's requirements are met; if the view says they are unmet, do
+   something else this week. When the project is not public, add
+   `public_action: <one line>` — the one sentence the street hears about
+   your week; choose what it gives away.
+6. You do not decide outcomes. A resolver rolls dice, and you will be told
    what happened — which may be worse than you hoped. You react next week.
 
 Reply with YAML only:
 
     action: <one imperative sentence>
     target: <faction id, district, or self>
+    intent: <optional — work_project or sabotage_project when acting on a project>
+    project_id: <optional — the project the intent acts on>
+    public_action: <optional — for non-public work, the line the street hears>
     resources_committed:
       coin: <none|low|medium|high>
       muscle: <none|low|medium|high>

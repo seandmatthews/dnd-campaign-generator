@@ -33,6 +33,13 @@ principles). Read it before changing anything.
   to the pending file for real state changes, or drive the studio's
   session form. Validate without writing:
   `python src/effects.py --check session.yaml [--state PATH]`.
+- **Projects**: factions can carry one concrete undertaking with a
+  persistent counter (`state.yaml` `projects:`, rules in `src/projects.py`).
+  One-sentence mechanic: a successful work action advances its project one
+  step, a successful sabotage removes one, and reaching the target applies
+  the preapproved completion effects exactly once. DM edits go through the
+  CLI (`python src/projects.py --check|--preview|--apply changes.yaml`,
+  `--report` for the DM list).
 - **Run tests**: `python tests/test_<module>.py` (all zero-dependency).
 - **Review**: read `chronicle/` — one file per week, prose + full roll table.
 

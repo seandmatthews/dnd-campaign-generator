@@ -5,7 +5,12 @@ knowledge path to. Warnings are advisory — printed for the DM; nothing is
 auto-rejected. Fully deterministic: no LLM calls, no network, no randomness.
 """
 
+import pathlib
 import re
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import store
 
 # --- shared text normalization ----------------------------------------------
 
@@ -98,13 +103,11 @@ _JOINERS = {"of", "the", "de"}
 
 def _known_name_tokens(state):
     """Tokens that name something real or generic: every faction's name and
-    id, the city, its districts, and generic city-book words (state.yaml's
-    `generic_words` or the built-in fallback)."""
+    id, every place and district (multi-place campaigns get the whole set),
+    and generic city-book words (state.yaml's `generic_words` or the
+    built-in fallback)."""
     toks = set(state.get("generic_words") or _DEFAULT_GENERIC)
-    city = state.get("city", {})
-    toks |= _content(city.get("name", ""))
-    for d in city.get("districts", []):
-        toks |= _content(d)
+    toks |= store.place_words(state)
     for f in state.get("factions", []):
         toks |= _content(f.get("name", ""))
         for part in str(f.get("id", "")).split("_"):

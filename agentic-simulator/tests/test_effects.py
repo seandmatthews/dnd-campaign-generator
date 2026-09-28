@@ -216,6 +216,56 @@ def test_cli_refuses_invalid_batch_without_writing():
             "an invalid batch is all-or-nothing: not one byte written"
 
 
+# ---- session events with explicit place ids (place-centered view) ----
+
+
+def _apply_record(record):
+    state = fresh_state()
+    events, applied, errors = apply_session_record(record, state)
+    return state, events, applied, errors
+
+
+def test_session_event_place_ids_are_stored_with_the_event():
+    state, events, _applied, errors = _apply_record({
+        "source": "session:session-08",
+        "events": [{"actor": "mint", "text": "The ferrymaster talked.",
+                    "place_ids": ["ruravaqan"]}],
+        "effects": [],
+    })
+    assert errors == [] and events == 1
+    assert state["events"][-1]["place_ids"] == ["ruravaqan"]
+
+
+def test_session_event_unknown_place_id_refuses():
+    _state, _events, _applied, errors = _apply_record({
+        "source": "session:session-08",
+        "events": [{"actor": "mint", "text": "Somewhere else.",
+                    "place_ids": ["not-a-place"]}],
+        "effects": [],
+    })
+    assert errors and "not-a-place" in errors[0]
+
+
+def test_session_event_place_ids_must_be_a_list():
+    _state, _events, _applied, errors = _apply_record({
+        "source": "session:session-08",
+        "events": [{"actor": "mint", "text": "Bad shape.",
+                    "place_ids": "ruravaqan"}],
+        "effects": [],
+    })
+    assert errors and "place_ids" in errors[0]
+
+
+def test_session_event_without_place_ids_stays_unlocated():
+    state, events, _applied, errors = _apply_record({
+        "source": "session:session-08",
+        "events": [{"actor": "mint", "text": "No where recorded."}],
+        "effects": [],
+    })
+    assert errors == [] and events == 1
+    assert "place_ids" not in state["events"][-1]
+
+
 if __name__ == "__main__":
     for fn in [
         test_valid_effect_passes_validation,
@@ -231,6 +281,10 @@ if __name__ == "__main__":
         test_history_bullet_restating_an_effect_reason_lands_once,
         test_cli_check_and_apply_round_trip,
         test_cli_refuses_invalid_batch_without_writing,
+        test_session_event_place_ids_are_stored_with_the_event,
+        test_session_event_unknown_place_id_refuses,
+        test_session_event_place_ids_must_be_a_list,
+        test_session_event_without_place_ids_stays_unlocated,
     ]:
         fn()
     print("all effects tests passed")

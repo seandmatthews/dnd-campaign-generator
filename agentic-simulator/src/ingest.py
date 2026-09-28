@@ -28,7 +28,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import effects
-from store import ROOT, STATE_FILE
+from store import ROOT, STATE_FILE, place_words
 from store import load_state as _store_load
 from store import save_state as _store_save
 
@@ -51,9 +51,11 @@ def _words(text):
 
 def faction_tokens(state):
     """Distinctive match words per faction id, in state order. A word that
-    names two factions names neither; city-name words name no one."""
+    names two factions names neither; place-name words name no one — but
+    district words stay matchable, because notes say "the Mint" when they
+    mean the faction nicknamed after the district."""
     aliases = state.get("aliases") or _DEFAULT_ALIASES
-    city = _words(state.get("city", {}).get("name", ""))
+    city = place_words(state, include_districts=False)
     table = {}
     for f in state["factions"]:
         words = _words(f["id"]) | _words(f["name"]) | _words(" ".join(aliases.get(f["id"], [])))

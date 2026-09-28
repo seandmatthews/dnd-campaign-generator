@@ -11,30 +11,29 @@ resolved week. Call activation(state) before advancing the clock.
 import re
 
 import events
+import projects
+from store import place_words
 
 _WORD_RE = re.compile(r"[a-z0-9_]+")
 _ARTICLES = {"the", "of", "a", "an"}
 _IDLE_CAP = 3
 
 
-def _name_tokens(faction, city_words=frozenset()):
+def _name_tokens(faction, place_words_set=frozenset()):
     """Distinctive mention tokens: the faction id plus its name words,
-    minus articles, single letters, and words that name the city or one of
-    its districts — a word that names both a place and a faction (the
+    minus articles, single letters, and words that name any place or one
+    of its districts — a word that names both a place and a faction (the
     Reliquary quarter vs the Reliquary) must not activate the faction on a
     mere mention of the place."""
     words = set(_WORD_RE.findall(faction["name"].lower()))
     words.add(faction["id"])
-    return {w for w in words if len(w) > 1 and w not in _ARTICLES} - city_words
+    return {w for w in words if len(w) > 1 and w not in _ARTICLES} - place_words_set
 
 
 def _city_words(state):
-    """Words that name the city or any of its districts."""
-    city = state.get("city", {}) or {}
-    words = set(_WORD_RE.findall(str(city.get("name", "")).lower()))
-    for d in city.get("districts", []) or []:
-        words |= set(_WORD_RE.findall(str(d).lower()))
-    return words - _ARTICLES
+    """Words that name any place or any of its districts (store.place_words,
+    article-stripped) — multi-place campaigns subtract the whole set."""
+    return place_words(state) - _ARTICLES
 
 
 def _words(text):
@@ -81,9 +80,15 @@ def activation(state):
     (clock week 0 — the studio's fresh-sandbox start: no history at all)
     gets hostility/pressure plus +2 "founding week"; from clock week 1 on
     the normal targeted/idle mechanics take over. act at score >= 2.
+
+    Project override: a faction whose eligible active project (requirements
+    met, counter below target) is mid-flight acts even when the score would
+    hold it — an undertaking does not idle because the week is quiet. The
+    score and its reasons still stand beside it in the record.
     """
     week = state["meta"]["clock"]["week"]
     factions = state["factions"]
+    project_act = projects.activation_overrides(state)
     by_week = {}
     for ev in state.get("events") or []:
         by_week.setdefault(ev.get("week"), []).append(ev)
@@ -123,7 +128,11 @@ def activation(state):
             if quiet:
                 score -= quiet
                 reasons.append(f"quiet for {quiet} week(s)")
-        out[fid] = {"score": score, "reasons": reasons, "act": score >= 2}
+        act = score >= 2
+        if fid in project_act:
+            act = True
+            reasons.append("active project")
+        out[fid] = {"score": score, "reasons": reasons, "act": act}
     return out
 
 

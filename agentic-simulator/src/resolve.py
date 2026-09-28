@@ -24,7 +24,12 @@ Rule version 2 (resolver correctness):
   through --replay with no network calls.
 """
 
+import pathlib
 import random
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+from store import places_of
 
 RULE_VERSION = 2
 
@@ -107,11 +112,42 @@ def resolve_action(action, rules=None):
 
 def _known_targets(state):
     """The typed target set the resolver accepts, straight from the state:
-    faction ids, 'world', 'self', and the city's districts."""
+    faction ids, 'world', 'self', and every place's districts (any place,
+    not just the primary — a district target must resolve wherever the
+    faction that proposed it lives)."""
     ids = {f["id"] for f in (state or {}).get("factions", [])} | {"world", "self"}
-    districts = {str(x) for x in ((state or {}).get("city") or {}).get(
-        "districts", [])}
+    districts = set()
+    for p in places_of(state or {}):
+        districts |= {str(x) for x in (p.get("districts") or [])}
     return ids, districts
+
+
+def consolidate_outcomes(outcomes, proposals):
+    """One outcome per ACTING faction — the shared consolidation used both
+    by tick's one-consequence rule and by project progress: the worst
+    margin wins the judging, and on EQUAL margins a loss defeats a success
+    (a tied defensive win cannot hide a tied attacking loss), recording
+    order breaking any remaining tie. Defensive outcomes — an inactive
+    faction pulled into a contest — never consolidate: the defender
+    proposed nothing and takes no action."""
+    proposers = {p["actor"] for p in (proposals or [])}
+    worst = {}
+    for o in outcomes or []:
+        if o.get("defensive") or o["actor"] not in proposers:
+            continue
+        cur = worst.get(o["actor"])
+        if cur is None or _worse(o, cur):
+            worst[o["actor"]] = o
+    return worst
+
+
+def _worse(a, b):
+    """Should outcome `a` replace `b` as an actor's consolidated outcome?"""
+    if a["margin"] != b["margin"]:
+        return a["margin"] < b["margin"]
+    if a["success"] != b["success"]:
+        return not a["success"]  # a loss beats a success at equal margin
+    return False
 
 
 def resolve_tick(proposals, state=None):

@@ -20,9 +20,9 @@ from copy import deepcopy
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import projects
 import rumors
-from store import STATE_FILE
-from store import load_state
+from store import STATE_FILE, faction_place, places_of, load_state
 
 # What an outsider can roughly estimate by watching, not by reading ledgers.
 _OUTSIDER_STRENGTH = {
@@ -79,6 +79,27 @@ def facts_for(state, faction_id):
     return out
 
 
+def _project_tables(state, faction_id):
+    """The two project tables a faction's view carries: `your_projects` in
+    full owner detail (minus completion EFFECTS — mechanics are DM
+    information; the completion text is what the owner works toward), and
+    `visible_projects` as coarse rival records — id, owner, title, places,
+    status, and a progress LABEL, never exact counters, requirements, or
+    completion effects. Hidden projects appear in neither."""
+    place_names = {p["id"]: p.get("name") or p["id"]
+                   for p in places_of(state)}
+    factions = {str(f.get("id")): f for f in state.get("factions", [])
+                if isinstance(f, dict) and f.get("id")}
+    own, visible = [], []
+    for project in projects.projects_of(state):
+        if str(project.get("faction_id")) == str(faction_id):
+            own.append(projects.owner_view(project,
+                                           factions.get(str(faction_id))))
+        elif projects.visible_to(project, faction_id):
+            visible.append(projects.outsider_view(project, place_names))
+    return own, visible
+
+
 def faction_view(state, faction_id):
     """Return the slice of `state` that `faction_id` can act on."""
     factions = {f["id"]: f for f in state["factions"]}
@@ -90,34 +111,64 @@ def faction_view(state, faction_id):
     for f in state["factions"]:
         if f["id"] == faction_id:
             continue
-        others.append(
-            {
-                "id": f["id"],
-                # name/resources may be missing from a hand-edited state
-                # (validate_state checks only id) — the view degrades,
-                # it never KeyErrors the week mid-spend
-                "name": f.get("name") or f["id"],
-                "kind": f.get("kind") or "unknown",
-                "apparent_strength": _OUTSIDER_STRENGTH.get(
-                    (f.get("resources") or {}).get("muscle", "none")
-                ),
-                "posture_toward_you": f.get("disposition", {}).get(
-                    faction_id, "unknown"
-                ),
-            }
-        )
+        observed = {
+            "id": f["id"],
+            # name/resources may be missing from a hand-edited state
+            # (validate_state checks only id) — the view degrades,
+            # it never KeyErrors the week mid-spend
+            "name": f.get("name") or f["id"],
+            "kind": f.get("kind") or "unknown",
+        }
+        # Ancestry is as observable as a kind: you can see a troll is a
+        # troll. Optional free text on the faction ("dwarven", "troll
+        # warband"); legacy factions omit it — never a null in the prompt.
+        if f.get("species"):
+            observed["species"] = str(f["species"])
+        observed.update({
+            # where this rival operates: a name, not an id — the view
+            # is prose for a model, and cross-level contention (a guild
+            # vs the kingdom next door) needs to know where rivals stand
+            "place": faction_place(state, f).get("name") or "unknown",
+            "apparent_strength": _OUTSIDER_STRENGTH.get(
+                (f.get("resources") or {}).get("muscle", "none")
+            ),
+            "posture_toward_you": f.get("disposition", {}).get(
+                faction_id, "unknown"
+            ),
+        })
+        others.append(observed)
+
+    # The same fog-of-war rule the factions get, one level up: you see YOUR
+    # place in full detail (districts, population — whatever the file
+    # carries); every other place appears only as its public identity. A
+    # world-tier faction's "place" is the world entry, so its own-place
+    # detail is deliberately thin — what happens inside a burg reaches it
+    # through events, rumors, and DM-addressed knowledge, not through the
+    # state's own ledgers.
+    own = faction_place(state, me)
+    other_places = [
+        {"id": p["id"], "name": p["name"], "kind": p.get("kind") or "place"}
+        for p in places_of(state) if p["id"] != own.get("id")
+    ]
 
     view = {
         "week": state["meta"]["clock"]["week"],
-        "city": deepcopy(state["city"]),
+        "your_place": deepcopy(own),
         "you": deepcopy(me),
         "others": others,
     }
+    if other_places:
+        view["other_places"] = other_places
     recent_rumors, omitted = _recent_rumors(state, faction_id)
     if recent_rumors:
         view["rumors_you_have_heard"] = recent_rumors
     if omitted:
         view["older_rumors_not_shown"] = omitted
+    own_projects, visible_projects = _project_tables(state, faction_id)
+    if own_projects:
+        view["your_projects"] = own_projects
+    if visible_projects:
+        view["visible_projects"] = visible_projects
     facts = facts_for(state, faction_id)
     if facts:
         view["facts_you_know"] = facts

@@ -35,7 +35,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import llm
 from llm import BudgetExceeded, _extract_yaml, begin_run, complete, env_limit
-from store import load_state, validate_state
+from store import load_state, places_of, validate_state
 
 LEDGER_WINDOW = 40      # most recent events the model sees
 RUMOR_WINDOW = 20       # in-circulation claims the model sees
@@ -81,7 +81,7 @@ def digest(state):
               ][:RUMOR_WINDOW]
     return {
         "clock": (state.get("meta") or {}).get("clock"),
-        "city": (state.get("city") or {}).get("name"),
+        "places": [p.get("name") for p in places_of(state)],
         "factions": [
             {k: f.get(k) for k in ("id", "name", "kind", "goal", "secret")}
             for f in (state.get("factions") or []) if isinstance(f, dict)],
