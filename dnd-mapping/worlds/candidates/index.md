@@ -28,7 +28,9 @@ seed is entered through real UI input.
 | World | Seed | Raw source | Notes |
 |-------|------|------------|-------|
 | world-913 (Tasospon) | 913 | `campaigns/sable-ford/world/source.json` (full JSON export) | The Sable Ford campaign world. Re-imported with the river/culture schema 2026-09-25; the raw stays in the campaign repo, so `--all` does not regenerate this one. |
-| world-607942 | 7942 | none tracked | Imported with the river/culture schema 2026-09-25. |
+| world-607942 | 7942 | none tracked | Imported with the river/culture schema 2026-09-25. SUPERSEDED by world-607942-7942-eafab7 (the biome/latitude schema import has different bytes, so the collision-widened filename is now the canonical one). |
+| world-607942-7942-eafab7 | 7942 | none tracked | Re-imported with the biome/latitude schema 2026-09-28 (first import whose bytes carry per-settlement biome/latitude). |
+| world-uie2e9 | e2e9 | none tracked | Steered generation 2026-09-28: highFantasy culture set + climate options (recorded in `meta.culture_set`/`meta.climate`); biome/latitude schema. |
 | world-24601 | 4601 | none tracked | Imported before the raw/ convention was settled; no raw dump exists, so it cannot be regenerated. Still on the pre-river/culture schema. |
 | world-424242 | 4242 | none tracked | Same as world-24601: no raw, not regenerable, old schema. |
 

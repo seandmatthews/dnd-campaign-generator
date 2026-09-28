@@ -66,6 +66,25 @@ FMG_SEED=12345 FMG_W=1280 FMG_H=720 \
 cd ../.. && python src/import_fmg.py worlds/raw/headless-12345.json
 ```
 
+**Steering a world** (per generation, never global): `FMG_OPTIONS` is a JSON
+object deep-merged over the randomized options after `Options.randomize()` —
+pin what you care about, let the seed roll the rest:
+
+```bash
+FMG_OPTIONS='{"generation":{"cultures":{"set":"highFantasy"},"template":"continents"},"map":{"climate":{"temperature":{"northPole":-45}}}}' \
+FMG_SEED=12345 node node_modules/vitest/vitest.mjs run src/generators/headless-export.test.ts
+```
+
+The `highFantasy`/`darkFantasy` culture sets are race-themed with habitat
+homing (dwarven cultures score mountains, giant cultures score ≈−10 °C
+cells), so a cold-pole world seeds dwarven holds in the ranges and giant
+warbands in the frozen north — emergently, not by post-processing. The
+dump's `settings` record the resolved options; `import_fmg.py` distills
+them into geography.yaml as `meta.culture_set`, `meta.climate` and
+per-nation/per-settlement `biome` + `latitude` fields. The studio's Maps
+tab exposes the same surface as a form (with an LLM suggestion pass from a
+premise).
+
 **The runner is not vanilla FMG.** `headless-export.test.ts` and the
 `d3-quadtree` dependency patch are local modifications inside the
 (ignored) FMG clone. The tracked copies live in

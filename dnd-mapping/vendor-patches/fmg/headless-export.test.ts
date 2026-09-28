@@ -7,7 +7,21 @@
 // Run explicitly from the FMG repo root:
 //   node node_modules/vitest/vitest.mjs run src/generators/headless-export.test.ts
 //
-// Env overrides: FMG_SEED (default 878636343 = Bonia), FMG_W, FMG_H, FMG_OUT.
+// Env overrides: FMG_SEED (default 878636343 = Bonia), FMG_W, FMG_H, FMG_OUT,
+// FMG_OPTIONS. FMG_OPTIONS is a JSON object deep-merged over the options
+// AFTER Options.randomize(): whatever it pins is honored, everything else
+// still re-rolls per seed — so steering (culture set, heightmap template,
+// climate, limits) never has to mean "the same world every time". Example:
+//   FMG_OPTIONS='{"generation":{"cultures":{"set":"highFantasy"},
+//   "template":"continents"},"map":{"climate":{"temperature":{
+//   "northPole":-45}}}}'
+// The culture set exists in BOTH generation and map options and the
+// generators read the map copy, so the generation copy wins and is mirrored
+// down; the culture limit is then re-capped to the pinned set's fixed size.
+// The dump's settings carry the resolved geography/climate/cultures/
+// generation options (the .map file shape) so import_fmg can derive latitude
+// and record the world's climate — a dump describes the world that made it.
+//
 // Output matches the "full JSON export" shape src/import_fmg.py already parses:
 // {info, settings, pack}.
 
@@ -17,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { GenerationPipeline } from "@/generators/generation-pipeline";
 import { Options } from "@/components/options-model";
+import { deepMerge } from "@/utils/objectUtils";
 // side-effect imports: every generator module attaches its global (Grid,
 // Burgs, States, ...) — the pipeline steps reference these globals by name
 import "@/generators";
@@ -60,6 +75,22 @@ describe("headless world export", () => {
     Math.random = aleaPRNG(seed);
     Options.randomize();
 
+    const rawOverrides = process.env.FMG_OPTIONS;
+    if (rawOverrides) {
+      let overrides: unknown;
+      try {
+        overrides = JSON.parse(rawOverrides);
+      } catch (e) {
+        throw new Error(`FMG_OPTIONS is not valid JSON: ${(e as Error).message}`);
+      }
+      if (typeof overrides !== "object" || overrides === null || Array.isArray(overrides)) {
+        throw new Error("FMG_OPTIONS must be a JSON object of FMG options");
+      }
+      deepMerge(options, overrides as Record<string, unknown>);
+      options.map.cultures.set = options.generation.cultures.set;
+      Options.capCultures();
+    }
+
     await GenerationPipeline.run({});
 
     const g = globalThis as Record<string, any>;
@@ -86,7 +117,14 @@ describe("headless world export", () => {
         height,
         generator: "node (headless GenerationPipeline)",
       },
-      settings: { seed, graph: { width, height, points: options.map.graph?.points ?? 10000 } },
+      settings: {
+        seed,
+        graph: { width, height, points: options.map.graph?.points ?? 10000 },
+        geography: options.map.geography,
+        climate: options.map.climate,
+        cultures: options.map.cultures,
+        generation: options.generation,
+      },
       pack: plain,
     };
 

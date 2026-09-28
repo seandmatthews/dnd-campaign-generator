@@ -12,7 +12,7 @@ re-importing an unchanged file is byte-stable — a wall-clock or mtime stamp
 permanently dirtied tracked derivatives on every regeneration.
 
 Provenance caveat: every tracked candidate's raw dump is expected in
-worlds/raw/ so `--all` can regenerate it — EXCEPT the seed-913 world
+worlds/raw/ so `--all` can regenerate it — EXCEPT the seed-913 world and the seed-7942/e2e9 candidates (raw dumps not retained; see worlds/candidates/index.md)
 (world-913-913.yaml), whose raw export lives in the campaigns repo as
 campaigns/sable-ford/world/source.json (the campaign imported it before
 the raw/ convention was settled).
@@ -187,7 +187,94 @@ def _river_settlements(pack, burgs, rivers):
     return out
 
 
-def summarize(info, pack):
+def _map_options(settings):
+    """The FMG map-options object from any export shape. Browser full JSON
+    exports nest it under settings.options.map; a .map file's settings line
+    and the headless dump carry the same fields at the top level. Returns
+    {} when neither shape is present (very old dumps)."""
+    if not isinstance(settings, dict):
+        return {}
+    opts = settings.get("options")
+    if isinstance(opts, dict) and isinstance(opts.get("map"), dict):
+        return opts["map"]
+    return settings
+
+
+def _cell_biome(pack):
+    """cell id -> biome id, or None when the export carries no per-cell
+    data. Two serializations exist: the headless dump keeps columnar arrays
+    (pack.cells.biome[i]); browser full JSON exports expand cells into
+    per-cell dicts."""
+    cells = pack.get("cells")
+    if isinstance(cells, dict):
+        biome = cells.get("biome")
+        if not isinstance(biome, list):
+            return None
+        return lambda i: (biome[i] if isinstance(i, int)
+                          and 0 <= i < len(biome) else None)
+    if isinstance(cells, list):
+        by_id = {c.get("i"): c.get("biome") for c in cells
+                 if isinstance(c, dict)}
+        return lambda i: by_id.get(i) if isinstance(i, int) else None
+    return None
+
+
+def _dominant_state_biomes(pack, biome_names):
+    """{state_id: most common biome name} by cell count — the biome that
+    dominates where the nation lives. Marine (biome 0) is excluded: nations
+    are land. {} when the export lacks per-cell data or biome names."""
+    if not biome_names:
+        return {}
+    cells = pack.get("cells")
+    if isinstance(cells, dict):
+        state, biome = cells.get("state"), cells.get("biome")
+        if not (isinstance(state, list) and isinstance(biome, list)):
+            return {}
+        pairs = list(zip(state, biome))
+    elif isinstance(cells, list):
+        pairs = [(c.get("state"), c.get("biome")) for c in cells
+                 if isinstance(c, dict)]
+    else:
+        return {}
+    counts: dict[int, dict[int, int]] = {}
+    for sid, bid in pairs:
+        if not isinstance(sid, int) or sid <= 0:
+            continue  # 0 is no state
+        if not isinstance(bid, int) or bid <= 0:
+            continue  # 0 is Marine
+        counts.setdefault(sid, {})
+        counts[sid][bid] = counts[sid].get(bid, 0) + 1
+    out = {}
+    for sid, tally in counts.items():
+        # most cells wins; ties break to the lower biome id (stable order)
+        best = max(tally.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+        out[sid] = biome_names.get(best)
+    return out
+
+
+def _latitude_of(info, map_opts):
+    """y coordinate -> latitude [90; -90], FMG's own formula (y down the
+    map between latN and latN - latT), or None when the dump lacks the
+    graph height or the coordinates block."""
+    height = info.get("height") if isinstance(info, dict) else None
+    coords = (map_opts.get("geography") or {}).get("coordinates") or {}
+    lat_n, lat_t = coords.get("latN", 90), coords.get("latT", 180)
+    if not isinstance(height, (int, float)) or not height:
+        return None
+    if not isinstance(lat_n, (int, float)) or not isinstance(lat_t, (int, float)):
+        return None
+
+    def latitude(y):
+        try:
+            y = float(y)
+        except (TypeError, ValueError):
+            return None
+        return round(lat_n - (y / height) * lat_t, 1)
+
+    return latitude
+
+
+def summarize(info, pack, settings=None):
     states = [s for s in pack.get("states", []) if s.get("i", 0) != 0]
     burgs = [b for b in pack.get("burgs", []) if b.get("i", 0) != 0 and b.get("name")]
     provinces = [p for p in pack.get("provinces", []) if p.get("i", 0) != 0]
@@ -208,15 +295,48 @@ def summarize(info, pack):
     def burg_name(i):
         return next((b["name"] for b in burgs if b.get("i") == i), None)
 
+    # climate context: everything below degrades to absent — a dump without
+    # options (old headless dumps) or without per-cell data (.map-section
+    # imports) simply carries no climate fields rather than wrong ones
+    map_opts = _map_options(settings)
+    biome_names = {b["i"]: b["name"] for b in pack.get("biomes", [])
+                   if isinstance(b, dict) and isinstance(b.get("i"), int)}
+    cell_biome = _cell_biome(pack)
+    dominant_biome = _dominant_state_biomes(pack, biome_names)
+    latitude = _latitude_of(info, map_opts)
+
+    climate_meta = {}
+    temps = (map_opts.get("climate") or {}).get("temperature") or {}
+    if isinstance(temps, dict):
+        for key, src in (("equator_c", "equator"),
+                         ("north_pole_c", "northPole"),
+                         ("south_pole_c", "southPole")):
+            v = temps.get(src)
+            if isinstance(v, (int, float)):
+                climate_meta[key] = v
+    culture_set = map_opts.get("cultures", {}).get("set")
+    culture_set = culture_set if isinstance(culture_set, str) else None
+
     nations = []
     for s in sorted(states, key=lambda s: -(s.get("cells", 0))):
         own = burgs_by_state.get(s["i"], [])
-        nations.append({
+        entry = {
             "id": f"{slugify(s['name'])}-{s['i']}",
             "name": s["name"],
             "kind": s.get("type", "Generic"),
             "capital": burg_name(s.get("capital")),
             "culture": culture_by_id.get(s.get("culture")),
+        }
+        # where the nation sits: dominant biome over its cells (marine
+        # excluded — nations are land) and the capital's latitude
+        biome = dominant_biome.get(s["i"])
+        if biome:
+            entry["biome"] = biome
+        capital = next((b for b in burgs if b.get("i") == s.get("capital")), None)
+        lat = latitude(capital.get("y")) if capital and latitude else None
+        if lat is not None:
+            entry["latitude"] = lat
+        entry.update({
             "form_of_government": s.get("formName"),
             "burgs": len(own),
             "provinces": sum(
@@ -233,18 +353,29 @@ def summarize(info, pack):
             ][:6],
             "color": s.get("color"),
         })
+        nations.append(entry)
 
     settlements = sorted(burgs, key=lambda b: -(b.get("population", 0)))[:15]
-    major_settlements = [{
-        "name": b["name"],
-        "nation": state_by_id.get(b.get("state"), {}).get("name"),
-        "population_thousands": round(b.get("population", 0), 1),
-        "capital": bool(b.get("capital")),
-        "port": bool(b.get("port")),
-        "kind": b.get("type", "Town"),
-        "x": round(b.get("x", 0), 1),
-        "y": round(b.get("y", 0), 1),
-    } for b in settlements]
+    major_settlements = []
+    for b in settlements:
+        entry = {
+            "name": b["name"],
+            "nation": state_by_id.get(b.get("state"), {}).get("name"),
+            "population_thousands": round(b.get("population", 0), 1),
+            "capital": bool(b.get("capital")),
+            "port": bool(b.get("port")),
+            "kind": b.get("type", "Town"),
+        }
+        biome = biome_names.get(cell_biome(b.get("cell"))) \
+            if cell_biome else None
+        if biome:
+            entry["biome"] = biome
+        lat = latitude(b.get("y")) if latitude else None
+        if lat is not None:
+            entry["latitude"] = lat
+        entry["x"] = round(b.get("x", 0), 1)
+        entry["y"] = round(b.get("y", 0), 1)
+        major_settlements.append(entry)
 
     rivers_all = [r for r in pack.get("rivers", [])
                   if isinstance(r, dict) and isinstance(r.get("i"), int)]
@@ -273,13 +404,18 @@ def summarize(info, pack):
                 f"top {len(kept)} of {len(ranked)} nearby by population")
         rivers.append(entry)
 
+    meta = {
+        "source": "Azgaar Fantasy Map Generator",
+        "map_name": info.get("mapName"),
+        "seed": str(info.get("seed")),
+        "fmg_version": info.get("version"),
+    }
+    if culture_set:
+        meta["culture_set"] = culture_set
+    if climate_meta:
+        meta["climate"] = climate_meta
     return {
-        "meta": {
-            "source": "Azgaar Fantasy Map Generator",
-            "map_name": info.get("mapName"),
-            "seed": str(info.get("seed")),
-            "fmg_version": info.get("version"),
-        },
+        "meta": meta,
         "summary": {
             "nations": len(nations),
             "provinces": len(provinces),
@@ -308,10 +444,10 @@ def summarize(info, pack):
 
 def import_file(path):
     path = pathlib.Path(path)
-    info, _settings, pack, found = load_fmg(path)
+    info, settings, pack, found = load_fmg(path)
     # full JSON exports report every section found, so `missing` is .map-only
     missing = sorted(set(_SIGNATURES) - found)
-    doc = summarize(info, pack)
+    doc = summarize(info, pack, settings)
     # provenance records the dump's own seed + name, never a wall-clock or
     # mtime stamp: re-importing an unchanged dump must stay byte-identical
     # ("never hand-edit" only works if regeneration is diff-clean), and an

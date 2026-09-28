@@ -1,0 +1,657 @@
+meta:
+  source: Azgaar Fantasy Map Generator
+  map_name: world-uie2e9
+  seed: uie2e9
+  fmg_version: 1.153.1-headless
+  culture_set: highFantasy
+  climate:
+    equator_c: 25
+    north_pole_c: -45
+    south_pole_c: -11
+summary:
+  nations: 14
+  provinces: 103
+  settlements: 314
+  cultures: 17
+  religions: 23
+  major_landmasses: 2
+  rivers: 165
+  river_settlements: nearby settlements per river, most populous first
+nations:
+- id: liakur-11
+  name: Liakur
+  kind: Generic
+  capital: Rhous
+  culture: Arago (Arachnid)
+  biome: Tropical seasonal forest
+  latitude: 0.9
+  form_of_government: Empire
+  burgs: 28
+  provinces: 10
+  urban_population_thousands: 182.6
+  neighbors:
+  - Zheraca
+  - Gortharb
+  - Marb
+  - Nanugauthlet
+  color: '#bbf55d'
+- id: alkyurt-13
+  name: Alkyurt
+  kind: River
+  capital: Alka
+  culture: Rohand (Human)
+  biome: Savanna
+  latitude: -40.0
+  form_of_government: Khaganate
+  burgs: 23
+  provinces: 8
+  urban_population_thousands: 166.2
+  neighbors:
+  - Thres
+  - Direvilde
+  color: '#ee9b89'
+- id: thres-7
+  name: Thres
+  kind: Nomadic
+  capital: Iah
+  culture: Kobold (Goblin)
+  biome: Savanna
+  latitude: 32.4
+  form_of_government: Empire
+  burgs: 13
+  provinces: 5
+  urban_population_thousands: 89.3
+  neighbors:
+  - Yuethan
+  - Bral-O
+  - Alkyurt
+  color: '#8dbbb7'
+- id: direvilde-5
+  name: Direvilde
+  kind: Naval
+  capital: Heartglen
+  culture: Dail (Human)
+  biome: Temperate deciduous forest
+  latitude: -37.5
+  form_of_government: League
+  burgs: 40
+  provinces: 13
+  urban_population_thousands: 288.0
+  neighbors:
+  - Lastle
+  - Alkyurt
+  color: '#a6d854'
+- id: kud-8
+  name: Kud
+  kind: River
+  capital: Bulg
+  culture: Ugluk (Orkish)
+  biome: Tropical rainforest
+  latitude: 4.0
+  form_of_government: Theocracy
+  burgs: 44
+  provinces: 13
+  urban_population_thousands: 357.8
+  neighbors:
+  - Bombogod
+  - Bral-O
+  - Lastle
+  color: '#949fdf'
+- id: gortharb-9
+  name: Gortharb
+  kind: Generic
+  capital: Gortharb
+  culture: Yotunn (Giants)
+  biome: Tropical seasonal forest
+  latitude: -39.1
+  form_of_government: Principality
+  burgs: 25
+  provinces: 7
+  urban_population_thousands: 179.4
+  neighbors:
+  - Liakur
+  color: '#b7afc1'
+- id: yuethan-3
+  name: Yuethan
+  kind: Generic
+  capital: Helumyhesi
+  culture: Eldar (Elfish)
+  biome: Taiga
+  latitude: 36.4
+  form_of_government: Republic
+  burgs: 12
+  provinces: 4
+  urban_population_thousands: 69.8
+  neighbors:
+  - Thres
+  - Bral-O
+  color: '#8da0cb'
+- id: zheraca-10
+  name: Zheraca
+  kind: Generic
+  capital: Zheraca
+  culture: Arago (Arachnid)
+  biome: Temperate rainforest
+  latitude: 19.1
+  form_of_government: Principality
+  burgs: 35
+  provinces: 10
+  urban_population_thousands: 246.1
+  neighbors:
+  - Liakur
+  color: '#d5aed0'
+- id: bral-o-2
+  name: Bral-O
+  kind: River
+  capital: Krag
+  culture: Ugluk (Orkish)
+  biome: Grassland
+  latitude: 28.0
+  form_of_government: Theocracy
+  burgs: 10
+  provinces: 5
+  urban_population_thousands: 84.6
+  neighbors:
+  - Yuethan
+  - Bombogod
+  - Kud
+  - Thres
+  color: '#fc8d62'
+- id: marb-4
+  name: Marb
+  kind: Generic
+  capital: Marb
+  culture: Yotunn (Giants)
+  biome: Tropical seasonal forest
+  latitude: -15.9
+  form_of_government: Theocracy
+  burgs: 16
+  provinces: 6
+  urban_population_thousands: 74.5
+  neighbors:
+  - Liakur
+  - Nanugauthlet
+  - Etaloshel
+  color: '#e78ac3'
+- id: nanugauthlet-6
+  name: Nanugauthlet
+  kind: Naval
+  capital: Veld
+  culture: Trow (Dark Elfish)
+  biome: Temperate rainforest
+  latitude: -41.7
+  form_of_government: Grand Duchy
+  burgs: 22
+  provinces: 6
+  urban_population_thousands: 147.5
+  neighbors:
+  - Marb
+  - Liakur
+  - Etaloshel
+  color: '#ffd92f'
+- id: lastle-1
+  name: Lastle
+  kind: Naval
+  capital: Rosedale
+  culture: Dail (Human)
+  biome: Tropical rainforest
+  latitude: -23.6
+  form_of_government: Theocracy
+  burgs: 24
+  provinces: 8
+  urban_population_thousands: 227.4
+  neighbors:
+  - Kud
+  - Direvilde
+  color: '#66c2a5'
+- id: etaloshel-12
+  name: Etaloshel
+  kind: Naval
+  capital: Benild'anil
+  culture: Trow (Dark Elfish)
+  biome: Temperate deciduous forest
+  latitude: -40.8
+  form_of_government: Grand Duchy
+  burgs: 16
+  provinces: 6
+  urban_population_thousands: 95.8
+  neighbors:
+  - Marb
+  - Nanugauthlet
+  color: '#6de3aa'
+- id: bombogod-14
+  name: Bombogod
+  kind: Nomadic
+  capital: Bombogod
+  culture: Dulandir (Human)
+  biome: Grassland
+  latitude: 37.0
+  form_of_government: Republic
+  burgs: 6
+  provinces: 2
+  urban_population_thousands: 23.7
+  neighbors:
+  - Bral-O
+  - Kud
+  color: '#d6a0dd'
+cultures:
+- name: Quenian (Elfish)
+  kind: Hunting
+  expansionism: 1
+- name: Eldar (Elfish)
+  kind: Generic
+  expansionism: 1
+- name: Trow (Dark Elfish)
+  kind: Naval
+  expansionism: 2.1
+- name: Lothian (Dark Elfish)
+  kind: Highland
+  expansionism: 1.2
+- name: Dunirr (Dwarven)
+  kind: Highland
+  expansionism: 2.3
+- name: Khazadur (Dwarven)
+  kind: Highland
+  expansionism: 1.5
+- name: Kobold (Goblin)
+  kind: Nomadic
+  expansionism: 2.7
+- name: Uruk (Orkish)
+  kind: Highland
+  expansionism: 1.3
+- name: Ugluk (Orkish)
+  kind: River
+  expansionism: 1.1
+- name: Yotunn (Giants)
+  kind: Generic
+  expansionism: 1.9
+- name: Rake (Drakonic)
+  kind: Hunting
+  expansionism: 1
+- name: Arago (Arachnid)
+  kind: Generic
+  expansionism: 1.1
+- name: Aj'Snaga (Serpents)
+  kind: Generic
+  expansionism: 1.7
+- name: Anor (Human)
+  kind: Generic
+  expansionism: 1.5
+- name: Dail (Human)
+  kind: Naval
+  expansionism: 2.6
+- name: Rohand (Human)
+  kind: River
+  expansionism: 1.6
+- name: Dulandir (Human)
+  kind: Nomadic
+  expansionism: 1.7
+major_settlements:
+- name: Rosedale
+  nation: Lastle
+  population_thousands: 39.2
+  capital: true
+  port: false
+  kind: River
+  biome: Temperate rainforest
+  latitude: -23.6
+  x: 1049.3
+  y: 454.4
+- name: Chezegh
+  nation: Kud
+  population_thousands: 30.0
+  capital: false
+  port: true
+  kind: Naval
+  biome: Temperate rainforest
+  latitude: 21.2
+  x: 1106.9
+  y: 275.3
+- name: Krag
+  nation: Bral-O
+  population_thousands: 27.5
+  capital: true
+  port: true
+  kind: Naval
+  biome: Temperate deciduous forest
+  latitude: 28.0
+  x: 990.5
+  y: 247.9
+- name: Veld
+  nation: Nanugauthlet
+  population_thousands: 26.9
+  capital: true
+  port: true
+  kind: Naval
+  biome: Temperate rainforest
+  latitude: -41.7
+  x: 312.8
+  y: 527.0
+- name: Bulg
+  nation: Kud
+  population_thousands: 25.7
+  capital: true
+  port: true
+  kind: Naval
+  biome: Wetland
+  latitude: 4.0
+  x: 1062.4
+  y: 344.1
+- name: Organenuz
+  nation: Marb
+  population_thousands: 22.5
+  capital: false
+  port: true
+  kind: Naval
+  biome: Tropical seasonal forest
+  latitude: -15.6
+  x: 407.6
+  y: 422.4
+- name: Dryndrauth
+  nation: Nanugauthlet
+  population_thousands: 22.2
+  capital: false
+  port: false
+  kind: Generic
+  biome: Temperate rainforest
+  latitude: -47.1
+  x: 299.4
+  y: 548.3
+- name: Dustcross
+  nation: Direvilde
+  population_thousands: 21.9
+  capital: false
+  port: false
+  kind: Generic
+  biome: Temperate deciduous forest
+  latitude: -44.3
+  x: 893.4
+  y: 537.1
+- name: Iah
+  nation: Thres
+  population_thousands: 21.7
+  capital: true
+  port: true
+  kind: Naval
+  biome: Temperate rainforest
+  latitude: 32.4
+  x: 720.2
+  y: 230.6
+- name: Ziacar
+  nation: Zheraca
+  population_thousands: 21.5
+  capital: false
+  port: true
+  kind: Naval
+  biome: Temperate deciduous forest
+  latitude: 25.2
+  x: 422.8
+  y: 259.3
+- name: Gortharb
+  nation: Gortharb
+  population_thousands: 20.8
+  capital: true
+  port: true
+  kind: Naval
+  biome: Temperate rainforest
+  latitude: -39.1
+  x: 126.3
+  y: 516.5
+- name: Yahar
+  nation: Alkyurt
+  population_thousands: 20.6
+  capital: false
+  port: false
+  kind: Generic
+  biome: Temperate rainforest
+  latitude: -40.7
+  x: 795.2
+  y: 522.9
+- name: Zheraca
+  nation: Zheraca
+  population_thousands: 20.5
+  capital: true
+  port: false
+  kind: Generic
+  biome: Temperate deciduous forest
+  latitude: 19.1
+  x: 429.7
+  y: 283.6
+- name: Shaypost
+  nation: Direvilde
+  population_thousands: 20.3
+  capital: false
+  port: true
+  kind: Naval
+  biome: Temperate deciduous forest
+  latitude: -57.4
+  x: 962.1
+  y: 589.7
+- name: Krarguz
+  nation: Kud
+  population_thousands: 19.5
+  capital: false
+  port: true
+  kind: Naval
+  biome: Wetland
+  latitude: 3.1
+  x: 1085.7
+  y: 347.6
+rivers:
+- name: Drypost
+  discharge: 1033
+  length: 176.9
+  settlements:
+  - Bulg
+  - Krarguz
+  - Stormburn
+  - Arguz
+  - Zulbrab
+- name: Rompound
+  discharge: 769
+  length: 187.8
+  settlements: []
+- name: Oagonbreach
+  discharge: 699
+  length: 168.9
+  settlements:
+  - Tlaugheri
+  - Steamwall
+- name: Greemouth
+  discharge: 629
+  length: 164.0
+  settlements:
+  - Ireholpass
+  - Southtligh
+  - Cryshearha
+  - Borest
+  - Broncairnsi
+- name: Hiavheesh
+  discharge: 604
+  length: 121.8
+  settlements:
+  - Yeesed
+  - Rhous
+- name: Sasingston
+  discharge: 590
+  length: 237.4
+  settlements:
+  - Krag
+  - Filhari
+- name: Tuleddam
+  discharge: 522
+  length: 148.4
+  settlements:
+  - Organenuz
+  - Marb
+- name: Neggaz
+  discharge: 459
+  length: 81.0
+  settlements:
+  - Rezgniz
+- name: Pireguard
+  discharge: 392
+  length: 171.8
+  settlements:
+  - Alka
+  - Shaven
+- name: Akalazkay
+  discharge: 390
+  length: 99.7
+  settlements:
+  - Toprak
+- name: Nuledgor
+  discharge: 381
+  length: 88.8
+  settlements:
+  - Nahourg
+- name: Skurgath
+  discharge: 354
+  length: 86.9
+  settlements: []
+- name: Maclif
+  discharge: 338
+  length: 103.3
+  settlements:
+  - Itheashal
+- name: Newtownfore
+  discharge: 328
+  length: 76.5
+  settlements: []
+- name: Gagzah
+  discharge: 326
+  length: 78.5
+  settlements: []
+- name: Yekeki
+  discharge: 322
+  length: 90.7
+  settlements:
+  - Kaboybale
+  - Alderiyol
+- name: Clearses
+  discharge: 313
+  length: 98.7
+  settlements:
+  - Arsirehaven
+- name: Deadford
+  discharge: 275
+  length: 92.4
+  settlements: []
+- name: Verdud
+  discharge: 263
+  length: 68.2
+  settlements:
+  - Chezegh
+- name: Doglemon
+  discharge: 262
+  length: 77.0
+  settlements:
+  - Crowgmeay
+  - Fearsimeva
+  - Snagonwell
+  - Crowgrose
+  - Ireden
+- name: Klilm
+  discharge: 259
+  length: 80.1
+  settlements:
+  - Iah
+  - Suirx
+  - Dobok
+  - Traggek
+- name: Clardis
+  discharge: 253
+  length: 56.1
+  settlements:
+  - Drethyr
+- name: Obaya
+  discharge: 246
+  length: 48.2
+  settlements:
+  - Desesengur
+- name: Undhil
+  discharge: 232
+  length: 73.8
+  settlements:
+  - Lylath
+- name: Grasstals
+  discharge: 220
+  length: 75.0
+  settlements:
+  - Shimhand
+  - Castle
+- name: Kegan
+  discharge: 214
+  length: 46.2
+  settlements: []
+- name: Brasterlis
+  discharge: 192
+  length: 128.2
+  settlements:
+  - Agharolanyx
+  - Umanillahil
+- name: Steamhorn
+  discharge: 192
+  length: 84.2
+  settlements:
+  - Cloudham
+  - Steepmaw
+  - Westhclif
+- name: Korilwo
+  discharge: 192
+  length: 80.1
+  settlements: []
+- name: Epesente
+  discharge: 188
+  length: 48.3
+  settlements: []
+- name: Rase
+  discharge: 186
+  length: 50.1
+  settlements: []
+- name: Steepcairn
+  discharge: 179
+  length: 25.6
+  settlements: []
+- name: Piceguard
+  discharge: 176
+  length: 41.2
+  settlements: []
+- name: Catefield
+  discharge: 174
+  length: 81.0
+  settlements:
+  - Crowgrasp
+  - Deadwich
+- name: Ebellerie
+  discharge: 172
+  length: 55.7
+  settlements:
+  - Lefranthei
+  - Eneras
+- name: Ull-Didralela
+  discharge: 166
+  length: 53.7
+  settlements: []
+- name: Thorngulfga
+  discharge: 157
+  length: 57.5
+  settlements:
+  - Houndham
+- name: Rharhie
+  discharge: 156
+  length: 71.6
+  settlements:
+  - Ziacar
+  - Aikashazi
+- name: Bulaangel
+  discharge: 154
+  length: 139.4
+  settlements:
+  - Khezegh
+  - Khan Ger
+  - Bombogod
+- name: Knighgulch
+  discharge: 154
+  length: 73.4
+  settlements: []

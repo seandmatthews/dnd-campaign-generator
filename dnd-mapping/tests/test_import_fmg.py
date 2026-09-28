@@ -192,12 +192,147 @@ def test_json_export_reports_no_missing(tmp):
        doc["summary"]["rivers"] == 1, str(doc["summary"]))
 
 
+# --------------------------------------------------------------- climate
+
+
+STEERING_SETTINGS = {
+    "seed": "777",
+    "graph": {"width": 1280, "height": 720, "points": 10000},
+    "geography": {"coordinates": {"latT": 180, "latN": 90, "latS": -90}},
+    "climate": {"temperature": {"equator": 30, "northPole": -40,
+                                "southPole": -15}, "precipitation": 120},
+    "cultures": {"set": "highFantasy"},
+}
+# y -> latitude on a 720-high map spanning latT=180 from latN=90:
+#   y=180 -> 90 - 45.0 = 45.0;  y=540 -> 90 - 135.0 = -45.0
+STEERING_PACK = {
+    "features": [0, {"i": 1, "type": "ocean", "cells": 900}],
+    "biomes": [0,
+               {"i": 1, "name": "Taiga"},
+               {"i": 2, "name": "Glacier"},
+               {"i": 3, "name": "Marine"}],
+    "cultures": [0, {"i": 1, "name": "Dunirr (Dwarven)", "base": 1,
+                     "expansionism": 1}],
+    "states": [0, {"i": 1, "name": "S", "salesTax": 0, "cells": 4,
+                   "color": "#fff", "neighbors": [], "culture": 1,
+                   "capital": 1}],
+    "burgs": [0,
+              {"i": 1, "name": "B", "port": False, "state": 1, "cell": 0,
+               "capital": True, "population": 9.0, "x": 10, "y": 540},
+              {"i": 2, "name": "C", "port": False, "state": 1, "cell": 3,
+               "capital": False, "population": 1.0, "x": 20, "y": 180}],
+    "provinces": [0],
+    "religions": [0],
+    "rivers": [],
+    # cell biomes: state 1 owns cells 0-3; taiga dominates 2:1 over glacier
+    # (cell 3 is marine-owned-by-nobody: state 0 -> excluded)
+    "cells": {"biome": [1, 1, 2, 3], "state": [1, 1, 1, 0],
+              "v": [[0, 1, 2], [1, 2, 3], [2, 3, 4], [3, 4, 5]]},
+    "vertices": {"p": [[0, 0], [2, 0], [1, 4], [3, 1], [4, 3], [5, 5]]},
+}
+
+
+def test_climate_fields_headless_shape(tmp):
+    """Headless dumps: map options at the settings top level, cells as
+    columnar arrays. geography.yaml gains culture_set + climate in meta,
+    dominant biome + capital latitude per nation, biome + latitude per
+    settlement — all pure functions of the dump (byte-stable)."""
+    data = {"info": {"mapName": "Fullia", "seed": "777", "height": 720},
+            "settings": dict(STEERING_SETTINGS),
+            "pack": json.loads(json.dumps(STEERING_PACK))}
+    p = pathlib.Path(tmp) / "headless-777.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    _, doc, _ = import_to(tmp, p)
+    nation = doc["nations"][0]
+    ok("nation dominant biome (marine excluded, taiga 2:1)",
+       nation.get("biome") == "Taiga", str(nation))
+    ok("nation latitude from the capital's y", nation.get("latitude") == -45.0,
+       str(nation))
+    ok("biome/latitude sit right after culture",
+       list(nation)[:6] == ["id", "name", "kind", "capital", "culture",
+                            "biome"], str(list(nation)))
+    by_name = {s["name"]: s for s in doc["major_settlements"]}
+    ok("settlement biome from its own cell",
+       by_name["B"].get("biome") == "Taiga" and
+       by_name["C"].get("biome") == "Marine", str(by_name))
+    ok("settlement latitudes", by_name["B"].get("latitude") == -45.0
+       and by_name["C"].get("latitude") == 45.0, str(by_name))
+    ok("meta records the steering",
+       doc["meta"].get("culture_set") == "highFantasy"
+       and doc["meta"].get("climate") == {"equator_c": 30, "north_pole_c": -40,
+                                          "south_pole_c": -15},
+       str(doc["meta"]))
+    again = import_to(tmp, p)[1]
+    ok("re-import is byte-stable", again == doc)
+
+
+def test_climate_fields_browser_shape(tmp):
+    """Browser full JSON exports: options nested under settings.options.map,
+    cells expanded into per-cell dicts — same fields, same values."""
+    pack = json.loads(json.dumps(STEERING_PACK))
+    cells = pack["cells"]
+    pack["cells"] = [
+        {"i": i, "biome": cells["biome"][i], "state": cells["state"][i],
+         "v": cells["v"][i]}
+        for i in range(len(cells["biome"]))
+    ]
+    data = {"info": {"mapName": "Fullia", "seed": "777", "height": 720},
+            "settings": {"options": {"map": dict(STEERING_SETTINGS)}},
+            "pack": pack}
+    p = pathlib.Path(tmp) / "full.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    _, doc, _ = import_to(tmp, p)
+    nation = doc["nations"][0]
+    ok("browser shape: nation biome + latitude",
+       nation.get("biome") == "Taiga" and nation.get("latitude") == -45.0,
+       str(nation))
+    ok("browser shape: meta steering",
+       doc["meta"].get("culture_set") == "highFantasy", str(doc["meta"]))
+
+
+def test_climate_fields_degrade_to_absent(tmp):
+    """A dump with no options and no per-cell data (.map-section imports,
+    pre-enrichment headless dumps) keeps the old shape: no biome/latitude
+    keys anywhere, no meta.climate/culture_set — absent, never wrong."""
+    data = {
+        "info": {"mapName": "Bare", "seed": "5"},
+        "settings": {"seed": "5"},
+        "pack": {
+            "features": [0, {"i": 1, "type": "ocean", "cells": 900}],
+            "cultures": [0, {"i": 1, "name": "C", "base": 1, "expansionism": 1}],
+            "states": [0, {"i": 1, "name": "S", "salesTax": 0, "cells": 10,
+                           "color": "#fff", "neighbors": [], "culture": 1,
+                           "capital": 1}],
+            "burgs": [0, {"i": 1, "name": "B", "port": False, "state": 1,
+                          "population": 1.0, "x": 1, "y": 2}],
+            "provinces": [0],
+            "religions": [0],
+            "rivers": [],
+        },
+    }
+    p = pathlib.Path(tmp) / "bare.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    _, doc, _ = import_to(tmp, p)
+    nation = doc["nations"][0]
+    ok("no biome/latitude on the nation",
+       "biome" not in nation and "latitude" not in nation, str(nation))
+    ok("no biome/latitude on settlements",
+       all("biome" not in s and "latitude" not in s
+           for s in doc["major_settlements"]), str(doc["major_settlements"]))
+    ok("no climate/culture_set in meta",
+       "climate" not in doc["meta"] and "culture_set" not in doc["meta"],
+       str(doc["meta"]))
+
+
 if __name__ == "__main__":
     for fn in [test_full_import, test_missing_sections_are_reported_not_silent,
                test_seedless_dump_gets_a_noseed_suffix,
                test_output_is_mtime_and_clock_free,
                test_cli_batch_survives_one_bad_file,
-               test_json_export_reports_no_missing]:
+               test_json_export_reports_no_missing,
+               test_climate_fields_headless_shape,
+               test_climate_fields_browser_shape,
+               test_climate_fields_degrade_to_absent]:
         with tempfile.TemporaryDirectory() as d:
             fn(d)
     print()

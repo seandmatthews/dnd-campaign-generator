@@ -12,7 +12,7 @@ copy of those files. If the working tree is lost, these restore Tier 1.
 
 | file | applies to | what it is |
 |---|---|---|
-| `headless-export.test.ts` | `src/generators/headless-export.test.ts` | the custom vitest entrypoint that runs FMG's generation pipeline headlessly and dumps `{info, settings, pack}` (the shape `src/import_fmg.py` parses). Env: `FMG_SEED`, `FMG_W`, `FMG_H`, `FMG_OUT`. |
+| `headless-export.test.ts` | `src/generators/headless-export.test.ts` | the custom vitest entrypoint that runs FMG's generation pipeline headlessly and dumps `{info, settings, pack}` (the shape `src/import_fmg.py` parses). Env: `FMG_SEED`, `FMG_W`, `FMG_H`, `FMG_OUT`, `FMG_OPTIONS` (JSON deep-merged over the randomized options — pin a culture set, heightmap template, climate or limits per world; see the runner header). |
 | `package-json.patch` | `package.json` | adds `d3-quadtree` to dependencies (used by the pipeline in Node, not declared upstream at tag 1.153.1). |
 
 Installs are plain `npm install` (npm ships with Node; upstream keeps a
