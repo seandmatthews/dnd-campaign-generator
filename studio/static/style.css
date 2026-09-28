@@ -478,6 +478,18 @@ textarea.input {
 .form-note { font-size: 12.5px; }
 .form-error:empty { display: none; }
 
+/* worldgen steering (Maps tab): premise line + the option grid it fills */
+.steer-premise { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.steer-premise .field { flex: 1 1 340px; }
+.steer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px 12px;
+  margin-top: 8px;
+}
+.steer-grid .input { width: 100%; }
+.steer-grid .field select.input { width: 100%; }
+
 /* ---------- pills, chips, badges ---------- */
 
 .pill {
@@ -1408,3 +1420,37 @@ li.backlink-item[style] { cursor: pointer; }
   background: var(--paper-bright); border-radius: var(--radius-sm);
   padding: 10px 14px; margin-bottom: 14px;
 }
+
+/* ---------------- Places tab (place-centered campaign view) ---------------- */
+
+.linklike {
+  background: none; border: none; padding: 0; cursor: pointer;
+  color: inherit; font: inherit; text-decoration: underline dotted;
+}
+.linklike:hover { color: var(--amber); }
+
+.pill-ok { border-color: var(--moss); color: var(--moss); }
+.pill-muted { border-color: var(--line-strong); color: var(--ink-faint); }
+
+.place-rows { display: flex; flex-direction: column; gap: 8px; }
+.place-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 9px 12px;
+}
+.place-row-side { display: flex; align-items: center; gap: 8px; }
+.place-id { font-size: 12px; }
+.suggest-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.place-findings summary { cursor: pointer; }
+
+.place-head { margin-bottom: 10px; }
+.place-head .place-back { margin-bottom: 10px; }
+.place-title { margin: 4px 0; }
+.place-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.place-lore { border-left: 3px solid var(--line-strong); padding-left: 12px; }
+.place-items { list-style: none; padding: 0; margin: 0; }
+.place-item { padding: 5px 0; border-bottom: 1px dotted var(--line); }
+.place-item:last-child { border-bottom: none; }
+.place-rel { margin-right: 6px; }
+.place-event { padding: 4px 0; }
+.place-clean { margin-top: 4px; }
+.error-text { color: #a4431f; }

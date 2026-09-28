@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import spine  # noqa: E402
 import publication  # noqa: E402
-from routers import campaigns, knowledge, lore, maps, review, simulation, system  # noqa: E402
+from routers import campaigns, knowledge, lore, maps, places, review, simulation, system  # noqa: E402
 
 STUDIO_DIR = Path(__file__).resolve().parent
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -107,7 +107,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Campaign Studio", version="0.1.0", lifespan=lifespan)
 
-for r in (campaigns, system, maps, simulation, lore, review, knowledge):
+for r in (campaigns, system, maps, simulation, lore, review, knowledge, places):
     app.include_router(r.router)
 
 

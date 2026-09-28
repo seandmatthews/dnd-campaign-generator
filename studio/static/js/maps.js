@@ -292,6 +292,96 @@
 
   /* ----- generate a world (seed -> headless FMG -> import -> workspace) ----- */
 
+  // Steering surface for one generation — mirrors studio/routers/maps.py.
+  // Anything left blank is not sent: the seed keeps rolling it.
+  const CULTURE_SETS = [
+    ['', 'random (per seed)'],
+    ['world', 'world — mixed, no theme'],
+    ['european', 'european — historic name pool'],
+    ['oriental', 'oriental — historic name pool'],
+    ['english', 'english — historic name pool'],
+    ['antique', 'antique — historic name pool'],
+    ['highFantasy', 'highFantasy — elves, dwarves, giants (habitat-homed)'],
+    ['darkFantasy', 'darkFantasy — grim variant (habitat-homed)'],
+    ['random', 'random — surprise set'],
+  ];
+  const HEIGHTMAP_TEMPLATES = ['volcano', 'highIsland', 'lowIsland', 'continents',
+    'archipelago', 'atoll', 'mediterranean', 'peninsula', 'pangea', 'isthmus',
+    'shattered', 'taklamakan', 'oldWorld', 'fractious'];
+  const STEER_FIELDS = [
+    ['opt-cultures', 'cultures', 'Cultures', '1-30'],
+    ['opt-states', 'states', 'States', '1-60'],
+    ['opt-burgs', 'burgs', 'Burgs', '50-5000'],
+    ['opt-precip', 'precipitation', 'Precipitation', '5-500'],
+    ['opt-lat', 'latitude', 'Latitude band', '0 far north .. 100 far south'],
+  ];
+
+  function steerControlsHtml() {
+    const sets = CULTURE_SETS.map(([v, label]) =>
+      `<option value="${v}">${label}</option>`).join('');
+    const templates = ['<option value="">random (per seed)</option>']
+      .concat(HEIGHTMAP_TEMPLATES.map((t) => `<option value="${t}">${t}</option>`))
+      .join('');
+    const nums = STEER_FIELDS.map(([cls, , label, range]) =>
+      `<label class="field"><span class="field-label">${label}</span>` +
+      `<input type="number" class="input ${cls}" min="0" placeholder="${range}"></label>`).join('');
+    const temps = [['opt-equator', 'equator'], ['opt-north', 'north_pole'], ['opt-south', 'south_pole']]
+      .map(([cls, label]) =>
+        `<label class="field"><span class="field-label">${label} &deg;C</span>` +
+        `<input type="number" class="input ${cls}" placeholder="&plusmn;60"></label>`).join('');
+    return (
+      `<div class="steer-grid">` +
+        `<label class="field"><span class="field-label">Culture set</span>` +
+          `<select class="input opt-culture-set">${sets}</select></label>` +
+        `<label class="field"><span class="field-label">Heightmap</span>` +
+          `<select class="input opt-template">${templates}</select></label>` +
+        nums + temps +
+      `</div>`);
+  }
+
+  function collectSteerOptions(wrap) {
+    const val = (sel) => {
+      const el = wrap.querySelector('.' + sel);
+      return el ? String(el.value).trim() : '';
+    };
+    const num = (sel) => {
+      const v = val(sel);
+      if (v === '') return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    const opts = {};
+    if (val('opt-culture-set')) opts.culture_set = val('opt-culture-set');
+    if (val('opt-template')) opts.template = val('opt-template');
+    STEER_FIELDS.forEach(([cls, key]) => {
+      const v = num(cls);
+      if (v !== null) opts[key] = v;
+    });
+    const temps = {};
+    [['opt-equator', 'equator'], ['opt-north', 'north_pole'], ['opt-south', 'south_pole']]
+      .forEach(([cls, key]) => {
+        const v = num(cls);
+        if (v !== null) temps[key] = v;
+      });
+    if (Object.keys(temps).length) opts.temperature_c = temps;
+    return Object.keys(opts).length ? opts : null;
+  }
+
+  function fillSteerOptions(wrap, options) {
+    const o = options || {};
+    const setVal = (sel, v) => {
+      const el = wrap.querySelector('.' + sel);
+      if (el) el.value = v == null ? '' : String(v);
+    };
+    setVal('opt-culture-set', o.culture_set);
+    setVal('opt-template', o.template);
+    STEER_FIELDS.forEach(([cls, key]) => setVal(cls, o[key]));
+    const temps = o.temperature_c || {};
+    setVal('opt-equator', temps.equator);
+    setVal('opt-north', temps.north_pole);
+    setVal('opt-south', temps.south_pole);
+  }
+
   function worldGenForm(hasGeography) {
     const wrap = S.el(
       '<div class="form-block">' +
@@ -306,6 +396,20 @@
               '<span class="field-label">force (replace the world)</span></label>'
             : '') +
         '</form>' +
+        '<details class="world-steer">' +
+          '<summary>World character (optional &mdash; steers this generation only)</summary>' +
+          '<div class="steer-premise">' +
+            '<label class="field"><span class="field-label">Describe the world you want ' +
+              '&mdash; the model fills the options below</span>' +
+              '<textarea class="input world-premise" rows="2" ' +
+              'placeholder="e.g. A frozen northern world: dwarven holds in the icy mountains, troll warbands across the glacier, warmer kingdoms in the south"></textarea></label>' +
+            '<button type="button" class="btn world-suggest-btn">Suggest options</button>' +
+          '</div>' +
+          steerControlsHtml() +
+          '<p class="muted form-note">Blank fields stay random per seed. highFantasy/' +
+          'darkFantasy culture sets home each race to its natural habitat &mdash; pair one with a ' +
+          'cold north pole and a low latitude band for dwarven mountains and troll glaciers.</p>' +
+        '</details>' +
         (hasGeography
           ? '<p class="muted form-note">This campaign already has a generated world. Regenerating ' +
             'replaces <code>world/source.*</code> and <code>world/geography.yaml</code> &mdash; existing ' +
@@ -328,6 +432,28 @@
       });
     }
 
+    const suggestBtn = wrap.querySelector('.world-suggest-btn');
+    suggestBtn.addEventListener('click', async () => {
+      const premise = wrap.querySelector('.world-premise').value.trim();
+      if (!premise) {
+        S.toast('Describe the world you want first', 'error');
+        return;
+      }
+      suggestBtn.disabled = true;
+      try {
+        const resp = await S.api(S.campUrl('/world-options'), {
+          method: 'POST',
+          body: { premise: premise }
+        });
+        fillSteerOptions(wrap, resp && resp.options);
+        S.toast('Options suggested — review them, then generate', 'ok');
+      } catch (err) {
+        S.toast('Suggest failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+      } finally {
+        suggestBtn.disabled = false;
+      }
+    });
+
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
       const seed = seedIn.value.trim();
@@ -336,9 +462,12 @@
       errBox.innerHTML = '';
       log.open();
       (async () => {
+        const body = { seed: seed, force: forceTgl ? !!forceTgl.checked : false };
+        const options = collectSteerOptions(wrap);
+        if (options) body.options = options;
         const resp = await S.api(S.campUrl('/world'), {
           method: 'POST',
-          body: { seed: seed, force: forceTgl ? !!forceTgl.checked : false }
+          body: body
         });
         if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
         const result = await S.pollJob(resp.job_id, (line) => log.push(line));

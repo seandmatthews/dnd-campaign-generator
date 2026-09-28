@@ -1,4 +1,6 @@
-"""POST /world — the 409 force gate and the job with a FAKE FMG step.
+"""POST /world — the 409 force gate and the job with a FAKE FMG step, plus
+the steering surface (options validation, FMG_OPTIONS pass-through) and the
+world-options LLM suggestion endpoint (faked completion).
 
 No real FMG/vitest/import_fmg call ever runs here: engines.run_node (the
 headless-FMG incantation) and engines.run_py (import_fmg) are monkeypatched
@@ -9,6 +11,7 @@ documented CLIs would (FMG_OUT dump, worlds/candidates/*.yaml).
 import json
 
 import engines
+import llm_client
 import spine
 from conftest import tiny_fmg_dump, wait_for_job
 
@@ -164,3 +167,135 @@ def test_world_job_engine_failure_is_a_job_error(client, tmp_spine_root,
     assert not (tmp_spine_root / "testvale" / "world" / "source.json").exists()
     assert (tmp_spine_root / "testvale" / "world" /
             "geography.yaml").is_file()  # the fixture's original, untouched
+
+
+# ------------------------------------------------------------- steering
+
+
+def test_world_post_422_bad_options(client, spine_root):
+    for options, why in (
+        ({"species": "dwarven"}, "unknown key"),
+        ({"culture_set": "klingon"}, "bad enum"),
+        ({"cultures": "twelve"}, "non-integer count"),
+        ({"burgs": 10 ** 9}, "out-of-range count"),
+        ({"temperature_c": {"midway": 5}}, "unknown temperature key"),
+        ({"temperature_c": {"north_pole": 999}}, "out-of-range temperature"),
+    ):
+        r = client.post("/api/campaign/testvale/world",
+                        json={"seed": "42", "force": True, "options": options})
+        assert r.status_code == 422, (options, why, r.json())
+        assert "error" in r.json()
+
+
+def test_world_job_carries_fmg_options(client, tmp_spine_root, monkeypatch):
+    """Steering rides to the runner as FMG_OPTIONS, translated onto FMG's
+    real option paths; with nothing set the env key is absent entirely."""
+    calls = {}
+
+    def fake_run_node(engine_root, *args, timeout=600, on_line=None, env=None):
+        calls["env"] = env
+        with open(f"{env['FMG_OUT']}/headless-{env['FMG_SEED']}.json", "w",
+                  encoding="utf-8") as f:
+            json.dump(tiny_fmg_dump(str(env["FMG_SEED"])), f)
+        return 0, ["headless export"]
+
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
+        candidates = engine_root / "worlds" / "candidates"
+        candidates.mkdir(parents=True, exist_ok=True)
+        (candidates / "testland-0042.yaml").write_text(
+            "meta:\n  seed: '42'\nsummary:\n  nations: 1\n  settlements: 1\n",
+            encoding="utf-8")
+        return 0, [("headless-42.json -> testland-0042.yaml: 'Testland' "
+                    "(seed 42): 1 nations, 1 settlements, 1 cultures")]
+
+    monkeypatch.setattr(engines, "run_node", fake_run_node)
+    monkeypatch.setattr(engines, "run_py", fake_run_py)
+    monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+
+    r = client.post("/api/campaign/testvale/world", json={
+        "seed": "42", "force": True,
+        "options": {"culture_set": "highFantasy", "template": "continents",
+                    "burgs": 800, "precipitation": 60, "latitude": 15,
+                    "temperature_c": {"north_pole": -45}}})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert json.loads(calls["env"]["FMG_OPTIONS"]) == {
+        "generation": {"cultures": {"set": "highFantasy"},
+                       "template": "continents",
+                       "burgs": {"limit": 800},
+                       "geography": {"latitude": 15}},
+        "map": {"climate": {"precipitation": 60,
+                            "temperature": {"northPole": -45}}},
+    }
+    assert any("steering" in ln for ln in job["log_tail"])
+
+    calls.clear()
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "43", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert "FMG_OPTIONS" not in (calls.get("env") or {})
+
+
+# ------------------------------------------------- world-options (LLM)
+
+
+def test_world_options_422_empty_premise(client, spine_root):
+    r = client.post("/api/campaign/testvale/world-options", json={"premise": "  "})
+    assert r.status_code == 422
+    assert "premise" in r.json()["error"]
+
+
+def test_world_options_503_without_key(client, spine_root, monkeypatch):
+    def no_key(*args, **kwargs):
+        raise RuntimeError("no LLM API key found — set LLM_API_KEY in llm.env")
+
+    monkeypatch.setattr(llm_client, "complete", no_key)
+    r = client.post("/api/campaign/testvale/world-options",
+                    json={"premise": "an icy north held by dwarves"})
+    assert r.status_code == 503
+    assert "LLM_API_KEY" in r.json()["error"]
+
+
+def test_world_options_suggests_validated_values(client, spine_root, monkeypatch):
+    """The happy path: the model's JSON (fences tolerated) comes back in
+    client-format form values, already passed through the same validator
+    the generate call uses."""
+
+    def fake_complete(prompt, **kwargs):
+        assert "icy north" in prompt
+        return ('Sure! Here are the options:\n```json\n'
+                '{"culture_set": "highFantasy", "template": "continents", '
+                '"temperature_c": {"north_pole": -45, "equator": 27}}\n```')
+
+    monkeypatch.setattr(llm_client, "complete", fake_complete)
+    r = client.post("/api/campaign/testvale/world-options",
+                    json={"premise": "an icy north held by dwarves and trolls"})
+    assert r.status_code == 200, r.json()
+    assert r.json()["options"] == {
+        "culture_set": "highFantasy",
+        "template": "continents",
+        "temperature_c": {"north_pole": -45, "equator": 27},
+    }
+
+
+def test_world_options_502_on_unusable_suggestions(client, spine_root,
+                                                   monkeypatch):
+    # prose with no JSON object at all
+    monkeypatch.setattr(llm_client, "complete",
+                        lambda *a, **k: "I would suggest a cold world!")
+    r = client.post("/api/campaign/testvale/world-options",
+                    json={"premise": "x"})
+    assert r.status_code == 502
+    assert "unusable suggestion" in r.json()["error"]
+    # a JSON object with an invalid value: refused, with the manual fallback
+    monkeypatch.setattr(llm_client, "complete",
+                        lambda *a, **k: '{"culture_set": "klingon"}')
+    r = client.post("/api/campaign/testvale/world-options",
+                    json={"premise": "x"})
+    assert r.status_code == 502
+    assert "invalid option" in r.json()["error"]
+    assert "fill the form manually" in r.json()["error"]

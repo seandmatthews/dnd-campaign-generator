@@ -31,6 +31,8 @@ class FactBody(BaseModel):
     visibility: str | list[str]  # "dm_only" | "public" | [faction ids]
     source_file: str = ""
     subjects: list[str] | None = None
+    # place ids this fact is about (place-centered-campaign-view.md)
+    place_ids: list[str] | None = None
     id: str | None = None        # present = update the existing fact
 
 
@@ -39,6 +41,7 @@ class SupersedeBody(BaseModel):
     visibility: str | list[str]
     source_file: str = ""
     subjects: list[str] | None = None
+    place_ids: list[str] | None = None
 
 
 def _require_state(name: str) -> None:
@@ -74,7 +77,8 @@ def post_knowledge(name: str, body: FactBody):
             fact, pub = knowledge.record_fact_tx(
                 name, fact_id=body.id, text=body.text,
                 visibility=body.visibility,
-                source_file=body.source_file or "", subjects=body.subjects)
+                source_file=body.source_file or "", subjects=body.subjects,
+                place_ids=body.place_ids)
             snap = canon.snapshot_result(
                 name, f"campaign/{name}: record fact {fact['id']}")
             publication.after_snapshot(name, pub["transaction"], snap)
@@ -97,7 +101,8 @@ def post_supersede(name: str, fact_id: str, body: SupersedeBody):
             ensure_publishable_409(name)
             new, pub = knowledge.supersede_fact_tx(
                 name, fact_id, text=body.text, visibility=body.visibility,
-                source_file=body.source_file or "", subjects=body.subjects)
+                source_file=body.source_file or "", subjects=body.subjects,
+                place_ids=body.place_ids)
             snap = canon.snapshot_result(
                 name, f"campaign/{name}: supersede fact {fact_id}")
             publication.after_snapshot(name, pub["transaction"], snap)

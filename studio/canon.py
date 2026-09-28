@@ -128,7 +128,13 @@ def _snapshot_locked(root, campaign_name: str, message: str) -> dict:
     rc, out, err = _git(root, "commit", "-m", message,
                         "--only", "--", campaign_name)
     if rc != 0:
-        if "nothing to commit" in (out + err):
+        # git prints the full "nothing to commit" status text when the tree
+        # is clean, but with untracked files SIBLING to the pathspec (a
+        # second campaign never snapshotted yet) the wording becomes
+        # "nothing added to commit but untracked files present" — same
+        # no-change verdict, and it must not read as a failure
+        if ("nothing to commit" in (out + err)
+                or "nothing added to commit" in (out + err)):
             log.info("canon snapshot: nothing to commit for %s", campaign_name)
             return {"state": "no_change", "commit": None,
                     "detail": "nothing to commit — the campaign files were "

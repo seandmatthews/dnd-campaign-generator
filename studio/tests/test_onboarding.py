@@ -125,6 +125,81 @@ def test_create_state_validation(client, tmp_spine_root, fresh_campaign):
     assert not (tmp_spine_root / fresh_campaign / "simulation" / "state.yaml").exists()
 
 
+# --------------------------------------------- multi-place sandboxes (places)
+
+def test_create_state_with_places_writes_multi_place_schema(
+        client, tmp_spine_root, fresh_campaign):
+    """Extra places switch the sandbox to the engine's `places` schema and
+    let a faction be born outside the primary city — the two-tier setup."""
+    name = fresh_campaign
+    r = client.post(f"/api/campaign/{name}/simulation/state", json=_body(
+        city={"name": "Provis", "population": 12300},
+        places=[{"name": "Harmouth"},
+                {"name": "the Kingdom of Sweth", "kind": "nation"}],
+        factions=_body()["factions"] + [
+            {"name": "The Crown of Sweth", "goal": "own every crossing",
+             "place": "The Kingdom of Sweth"}],
+    ))
+    assert r.status_code == 201, r.text
+    doc = yaml.safe_load(
+        (tmp_spine_root / name / "simulation" / "state.yaml")
+        .read_text(encoding="utf-8"))
+    assert "city" not in doc, "a multi-place sandbox carries places, not city"
+    assert [p["id"] for p in doc["places"]] == [
+        "provis", "harmouth", "the-kingdom-of-sweth"]
+    assert doc["places"][0]["kind"] == "city" and doc["places"][0]["population"] == 12300
+    assert doc["places"][1] == {"id": "harmouth", "name": "Harmouth",
+                                "kind": "burg"}, "extras default to burgs"
+    assert doc["places"][2]["kind"] == "nation"
+    by_name = {f["name"]: f for f in doc["factions"]}
+    assert "place" not in by_name["The Bridge Wardens"], \
+        "a faction naming no place stays on the primary city"
+    assert by_name["The Crown of Sweth"]["place"] == "the-kingdom-of-sweth", \
+        "the place name is resolved to the place id"
+    # the tab reads the normalized places back for the roster
+    sim = client.get(f"/api/campaign/{name}/simulation").json()
+    assert [p["id"] for p in sim["places"]] == [
+        "provis", "harmouth", "the-kingdom-of-sweth"]
+
+
+def test_create_state_refuses_an_unknown_faction_place(
+        client, tmp_spine_root, fresh_campaign):
+    name = fresh_campaign
+    r = client.post(f"/api/campaign/{name}/simulation/state", json=_body(
+        places=[{"name": "Harmouth"}],
+        factions=_body()["factions"] + [
+            {"name": "The Crown of Sweth", "goal": "own every crossing",
+             "place": "Swethholm"}],
+    ))
+    assert r.status_code == 422
+    assert "Swethholm" in r.json()["error"]
+    assert "Harmouth" in r.json()["error"], "the valid places are named"
+    # a place reference to the city itself resolves (and the legacy city
+    # shape stays when it is the only place)
+    r = client.post(f"/api/campaign/{name}/simulation/state", json=_body(
+        factions=[{"name": "A", "goal": "x", "place": "provis"},
+                  {"name": "B", "goal": "y"}]))
+    assert r.status_code == 201
+    doc = yaml.safe_load(
+        (tmp_spine_root / name / "simulation" / "state.yaml")
+        .read_text(encoding="utf-8"))
+    assert "places" not in doc and doc["city"] == {"name": "Provis"}, \
+        "no extras means the legacy shape, wherever a faction points"
+
+
+def test_create_state_refuses_duplicate_places(client, tmp_spine_root,
+                                               fresh_campaign):
+    name = fresh_campaign
+    url = f"/api/campaign/{name}/simulation/state"
+    r = client.post(url, json=_body(places=[{"name": "Provis"}]))
+    assert r.status_code == 422
+    assert "duplicates" in r.json()["error"]
+    r = client.post(url, json=_body(places=[{"name": "Harmouth"},
+                                            {"name": "harmouth"}]))
+    assert r.status_code == 422
+    assert not (tmp_spine_root / name / "simulation" / "state.yaml").exists()
+
+
 # ------------------------------------------------- stage a name seed list (POST style)
 
 def test_stage_names_list_happy_path(client, tmp_spine_root, fresh_campaign):

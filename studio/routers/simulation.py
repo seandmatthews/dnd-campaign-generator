@@ -54,7 +54,8 @@ router = APIRouter()
 
 # proposal kinds that change ONLY simulation/state.yaml — no chronicles, no
 # timeline entries. The accept path treats everything else as a full week.
-STATE_ONLY_KINDS = frozenset({"session_effects", "goal_updates"})
+STATE_ONLY_KINDS = frozenset({"session_effects", "goal_updates",
+                              "project_changes"})
 
 _log = logging.getLogger("studio.simulation")
 
@@ -137,31 +138,53 @@ class CityBody(BaseModel):
     population: int | None = None
 
 
+class PlaceBody(BaseModel):
+    """An extra place factions can belong to — another burg, a town, the
+    wider world. The primary city arrives through `city` and always leads
+    the places list; `places` carries the rest."""
+    name: str
+    kind: str = "burg"
+    population: int | None = None
+    districts: list[str] = []
+
+
 class FactionBody(BaseModel):
     name: str
     kind: str = ""
     goal: str
     resources: dict[str, str] = {}
+    # a place NAME (matched case-insensitively; blank = the primary city) —
+    # resolved to the place's id for state.yaml, so a world-tier faction can
+    # be born in the sandbox instead of via a hand edit
+    place: str = ""
 
 
 class SessionEffectBody(BaseModel):
     """One structured consequence of play (Phase 3): typed, reviewed,
     deduplicated by stable id. `resource`/`field` choose the set_field vs
-    set_resource shape; expected_before is the precondition the DM saw."""
+    set_resource shape; expected_before is the precondition the DM saw.
+    Project effects (set_project_progress / set_project_status) key on
+    project_id instead of faction_id."""
     type: str
-    faction_id: str
-    after: str
+    faction_id: str | None = None
+    # int for project progress counters, text for everything else — the
+    # engine's validator is the range/type authority
+    after: str | int
     reason: str
     id: str | None = None
     resource: str | None = None
     field: str | None = None
     expected_before: str | None = None
     week: int | None = None
+    project_id: str | None = None
 
 
 class SessionEventBody(BaseModel):
     actor: str = "world"
     text: str
+    # optional explicit WHERE (place ids) — validated by the engine against
+    # the state's places; never inferred from the actor's current place
+    place_ids: list[str] | None = None
 
 
 class SessionBody(BaseModel):
@@ -179,8 +202,12 @@ class CreateStateBody(BaseModel):
     season: str = "early spring"
     # optional in the model so the 422 can name the problem in studio words;
     # post_create_state refuses a sandbox without one — the engine's week
-    # chronicle and faction views read city.name and crash after the spend
+    # chronicle and faction views read the places and crash after the spend
     city: CityBody | None = None
+    # extra places beyond the city (other burgs, the wider world) — a
+    # sandbox with any of these gets the engine's multi-place `places`
+    # schema instead of the legacy single-city shape
+    places: list[PlaceBody] = []
     factions: list[FactionBody]
     force: StrictBool = False
 
@@ -253,6 +280,8 @@ def _validated_faction_doc(factions: list[FactionBody]) -> list[dict]:
         })
         if (f.kind or "").strip():
             out[-1]["kind"] = f.kind.strip()
+        if (f.place or "").strip():
+            out[-1]["place"] = f.place.strip()
     return out
 
 
@@ -305,8 +334,73 @@ def post_create_state(name: str, body: CreateStateBody):
             raise HTTPException(status_code=422,
                                 detail="city population must be positive")
         city["population"] = body.city.population
-    doc["city"] = city
-    doc["factions"] = _validated_faction_doc(body.factions)
+
+    factions = _validated_faction_doc(body.factions)
+
+    # Multi-place: the city is always the primary place (factions without a
+    # `place` live here); extras follow in the order given. A sandbox with
+    # no extras keeps the legacy single-`city` state shape; one with extras
+    # gets the engine's `places` list.
+    primary_id = spine.slugify(city_name)
+    if not primary_id:
+        raise HTTPException(status_code=422,
+                            detail=f"city name '{city_name}' has no usable "
+                                   "id characters")
+    places: list[dict] = [dict(city, id=primary_id, kind="city")]
+    names_by_id: dict[str, str] = {primary_id: city_name}
+    for p in body.places:
+        pname = (p.name or "").strip()
+        if not pname:
+            raise HTTPException(status_code=422,
+                                detail="every place needs a name")
+        pid = spine.slugify(pname)
+        if not pid:
+            raise HTTPException(status_code=422,
+                                detail=f"place name '{pname}' has no usable "
+                                       "id characters")
+        if pid in names_by_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"place '{pname}' duplicates "
+                       f"'{names_by_id[pid]}' — places need distinct names")
+        entry: dict = {"id": pid, "name": pname,
+                       "kind": (p.kind or "burg").strip() or "burg"}
+        if p.population is not None:
+            if p.population <= 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"place '{pname}': population must be positive")
+            entry["population"] = p.population
+        districts = [d.strip() for d in (p.districts or []) if d.strip()]
+        if districts:
+            entry["districts"] = districts
+        places.append(entry)
+        names_by_id[pid] = pname
+
+    # resolve each faction's place name to the place id; blank = primary.
+    # Names are matched through the same slug the id carries, so "The Weir"
+    # and "the weir" both find it — and a typo gets the valid list, not a
+    # state the engine refuses after the spend.
+    valid_places = ", ".join(names_by_id.values())
+    for f in factions:
+        want = (f.get("place") or "").strip()
+        if not want:
+            f.pop("place", None)
+            continue
+        pid = spine.slugify(want)
+        if pid not in names_by_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"faction '{f.get('name')}' names place '{want}', "
+                       f"which is not one of this sandbox's places: "
+                       f"{valid_places}")
+        f["place"] = pid
+
+    doc["factions"] = factions
+    if len(places) > 1:
+        doc["places"] = places
+    else:
+        doc["city"] = city
     doc["events"] = []
     doc["rumors"] = []
 
@@ -342,7 +436,9 @@ def get_simulation(name: str):
     return {
         "clock": {"week": clock.get("week"), "season": clock.get("season")},
         "premise": meta.get("premise") or "",
+        "places": spine.state_places(state),
         "factions": factions,
+        "projects": state.get("projects") or [],
         "events": state.get("events") or [],
         "rumors": state.get("rumors") or [],
         "chronicles": spine.chronicles(name),
@@ -911,6 +1007,7 @@ def get_proposal(name: str):
         "diff": bundle["diff"],
         "entries": bundle["entries"],
         "updates": bundle["updates"],
+        "changes": bundle.get("changes") or [],
         "findings": bundle.get("findings") or [],
         "chronicles": [
             {"file": f"simulation/chronicle/{fn}", "title": fn,
@@ -1069,6 +1166,11 @@ def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
         result["events_added"] = len(diff.get("events_added") or [])
         result["resources_changed"] = len(diff.get("resources") or {})
         result["goals_changed"] = len(diff.get("fields") or {})
+        if manifest.get("kind") == "project_changes":
+            result["operations"] = len(bundle.get("changes") or [])
+            result["projects_added"] = len(diff.get("projects_added") or [])
+            result["projects_changed"] = len(diff.get("projects_changed")
+                                             or {})
     else:
         result["chronicles"] = sorted(bundle["chronicles"])
         result["timeline_entries"] = len(bundle["entries"])
@@ -1084,6 +1186,8 @@ def _accept_operation(manifest: dict) -> str:
                 f"{(manifest.get('run_record') or {}).get('source') or 'session'})")
     if kind == "goal_updates":
         return "accept goal updates from the ledger"
+    if kind == "project_changes":
+        return "accept project changes (create/edit/pause/resume/abandon)"
     return f"accept week {manifest.get('proposed_week')} proposal"
 
 
@@ -1094,6 +1198,8 @@ def _accept_message(name: str, manifest: dict, chron) -> str:
         return f"campaign/{name}: session effects applied ({source})"
     if kind == "goal_updates":
         return f"campaign/{name}: goal updates applied (goal review)"
+    if kind == "project_changes":
+        return f"campaign/{name}: project changes applied"
     msg = f"campaign/{name}: week {manifest.get('proposed_week')}"
     if chron and chron.get("title"):
         msg += f" — {chron['title']}"
@@ -1263,6 +1369,189 @@ def post_session(name: str, body: SessionBody):
         "proposal_id": pid, "status": "pending", "kind": "session_effects",
         "events_added": len(diff.get("events_added") or []),
         "resources_changed": len(diff.get("resources") or {}),
+        "diff": diff,
+    }
+
+
+# ------------------------------------------------------- faction projects
+
+
+class ProjectOpBody(BaseModel):
+    """One typed DM operation: create | edit | pause | resume | abandon.
+    Unknown fields fail validation in the ENGINE (the CLI is the single
+    rules implementation — the studio never re-implements project rules)."""
+    op: str
+    reason: str
+    id: str | None = None
+    project_id: str | None = None
+    project: dict | None = None
+    set: dict | None = None
+
+
+class ProjectPrepareBody(BaseModel):
+    operations: list[ProjectOpBody]
+
+
+def _projects_report(name: str) -> dict:
+    """The engine's own --report: the DM project list with computed
+    requirement/completion findings (one fast subprocess, no LLM, no lock —
+    the same read-only pattern as views/why)."""
+    rc, lines = engines.run_py(
+        engines.AGENTIC_SIMULATOR, "src/projects.py", "--report",
+        "--state", str(spine.campaign_dir(name) / "simulation" / "state.yaml"),
+        timeout=60)
+    if rc != 0:
+        raise HTTPException(
+            status_code=502,
+            detail=f"projects engine failed (rc={rc})"
+                   + (f": {' | '.join(lines[-3:])}" if lines else ""))
+    try:
+        doc = yaml.safe_load("\n".join(lines))
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=502,
+                            detail=f"projects engine printed bad YAML: {e}")
+    if not isinstance(doc, dict):
+        raise HTTPException(status_code=502,
+                            detail="projects engine output was not a mapping")
+    return doc
+
+
+@router.get("/api/campaign/{name}/simulation/projects")
+def get_projects(name: str):
+    require_campaign(name)
+    if not (spine.campaign_dir(name) / "simulation" / "state.yaml").is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="no simulation/state.yaml in this campaign — create the "
+                   "sandbox first")
+    return _projects_report(name)
+
+
+@router.get("/api/campaign/{name}/simulation/projects/{project_id}")
+def get_project(name: str, project_id: str):
+    """One project's detail plus its sourced event history — every event
+    and completion this project id carries, newest last."""
+    require_campaign(name)
+    report = _projects_report(name)
+    project = next((p for p in (report.get("projects") or [])
+                    if p.get("id") == project_id), None)
+    if project is None:
+        raise HTTPException(status_code=404,
+                            detail=f"no such project: {project_id}")
+    state = spine.load_state(name) or {}
+    history = [e for e in (state.get("events") or [])
+               if isinstance(e, dict) and e.get("project_id") == project_id]
+    history.sort(key=lambda e: (e.get("week") is None, e.get("week") or 0))
+    return {"project": project, "history": history,
+            "week": report.get("week")}
+
+
+@router.post("/api/campaign/{name}/simulation/projects/prepare")
+def prepare_projects(name: str, body: ProjectPrepareBody):
+    """Stage DM project operations (create/edit/pause/resume/abandon) as a
+    `project_changes` proposal — the engine validates against a captured
+    copy and produces the after-image; nothing in the campaign changes
+    until the proposal is accepted. Synchronous 200: two bounded
+    subprocess calls, no LLM, no engine-lock critical section."""
+    d = require_campaign(name)
+    if not (d / "simulation" / "state.yaml").is_file():
+        raise HTTPException(status_code=404,
+                            detail="no simulation/state.yaml in this campaign")
+    pending = proposals.find_pending(name)
+    if pending:
+        raise HTTPException(
+            status_code=409,
+            detail=f"a proposal is awaiting review "
+                   f"({pending.get('proposal_id')}) — accept or discard it "
+                   f"before preparing project changes")
+    ensure_publishable_409(name)
+    if not body.operations:
+        raise HTTPException(status_code=422,
+                            detail="nothing to prepare — add an operation")
+    operations = []
+    for op in body.operations:
+        record = {k: v for k, v in op.model_dump().items() if v is not None}
+        operations.append(record)
+
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="studio-projects-"))
+    try:
+        # capture the base state and its revision TOGETHER under the lock
+        # (same rule as the session flow: the after-image must be judged
+        # against the exact bytes the engine applied it to)
+        with campaign_lock_nowait(name, "preparing project changes"):
+            state_path = d / "simulation" / "state.yaml"
+            state_text, base_revision = _state_snapshot(state_path)
+        copy_path = tmp_dir / "state-copy.yaml"
+        copy_path.write_text(state_text, encoding="utf-8")
+        changes_path = tmp_dir / "changes.yaml"
+        changes_path.write_text(
+            yaml.safe_dump({"operations": operations}, sort_keys=False,
+                           allow_unicode=True, width=100), encoding="utf-8")
+
+        # the engine's --preview validates AND produces the candidate in one
+        # run; rc 1 means the batch is refused whole (no partial edits)
+        rc, lines = engines.run_py(
+            engines.AGENTIC_SIMULATOR, "src/projects.py",
+            "--preview", str(changes_path),
+            "--state", str(copy_path),
+            "--out", str(tmp_dir / "preview.yaml"), timeout=60)
+        if rc != 0:
+            detail = " | ".join(lines[-5:]) or "no output"
+            raise HTTPException(
+                status_code=422,
+                detail=f"the engine refused these project changes: {detail}")
+        preview = yaml.safe_load(
+            (tmp_dir / "preview.yaml").read_text(encoding="utf-8")) or {}
+        norm_ops = preview.get("operations") or []
+        findings = preview.get("findings") or []
+        candidate_doc = preview.get("state") or {}
+        if not candidate_doc:
+            raise RuntimeError("the engine's preview carried no candidate "
+                               "state — nothing staged")
+        candidate_text = yaml.safe_dump(
+            candidate_doc, sort_keys=False, allow_unicode=True, width=100)
+
+        # the state the engine validated against must still be canon
+        with campaign_lock_nowait(name, "staging the project proposal"):
+            racing = proposals.find_pending(name)
+            if racing:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"a proposal appeared while these project changes "
+                           f"were being prepared "
+                           f"({racing.get('proposal_id')}) — accept or "
+                           f"discard it first; nothing was staged")
+            current = publication.file_revision(
+                d / "simulation" / "state.yaml")
+            if current != base_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="simulation/state.yaml changed while these "
+                           "project changes were being prepared — prepare "
+                           "again against the current state; nothing was "
+                           "staged")
+            pid = proposals.create(
+                name, kind="project_changes",
+                base_week=_clock_week(candidate_doc),
+                proposed_week=_clock_week(candidate_doc),
+                base_revisions={"simulation/state.yaml": base_revision},
+                input_set_revisions={},
+                artifacts={"state": candidate_text, "chronicles": {},
+                           "entries": [], "changes": norm_ops,
+                           "findings": list(findings)},
+                run_record={"kind": "project_changes",
+                            "engine": "agentic-simulator/src/projects.py "
+                                      "--preview"},
+                before_state=yaml.safe_load(state_text) or {})
+    finally:
+        import shutil
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    diff = proposals.diff_states(yaml.safe_load(state_text) or {},
+                                 candidate_doc, [])
+    return {
+        "proposal_id": pid, "status": "pending", "kind": "project_changes",
+        "operations": len(norm_ops), "findings": list(findings),
         "diff": diff,
     }
 

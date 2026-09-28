@@ -133,6 +133,11 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
         yaml.safe_dump(findings, sort_keys=False, allow_unicode=True,
                        width=100), encoding="utf-8")
     manifest["artifacts"]["findings"] = "artifacts/findings.yaml"
+    changes = artifacts.get("changes") or []
+    (bdir / "artifacts" / "project-changes.yaml").write_text(
+        yaml.safe_dump(changes, sort_keys=False, allow_unicode=True,
+                       width=100), encoding="utf-8")
+    manifest["artifacts"]["changes"] = "artifacts/project-changes.yaml"
     replay_text = artifacts.get("replay")
     if replay_text:
         (bdir / "artifacts" / "replay.yaml").write_text(
@@ -259,6 +264,13 @@ def load(name: str, proposal_id: str) -> dict:
             out["findings"] = findings if isinstance(findings, list) else []
         else:
             out["findings"] = []
+        changes_path = arts / "project-changes.yaml"
+        if changes_path.is_file():
+            changes = yaml.safe_load(
+                changes_path.read_text(encoding="utf-8"))
+            out["changes"] = changes if isinstance(changes, list) else []
+        else:
+            out["changes"] = []
         diff = json.loads((arts / "diff.json").read_text(encoding="utf-8"))
         out["diff"] = diff if isinstance(diff, dict) else {}
     except (OSError, yaml.YAMLError, ValueError) as e:
@@ -283,6 +295,8 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
         "fields": {},
         "events_added": [],
         "rumors_added": [],
+        "projects_added": [],
+        "projects_changed": {},
     }
     bf = {f.get("id"): f for f in ((before or {}).get("factions") or [])
           if isinstance(f, dict)}
@@ -313,7 +327,11 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
             diff["events_added"].append(
                 {"week": e.get("week"), "actor": e.get("actor"),
                  "text": str(e.get("text") or ""),
-                 "source": e.get("source"), "effect": e.get("effect")})
+                 "source": e.get("source"), "effect": e.get("effect"),
+                 # explicit event locations (place-centered-campaign-view.md):
+                 # the place page's pending section joins on these — never on
+                 # the actor's current place
+                 "place_ids": [str(x) for x in (e.get("place_ids") or [])]})
     before_rumors = {r.get("claim") for r in (ev_b.get("rumors") or [])
                      if isinstance(r, dict)}
     for r in ((after or {}).get("rumors") or []):
@@ -321,5 +339,38 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
             diff["rumors_added"].append(
                 {"claim": str(r.get("claim") or ""),
                  "fidelity": str(r.get("fidelity") or "")})
+    # projects: additions and per-project field changes (progress movement,
+    # status, terms) — what a work week, a sabotage, or a session effect moved
+    bp = {p.get("id"): p for p in ((before or {}).get("projects") or [])
+          if isinstance(p, dict)}
+    ap = {p.get("id"): p for p in ((after or {}).get("projects") or [])
+          if isinstance(p, dict)}
+    for pid, p_after in ap.items():
+        p_before = bp.get(pid)
+        if p_before is None:
+            diff["projects_added"].append(
+                {"id": pid,
+                 "faction_id": p_after.get("faction_id"),
+                 "title": str(p_after.get("title") or ""),
+                 "place_ids": [str(x) for x in (p_after.get("place_ids")
+                                                or [])]})
+            continue
+        changed = {k: {"before": p_before.get(k), "after": p_after.get(k)}
+                   for k in ("progress", "target", "status", "title",
+                             "objective", "visibility")
+                   if p_before.get(k) != p_after.get(k)}
+        comp_b = (p_before.get("completion") or {}).get("text") or ""
+        comp_a = (p_after.get("completion") or {}).get("text") or ""
+        if comp_b != comp_a:
+            changed["completion_text"] = {"before": comp_b, "after": comp_a}
+        blocked_b = p_before.get("completion_blocked")
+        blocked_a = p_after.get("completion_blocked")
+        if blocked_b != blocked_a:
+            changed["completion_blocked"] = {"before": blocked_b,
+                                             "after": blocked_a}
+        if changed:
+            changed["faction_id"] = p_after.get("faction_id")
+            changed["title"] = str(p_after.get("title") or "")
+            diff["projects_changed"][pid] = changed
     diff["timeline_entries"] = len(entries or [])
     return diff

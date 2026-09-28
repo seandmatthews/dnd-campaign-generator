@@ -272,11 +272,15 @@ shapes in this document true.
   "base_revisions","input_set_revisions (advisory: what the run READ, not enforced at accept)"},"diff":{clock,resources,fields,
   events_added,rumors_added,timeline_entries},"entries":[...],
   "updates":[...],"findings":[...],"chronicles":[{file,title,markdown}]}`.
-  `kind` is `simulated_week` | `session_effects` | `goal_updates`;
-  `updates` is the goal-update list on a goal_updates bundle and
+  `kind` is `simulated_week` | `session_effects` | `goal_updates` |
+  `project_changes`;
+  `updates` is the goal-update list on a goal_updates bundle,
+  `changes` the normalized operation list on a project_changes bundle, and
   `findings` the validation findings (updates the engine cut and why —
   also persisted on zero-update runs); `diff.fields` carries
-  `{faction:{goal|kind|secret:{before,after}}}` for any set_field change.
+  `{faction:{goal|kind|secret:{before,after}}}` for any set_field change
+  and `diff.projects_added`/`diff.projects_changed` every project movement
+  (progress steps, status flips, term edits, completion blocks).
   A damaged bundle answers 422 naming the bundle (discard still works) —
   not a raw 500. Reads disk, so review survives a restart.
 - `POST /api/campaign/{name}/simulation/proposal/{pid}/accept` → publishes
@@ -302,6 +306,10 @@ shapes in this document true.
   verbatim, no mechanical effect); effects are the reviewed state changes,
   validated by the engine's own code via CLI (`src/effects.py --check`,
   list-form args) — 422 with the engine's refusal list when invalid.
+  Project effects (`set_project_progress` with an integer `after` clamped
+  to `0..target`, `set_project_status` with `active|paused|abandoned`) key
+  on `project_id` instead of `faction_id`; `completed` is unreachable by
+  text — reaching target runs the same completion pass a weekly tick uses.
   Effect ids are content-derived when omitted, so re-submitting the same
   session cannot mint a second identity. The after-image is produced by
   applying to a throwaway copy of the state; the campaign is untouched
@@ -321,6 +329,23 @@ shapes in this document true.
   "findings":[...],"staged":true,"diff":{...}}`. Accept applies each goal
   as one sourced audit event (source `goal-review:week-N`) and writes
   `simulation/state.yaml` only.
+- `GET /api/campaign/{name}/simulation/projects` → the engine's own DM
+  report (`src/projects.py --report`): every project normalized with
+  computed requirement findings, progress label, and any persisted
+  `completion_blocked` finding. 502 when the engine fails.
+- `GET /api/campaign/{name}/simulation/projects/{project_id}` → one
+  project's detail plus its sourced event history (every event carrying
+  its `project_id`, week-ordered). 404 unknown id.
+- `POST /api/campaign/{name}/simulation/projects/prepare`
+  `{"operations":[{"op":"create|edit|pause|resume|abandon","reason":str,
+  "project"?:{...},"project_id"?:str,"set"?:{...}}]}` → 200 (synchronous,
+  no LLM), stages a **`project_changes` proposal**. The engine validates
+  the whole batch against a captured copy (`src/projects.py --preview`;
+  rc 1 = refused whole, 422 with its findings — no partial edits) and
+  produces the after-image. 409 while any proposal is pending or the
+  state changed mid-prepare (same revision gate as sessions). Accept
+  writes `simulation/state.yaml` only; completing edits run the same
+  deterministic completion pass as weekly ticks.
 - `POST /api/campaign/{name}/simulation/forecast` `{"confirm":true,
   "weeks":2|3}` → 202 job. `confirm` must be exactly `true` (422 otherwise
   — same expensive-button gate as a week). **Forecast: propose-and-discard, never canon.**
@@ -462,6 +487,58 @@ shapes in this document true.
   An empty disclosure set produces an empty handout WITH an explanation —
   never a fallback to the DM briefing. No mechanics, no pending proposals,
   no secret titles or file paths.
+
+### Places (place-centered campaign view — deterministic, no LLM)
+- One campaign-local `place_id` joins lore pages (a `kind: place` page with
+  `place_id:` frontmatter OWNS identity), simulation places
+  (`state.places` / the normalized legacy `city`), map attachments
+  (companion-note `place_id:`), entity residence/presence
+  (`resides_at` / `present_at`), facts (`place_ids`), events
+  (`place_ids` on the event record), factions (`place`,
+  `interest_place_ids`), and projects (`place_ids`). Old campaigns read
+  WITHOUT any migration; a lore page and a sim place that share only a
+  normalized name appear as a SUGGESTED join — never merged until the
+  Link action writes the id (page body and unknown frontmatter keys are
+  preserved; renames keep the id and fold the old name into aliases).
+- `GET /api/campaign/{name}/places` → `{places:[{id,name,explicit,
+  provisional,association,lore_file,sim_id,maps,conflict}],
+  suggested:[...], conflicts:[...], findings:[...]}` — the Places
+  navigation entry.
+- `GET /api/campaign/{name}/places/{place_id}` → the consolidated DM view:
+  `{place, parent, children, maps, entities, factions, projects, events,
+  knowledge, pending, forecasts, mentions, findings, counts, revision}`.
+  Unknown id → 404; an id two lore pages both claim → 422 (a conflict,
+  never first-match-wins). Events are ONLY those whose records carry the
+  place id (never inferred from an actor's current place); old events
+  without ids stay unlocated and carry a read-only locator
+  `{index, state_revision}`, not a fake stable id. Facts carry their
+  visibility badge and the party-disclosure state from
+  `party-knowledge.yaml` — `public` in-world is not party-known. Pending
+  proposal items and active-forecast items are `canonical: false`
+  (forecasts also `hypothetical: true`) and never count as canon.
+  `?window=all` spans all history; recent defaults to 8 sim weeks;
+  `?include_descendants=true` pulls in child places (cycle-safe).
+- `GET .../places/{id}/events` and `GET .../places/{id}/mentions` → the
+  paginated slices behind the page (`?limit=&offset=`, max 200).
+- `POST .../places/{place_id}/link` `{page?, expected_page_revision?}` →
+  the one-time Link action: persists the id onto the owning lore page
+  (minting `place-<uuid>` for lore-only records; adopting the simulation's
+  id when one exists, so no state rewrite). Stale revision → 409.
+- `PATCH .../places/{place_id}` `{name?, parent_place_id?, aliases?,
+  preferred_map?, expected_page_revision?}` → rename / re-parent /
+  re-alias / set the preferred map on the page frontmatter. `preferred_map`
+  must be an existing campaign-relative path under `maps/`. Cyclic
+  parents are refused.
+- `POST .../places/{place_id}/associations` `{source_kind, source_id,
+  relationship, add?, expected_revision?}` → one typed update to an
+  ALLOWLISTED source record: `entity` page stem → `resides_at` /
+  `present_at`; `event` locator index → `occurred_at`; `fact` id →
+  `about`; `faction` id → `interest`; `map` slug → `depicts` (companion
+  note + params.yaml, never the generated artifacts). Unknown place ids
+  are refused at write time.
+- CLI (same service): `python studio/places.py show|list|link|associate …`
+  — `show <campaign> <id> --markdown` prints DM material that labels
+  private / pending / hypothetical sections; it is not a player handout.
 
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive

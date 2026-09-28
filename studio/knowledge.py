@@ -111,7 +111,8 @@ def _validate_visibility(visibility, faction_ids) -> str | list:
 
 def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
                   text, visibility, source_file: str = "", subjects=None,
-                  source_revision: str | None = None) -> dict:
+                  source_revision: str | None = None,
+                  place_ids=None) -> dict:
     """upsert's validation + mutation on a caller-owned (unsaved) doc.
     Shared by upsert (direct save) and the transactional record/supersede
     flows (the save rides the publication that also commits the compiled
@@ -132,6 +133,14 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
     fact["visibility"] = vis
     if subjects is not None:
         fact["subjects"] = [str(s) for s in subjects]
+    if place_ids is not None:
+        # the places this fact is ABOUT (place-centered-campaign-view.md):
+        # structured join metadata alongside the free-text subjects. Ids are
+        # not checked against a registry here — the store must work before
+        # any place page exists; the place view reports unknown ids as
+        # findings instead of dropping them.
+        fact["place_ids"] = [str(p).strip() for p in place_ids
+                             if str(p).strip()]
     if source_file:
         # the path rides a validated target: a '..' or absolute rel would
         # hash an arbitrary file outside the campaign (and re-hash it on
@@ -156,7 +165,7 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
 
 def upsert(name: str, *, fact_id: str | None = None, text: str,
            visibility, source_file: str = "", subjects=None,
-           source_revision: str | None = None) -> dict:
+           source_revision: str | None = None, place_ids=None) -> dict:
     """Create or update one fact, saving the store directly. Creating
     records the source file's CURRENT revision as approved (when a source
     file is given); updates that change text/visibility re-approve against
@@ -168,25 +177,30 @@ def upsert(name: str, *, fact_id: str | None = None, text: str,
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
                          visibility=visibility, source_file=source_file,
-                         subjects=subjects, source_revision=source_revision)
+                         subjects=subjects, source_revision=source_revision,
+                         place_ids=place_ids)
     _save(name, doc)
     return fact
 
 
 def supersede(name: str, old_id: str, *, text: str, visibility,
-              source_file: str = "", subjects=None) -> dict:
+              source_file: str = "", subjects=None, place_ids=None) -> dict:
     """Approve a corrected fact and flip the old one to superseded (kept
     for provenance, never compiled again). Direct-save variant; the
-    studio's route uses supersede_fact_tx."""
+    studio's route uses supersede_fact_tx. place_ids/subjects omitted in
+    the correction body carry forward from the old fact — a typo fix must
+    not silently strip the fact's place associations or subjects."""
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
     if old is None:
         raise KnowledgeError(f"no such fact: {old_id}")
+    subjects = old.get("subjects") if subjects is None else subjects
+    place_ids = old.get("place_ids") if place_ids is None else place_ids
     state = spine.load_state(name)
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     new = _apply_upsert(name, doc, faction_ids, text=text,
                         visibility=visibility, source_file=source_file,
-                        subjects=subjects)
+                        subjects=subjects, place_ids=place_ids)
     # _apply_upsert mutated OUR doc — mark the old record on the same
     # object, one save, no lost-update window
     old["status"] = "superseded"
@@ -196,7 +210,8 @@ def supersede(name: str, old_id: str, *, text: str, visibility,
 
 
 def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
-                   visibility, source_file: str = "", subjects=None) -> tuple:
+                   visibility, source_file: str = "", subjects=None,
+                   place_ids=None) -> tuple:
     """Record a fact AND compile the visible slice in ONE publication
     transaction: the store save and the compiled state commit are two
     writes of the same publish — a crash leaves neither or both, never a
@@ -208,24 +223,29 @@ def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
                          visibility=visibility, source_file=source_file,
-                         subjects=subjects)
+                         subjects=subjects, place_ids=place_ids)
     return fact, _publish_store_and_state(name, doc, state,
                                           operation="record knowledge fact")
 
 
 def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
-                      source_file: str = "", subjects=None) -> tuple:
+                      source_file: str = "", subjects=None,
+                      place_ids=None) -> tuple:
     """supersede + compile in one publication transaction (same reasoning
-    as record_fact_tx). Returns (new fact, publication result)."""
+    as record_fact_tx). place_ids/subjects omitted in the correction body
+    carry forward from the old fact (see supersede). Returns (new fact,
+    publication result)."""
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
     if old is None:
         raise KnowledgeError(f"no such fact: {old_id}")
+    subjects = old.get("subjects") if subjects is None else subjects
+    place_ids = old.get("place_ids") if place_ids is None else place_ids
     state = spine.load_state(name)
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     new = _apply_upsert(name, doc, faction_ids, text=text,
                         visibility=visibility, source_file=source_file,
-                        subjects=subjects)
+                        subjects=subjects, place_ids=place_ids)
     old["status"] = "superseded"
     old["superseded_by"] = new["id"]
     return new, _publish_store_and_state(

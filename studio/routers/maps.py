@@ -3,13 +3,16 @@ rendering, battlemap site generation.
 
 World generation (M1): POST /world wraps the documented headless-FMG
 incantation exactly (docs/map-pipeline.md Tier 1) — a vitest run from the
-FMG repo root with FMG_SEED/FMG_OUT env — then copies the raw dump into
-the campaign (D4) and runs `src/import_fmg.py` per its real CLI
-(cwd=dnd-mapping; it writes worlds/candidates — its documented behavior),
-copying the produced candidate yaml in as world/geography.yaml. FMG
-headless exports no SVG, so the hero is rendered from the dump itself by
-studio/worldmap.py (read-only; see that module for why regenerating is not
-an option).
+FMG repo root with FMG_SEED/FMG_OUT env (plus FMG_OPTIONS when the DM
+steers culture set / heightmap / climate / counts for THIS world; validated
+here, deep-merged over the randomized options after randomize) — then
+copies the raw dump into the campaign (D4) and runs `src/import_fmg.py` per
+its real CLI (cwd=dnd-mapping; it writes worlds/candidates — its documented
+behavior), copying the produced candidate yaml in as world/geography.yaml.
+FMG headless exports no SVG, so the hero is rendered from the dump itself
+by studio/worldmap.py (read-only; see that module for why regenerating is
+not an option). POST /world-options is the read-only LLM pass that turns a
+premise into suggested form values.
 
 City generation: `node scripts/gen-city.mjs --world <campaign
 world/source.*> --burg "<name>" --out <tmp>` with cwd=dnd-mapping (D3:
@@ -27,6 +30,7 @@ mutating job runs) and commits a canon snapshot on success
 ("campaign/<name>: generate world / map city / map site ...").
 """
 
+import json
 import re
 import shutil
 import tempfile
@@ -35,15 +39,16 @@ import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 
+import canon
+import engines
+import links
+import llm_client
+import spine
+import worldmap
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import canon
-import engines
-import links
-import spine
-import worldmap
 from routers.common import require_campaign, submit_campaign_job
 
 router = APIRouter()
@@ -65,6 +70,10 @@ _BAD_SITE_NAME = re.compile(r'[<>:"/\\|?*]')
 class CityBody(BaseModel):
     burg: str
     place: str | None = None
+    # optional explicit place id for the attachment metadata (place-centered-
+    # campaign-view.md): lands in the companion note frontmatter and
+    # params.yaml; the readable wiki-link stays the human-facing join
+    place_id: str | None = None
 
 
 class SiteBody(BaseModel):
@@ -72,11 +81,196 @@ class SiteBody(BaseModel):
     name: str
     seed: str | None = None
     place: str | None = None
+    place_id: str | None = None
 
 
 class WorldBody(BaseModel):
     seed: str
     force: bool = False
+    options: dict | None = None
+
+
+class WorldOptionsBody(BaseModel):
+    premise: str
+
+
+# The steering surface for headless worldgen (the Maps tab form and the
+# world-options suggestion endpoint): every key overrides ONE randomized FMG
+# option for THIS generation — anything not set still re-rolls with the
+# seed, so steering is per world, never a house default. The enumerations
+# mirror FMG at tag 1.153.1 (src/data/heightmap-templates.ts,
+# src/generators/cultures-generator.ts); the runner deep-merges them over
+# the randomized options (FMG_OPTIONS env).
+_CULTURE_SETS = ("world", "european", "oriental", "english", "antique",
+                 "highFantasy", "darkFantasy", "random")
+_HEIGHTMAP_TEMPLATES = ("volcano", "highIsland", "lowIsland", "continents",
+                        "archipelago", "atoll", "mediterranean", "peninsula",
+                        "pangea", "isthmus", "shattered", "taklamakan",
+                        "oldWorld", "fractious")
+# client key -> (low, high) for the integer counts, precipitation and the
+# latitude band (FMG's north-south shift: ~10-25 sits the map in the frozen
+# north like northern Europe, 50 straddles the equator, 70+ the far south)
+_OPTION_RANGES = {
+    "cultures": (1, 30),
+    "states": (1, 60),
+    "burgs": (50, 5000),
+    "precipitation": (5, 500),
+    "latitude": (0, 100),
+}
+_TEMPERATURE_KEYS = {"equator": "equator", "north_pole": "northPole",
+                     "south_pole": "southPole"}
+
+
+def _clean_world_options(raw):
+    """Validate a client options dict; return the normalized client-format
+    dict ({} when nothing is set). Raises ValueError naming the problem — a
+    silently ignored override would generate a world the DM did not ask
+    for. This is also the gate on the LLM suggestion endpoint: whatever it
+    refuses never reaches the generator."""
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("options must be an object")
+    allowed = ({"culture_set", "template", "temperature_c"}
+               | set(_OPTION_RANGES))
+    unknown = sorted(set(raw) - allowed)
+    if unknown:
+        raise ValueError("unknown option(s): " + ", ".join(unknown)
+                         + " — allowed: " + ", ".join(sorted(allowed)))
+    out: dict = {}
+
+    def as_int(key, v, low, high):
+        if isinstance(v, bool) or not isinstance(v, int) or not low <= v <= high:
+            raise ValueError(f"{key} must be an integer {low}..{high}")
+        return v
+
+    cs = raw.get("culture_set")
+    if cs not in (None, ""):
+        if cs not in _CULTURE_SETS:
+            raise ValueError("culture_set must be one of: "
+                             + ", ".join(_CULTURE_SETS))
+        out["culture_set"] = cs
+    template = raw.get("template")
+    if template not in (None, ""):
+        if template not in _HEIGHTMAP_TEMPLATES:
+            raise ValueError("template must be one of: "
+                             + ", ".join(_HEIGHTMAP_TEMPLATES))
+        out["template"] = template
+    for key, (low, high) in _OPTION_RANGES.items():
+        v = raw.get(key)
+        if v is not None and v != "":
+            out[key] = as_int(key, v, low, high)
+    temps = raw.get("temperature_c")
+    if temps not in (None, {}, ""):
+        if not isinstance(temps, dict):
+            raise ValueError("temperature_c must be an object")
+        unknown_t = sorted(set(temps) - set(_TEMPERATURE_KEYS))
+        if unknown_t:
+            raise ValueError("unknown temperature_c key(s): "
+                             + ", ".join(unknown_t)
+                             + " — allowed: " + ", ".join(_TEMPERATURE_KEYS))
+        picked = {}
+        for key in _TEMPERATURE_KEYS:
+            t = temps.get(key)
+            if t is not None and t != "":
+                picked[key] = as_int(f"temperature_c.{key}", t, -60, 60)
+        if picked:
+            out["temperature_c"] = picked
+    return out
+
+
+def _fmg_options_payload(client_options):
+    """Client-format options -> the runner's FMG_OPTIONS JSON payload ({}
+    when empty). The culture set exists in BOTH generation and map options
+    and the generators read the map copy; the runner mirrors it down."""
+    if not client_options:
+        return {}
+    gen: dict = {}
+    mp: dict = {}
+    if client_options.get("culture_set"):
+        gen["cultures"] = {"set": client_options["culture_set"]}
+    if client_options.get("template"):
+        gen["template"] = client_options["template"]
+    for key in ("cultures", "states", "burgs"):
+        if client_options.get(key) is not None:
+            gen.setdefault(key, {})["limit"] = client_options[key]
+    if client_options.get("latitude") is not None:
+        gen.setdefault("geography", {})["latitude"] = client_options["latitude"]
+    climate: dict = {}
+    if client_options.get("precipitation") is not None:
+        climate["precipitation"] = client_options["precipitation"]
+    if client_options.get("temperature_c"):
+        climate["temperature"] = {
+            _TEMPERATURE_KEYS[k]: v
+            for k, v in client_options["temperature_c"].items()}
+    if climate:
+        mp["climate"] = climate
+    out: dict = {}
+    if gen:
+        out["generation"] = gen
+    if mp:
+        out["map"] = mp
+    return out
+
+
+# Premise -> options. The model picks values; _clean_world_options is the
+# gate — whatever it refuses never reaches the generator.
+_WORLD_OPTIONS_PROMPT = """You configure fantasy world-map generator options for a GM from a one-paragraph premise. Reply with ONLY a JSON object — no prose, no fences — using at most these keys (omit any you have no opinion on):
+
+  culture_set   one of: world (mixed, no theme), european, oriental, english, antique (historic name pools), highFantasy, darkFantasy (race-themed cultures whose homelands follow their nature: dwarven cultures settle mountains and hills, giant cultures the coldest bands, elven cultures forests), random
+  template      heightmap: one of volcano, highIsland, lowIsland, continents, archipelago, atoll, mediterranean, peninsula, pangea, isthmus, shattered, taklamakan, oldWorld, fractious
+  cultures      culture count, integer 1-30. The highFantasy set holds 17 cultures and darkFantasy 18 — a count AT OR ABOVE the set size guarantees every race in the set appears; lower counts drop races at random. For a dwarves-and-trolls world pick highFantasy with cultures 17.
+  states        nation count, integer 1-60
+  burgs         settlement count, integer 50-5000
+  temperature_c object with up to: equator, north_pole, south_pole — integer degrees C each, -60..60 (defaults 27 / -30 / -15; a lower north_pole makes a brutal frozen north)
+  latitude      where the map sits on the globe, integer 0-100: low values put it in the frozen north (like northern Europe), 50 straddles the equator, high values the far south. An "icy north" world wants a low latitude AND a low north_pole temperature.
+  precipitation integer 5-500 (default 100)
+
+Example: premise "a frozen north held by dwarves and trolls, warmer southern kingdoms" -> {"culture_set":"highFantasy","template":"continents","latitude":15,"temperature_c":{"north_pole":-45}}
+
+Premise: """
+
+
+def _extract_json_object(text):
+    """The outermost JSON object in a model reply (fences tolerated)."""
+    text = (text or "").strip()
+    fence = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object in the model's reply")
+    return json.loads(text[start:end + 1])
+
+
+@router.post("/api/campaign/{name}/world-options")
+def post_world_options(name: str, body: WorldOptionsBody):
+    """Premise -> suggested worldgen options (one LLM pass; read-only —
+    this fills the form, it generates nothing)."""
+    require_campaign(name)
+    premise = (body.premise or "").strip()
+    if not premise:
+        raise HTTPException(status_code=422,
+                            detail="premise must be a non-empty description")
+    if len(premise) > 2000:
+        raise HTTPException(status_code=422,
+                            detail="premise must be under 2000 characters")
+    try:
+        raw = _extract_json_object(llm_client.complete(
+            _WORLD_OPTIONS_PROMPT + premise, temperature=0.2, max_tokens=512))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:  # JSONDecodeError subclasses ValueError
+        raise HTTPException(status_code=502,
+                            detail=f"unusable suggestion: {e}")
+    try:
+        options = _clean_world_options(raw)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"the model suggested an invalid option ({e}) — fill the "
+                   "form manually")
+    return {"options": options, "premise": premise}
 
 
 def _place_link(raw: str | None) -> str | None:
@@ -262,7 +456,9 @@ def post_city(name: str, body: CityBody):
             _stub_place_page(name, place, log)
             note = _companion_note(
                 dest, slug,
-                {"kind": "city map", "place": f"[[{place}]]", "burg": burg},
+                {"kind": "city map", "place": f"[[{place}]]",
+                 "place_id": (body.place_id or "").strip() or None,
+                 "burg": burg},
                 f"![[{slug}.svg]]\n\nCity map of {place}, generated from the "
                 f"world dump ({source.name}) via settlemaker.")
             log(f"companion note: maps/cities/{slug}/{note.name}")
@@ -294,17 +490,24 @@ def post_world(name: str, body: WorldBody):
             detail="world/geography.yaml already exists — pass force:true to "
                    "regenerate (this replaces world/source.* and "
                    "world/geography.yaml)")
+    try:
+        fmg_options = _fmg_options_payload(_clean_world_options(body.options))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     def job(log):
         tmp = Path(tempfile.mkdtemp(prefix="studio-world-"))
         try:
             fmg = engines.fmg_dir()
+            env = {"FMG_SEED": seed, "FMG_OUT": str(tmp)}
+            if fmg_options:
+                env["FMG_OPTIONS"] = json.dumps(fmg_options)
+                log(f"steering: FMG_OPTIONS={env['FMG_OPTIONS']}")
             log(f"headless FMG seed {seed} (FMG_SEED={seed} vitest run)")
             rc, lines = engines.run_node(
                 fmg, "node_modules/vitest/vitest.mjs", "run",
                 "src/generators/headless-export.test.ts",
-                timeout=900, on_line=log,
-                env={"FMG_SEED": seed, "FMG_OUT": str(tmp)})
+                timeout=900, on_line=log, env=env)
             if rc != 0:
                 raise RuntimeError("headless FMG failed (rc=%s): %s"
                                    % (rc, " | ".join(lines[-8:])))
@@ -508,12 +711,14 @@ def post_site(name: str, body: SiteBody):
         (dest / "params.yaml").write_text(yaml.safe_dump(
             {"name": site_name, "kind": kind, "seed": seed,
              "generator": f"battlemap.py gen-{kind} + render + rasterize + wrap",
-             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d")},
+             "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+             "place_id": (body.place_id or "").strip() or None},
             sort_keys=False, allow_unicode=True), encoding="utf-8")
 
         note = _companion_note(
             dest, slug,
             {"kind": f"{kind} battlemap", "place": f"[[{place}]]" if place else None,
+             "place_id": (body.place_id or "").strip() or None,
              "name": site_name, "seed": seed},
             f"![[{slug}.png]]\n\n{site_name} — a {kind} scene (seed {seed}). "
             f"The {uvtt.name} beside this note drops straight into Foundry "

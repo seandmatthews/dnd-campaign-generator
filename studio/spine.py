@@ -369,7 +369,22 @@ def parse_entity_page(path: Path) -> dict:
     aliases = meta.get("aliases") or []
     if isinstance(aliases, str):
         aliases = [aliases]
-    return {
+
+    def _id_list(key):
+        """A frontmatter list of place ids (resides_at/present_at). A scalar
+        degrades to a one-item list — the place-view plan bans ambiguous
+        scalar/list formats for NEW writes, but a hand edit may use either;
+        readers accept both."""
+        v = meta.get(key)
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v]
+        return [str(x).strip() for x in v if str(x).strip()] \
+            if isinstance(v, list) else []
+
+    geo_ref = meta.get("geography_ref")
+    page = {
         "id": str(meta.get("id") or "").strip(),
         "kind": str(meta.get("kind") or "").strip(),
         "name": str(meta.get("name") or "").strip() or path.stem,
@@ -378,6 +393,17 @@ def parse_entity_page(path: Path) -> dict:
         "body": body.strip(),
         "file": f"lore/entities/{path.name}",
     }
+    # place-view identity fields (place-centered-campaign-view.md): present
+    # on place pages, absent (None/[]) everywhere else. The full raw
+    # frontmatter is NOT carried — PATCH round-trips preserve unknown keys
+    # via the places module's own raw reader instead.
+    page["place_id"] = str(meta.get("place_id") or "").strip()
+    page["parent_place_id"] = str(meta.get("parent_place_id") or "").strip()
+    page["resides_at"] = _id_list("resides_at")
+    page["present_at"] = _id_list("present_at")
+    page["geography_ref"] = geo_ref if isinstance(geo_ref, dict) else None
+    page["preferred_map"] = str(meta.get("preferred_map") or "").strip()
+    return page
 
 
 def _first_paragraph(body: str) -> str:
@@ -581,6 +607,31 @@ def write_state(name: str, doc: dict) -> Path:
     path = campaign_dir(name) / "simulation" / "state.yaml"
     return write_text_atomic(
         path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
+
+
+def state_places(state: dict) -> list:
+    """Every simulated place, normalized for display: the multi-place
+    `places` list when the state carries one, else the legacy single city
+    as a one-entry list. Ids are derived the same way the engine derives
+    them (slugify) when a place carries none, so faction.place references
+    line up on both sides of the seam."""
+    out = []
+    raw = state.get("places") if isinstance(state, dict) else None
+    if isinstance(raw, list) and raw:
+        entries = [p for p in raw if isinstance(p, dict)]
+    else:
+        city = state.get("city") if isinstance(state, dict) else None
+        entries = [city] if isinstance(city, dict) else []
+    for p in entries:
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        place = dict(p)
+        place["name"] = name
+        place.setdefault("id", slugify(name))
+        place.setdefault("kind", "city")
+        out.append(place)
+    return out
 
 
 def chronicles(name: str) -> list:

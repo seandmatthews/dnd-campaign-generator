@@ -72,17 +72,20 @@
     return '<details class="knows"><summary>Knows (' + items.length + ')</summary><ul>' + lis + '</ul></details>';
   }
 
-  function factionCard(f) {
+  function factionCard(f, placeNames) {
     const name = f.name || f.id || '(faction)';
     const kind = f.kind || '';
+    const placeName = (f.place && placeNames && placeNames[f.place]) || '';
     const secret = f.secret
       ? '<details class="secret"><summary>Secret</summary><p>' + S.esc(f.secret) + '</p></details>'
       : '';
-    return S.el(
+    const cardEl = S.el(
       '<article class="card faction-card">' +
         '<header class="faction-head">' +
           '<h4 class="faction-name">' + S.esc(name) + '</h4>' +
           (kind ? '<span class="pill pill-kind">' + S.esc(kind) + '</span>' : '') +
+          (placeName ? '<button type="button" class="pill pill-when faction-place-link" title="Open this place (Places tab)" data-place="' +
+            S.esc(f.place) + '">' + S.esc(placeName) + '</button>' : '') +
         '</header>' +
         '<div class="chip-row">' + factionChips(f) + '</div>' +
         dispositionTable(f.disposition) +
@@ -90,6 +93,13 @@
         knowsList(f.knows) +
       '</article>'
     );
+    // contextual "Open place" link (Places tab): a faction's home pill opens
+    // that place's DM page instead of being dead chrome
+    const placeBtn = cardEl.querySelector('.faction-place-link');
+    if (placeBtn) {
+      placeBtn.addEventListener('click', () => S.openPlace(placeBtn.dataset.place));
+    }
+    return cardEl;
   }
 
   /* ----- rumors: map raw fidelity strings onto fresh/reliable/hearsay/dead ----- */
@@ -198,6 +208,8 @@
             '<input type="text" class="input f-name" placeholder="e.g. The Bridge Wardens"></label>' +
           '<label class="field field-narrow"><span class="field-label">Kind (optional)</span>' +
             '<input type="text" class="input f-kind" placeholder="e.g. toll Brotherhood"></label>' +
+          '<label class="field field-narrow"><span class="field-label">Place (optional)</span>' +
+            '<input type="text" class="input f-place" placeholder="blank = the city"></label>' +
         '</div>' +
         '<div class="inline-form">' +
           '<label class="field grow"><span class="field-label">Goal — what it wants, one line</span>' +
@@ -235,6 +247,8 @@
             '<label class="field field-narrow"><span class="field-label">Season</span>' +
               '<input type="text" class="input sand-season" value="early spring"></label>' +
           '</div>' +
+          '<label class="field"><span class="field-label">Other places (optional, comma-separated) — factions can live here too</span>' +
+            '<input type="text" class="input sand-places" placeholder="e.g. Harmouth, the Kingdom of Sweth"></label>' +
           '<div class="sand-factions"></div>' +
           '<div class="inline-form">' +
             '<button type="button" class="btn sand-add">+ Add a faction</button>' +
@@ -277,12 +291,15 @@
       const factions = Array.from(host.querySelectorAll('.sand-faction')).map((row) => {
         const resources = {};
         row.querySelectorAll('.f-res').forEach((sel) => { resources[sel.getAttribute('data-res')] = sel.value; });
-        return {
+        const f = {
           name: row.querySelector('.f-name').value.trim(),
           kind: row.querySelector('.f-kind').value.trim(),
           goal: row.querySelector('.f-goal').value.trim(),
           resources: resources
         };
+        const place = row.querySelector('.f-place').value.trim();
+        if (place) f.place = place;
+        return f;
       });
       const body = {
         premise: panel.querySelector('.sand-premise').value.trim(),
@@ -290,6 +307,10 @@
         factions: factions,
         force: false
       };
+      const places = panel.querySelector('.sand-places').value.split(',')
+        .map((s) => s.trim()).filter(Boolean)
+        .map((name) => ({ name: name }));
+      if (places.length) body.places = places;
       const city = panel.querySelector('.sand-city').value.trim();
       const pop = Number(panel.querySelector('.sand-pop').value);
       if (!city) {
@@ -318,6 +339,8 @@
 
   function diffRows(diff) {
     const rows = [];
+    const show = (v) => S.esc(
+      v === null || v === undefined || v === '' ? '(unset)' : String(v));
     const clock = diff && diff.clock;
     if (clock) {
       rows.push('<tr><td>Clock</td><td class="num">week ' +
@@ -339,11 +362,28 @@
     Object.keys(flds).forEach((fid) => {
       Object.keys(flds[fid]).forEach((k) => {
         const ch = flds[fid][k] || {};
-        const show = (v) => S.esc(
-          v === null || v === undefined || v === '' ? '(unset)' : String(v));
         rows.push('<tr><td>' + S.esc(fid) + ' &middot; ' + S.esc(k) +
           '</td><td class="num">' + show(ch.before) + ' &rarr; ' +
           show(ch.after) + '</td></tr>');
+      });
+    });
+    // projects: additions plus every per-project movement (progress steps,
+    // status flips, term edits, completion blocks)
+    const projAdded = (diff && diff.projects_added) || [];
+    if (projAdded.length) {
+      rows.push('<tr><td>Projects added</td><td class="num">' +
+        projAdded.length + '</td></tr>');
+    }
+    const projCh = (diff && diff.projects_changed) || {};
+    Object.keys(projCh).forEach((pid) => {
+      const ch = projCh[pid] || {};
+      Object.keys(ch).forEach((k) => {
+        if (k === 'faction_id' || k === 'title') return;
+        const v = ch[k] || {};
+        rows.push('<tr><td>' + S.esc(String(ch.faction_id || pid)) +
+          ' &middot; ' + S.esc(String(ch.title || pid)) + ' &middot; ' +
+          S.esc(k) + '</td><td class="num">' + show(v.before) + ' &rarr; ' +
+          show(v.after) + '</td></tr>');
       });
     });
     const evs = (diff && diff.events_added) || [];
@@ -379,13 +419,17 @@
         ? data.chronicles[data.chronicles.length - 1] : null;
       const isSession = p.kind === 'session_effects';
       const isGoals = p.kind === 'goal_updates';
+      const isProjects = p.kind === 'project_changes';
       const updates = Array.isArray(data.updates) ? data.updates : [];
+      const changes = Array.isArray(data.changes) ? data.changes : [];
       const findings = Array.isArray(data.findings) ? data.findings : [];
       const title = isGoals
         ? 'Proposed goal updates — not canon yet'
         : isSession
           ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
-          : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
+          : isProjects
+            ? 'Proposed project changes — not canon yet'
+            : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
       const subtitle = isGoals
         ? '<strong>The world has not changed yet.</strong> The engine read ' +
           'the ledger and proposes these goal changes for each faction. ' +
@@ -394,10 +438,15 @@
           ? '<strong>The world has not changed yet.</strong> These are the recorded ' +
             'session facts and the reviewed effects they justify. Accepting applies ' +
             'them exactly once; discarding changes nothing.'
-          : '<strong>The world has not advanced.</strong> ' +
-            'This is a proposal generated from the current state (' +
-            'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
-            'the whole week exactly once; discarding changes nothing.';
+          : isProjects
+            ? '<strong>The world has not changed yet.</strong> These are your staged ' +
+              'project operations, validated by the engine against the state they ' +
+              'were prepared on. Accepting applies them exactly once; discarding ' +
+              'changes nothing.'
+            : '<strong>The world has not advanced.</strong> ' +
+              'This is a proposal generated from the current state (' +
+              'base week ' + S.esc(String(p.base_week)) + '). Accepting publishes ' +
+              'the whole week exactly once; discarding changes nothing.';
 
       const goalsBody = () => {
         const rows = updates.length ? updates : Object
@@ -421,6 +470,22 @@
           '</div>').join('') + '</div>';
       };
 
+      // staged project operations, one block each: what will change and why
+      const projectsBody = () => {
+        if (!changes.length) {
+          return '<p class="muted">No operation details were recorded in ' +
+            'this bundle — read the diff below.</p>';
+        }
+        return '<div class="goal-updates">' + changes.map((c) =>
+          '<div class="goal-update">' +
+            '<h5 class="goal-faction">' + S.esc(String(c.op || '?')) +
+              (c.project_id ? ' &middot; ' + S.esc(String(c.project_id)) : '') +
+            '</h5>' +
+            (c.reason ? '<p class="goal-reason muted">' +
+              S.esc(String(c.reason)) + '</p>' : '') +
+          '</div>').join('') + '</div>';
+      };
+
       // proposals the engine cut during validation — why an update the
       // model proposed is not on the table (persisted in the bundle since
       // 2026-09-25; they used to live only in the ephemeral job log)
@@ -441,7 +506,9 @@
         '<p class="panel-note">' + subtitle + '</p>' +
         (isGoals
           ? goalsBody() + goalsFindings()
-          : '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
+          : isProjects
+            ? projectsBody() + goalsFindings()
+            : '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
             (evs.length
               ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
                   (isSession ? 'Recorded history &amp; effects (' : 'Proposed events (') + evs.length + ')</summary><ul class="event-list">' +
@@ -463,6 +530,7 @@
           '<button type="button" class="btn btn-primary proposal-accept">' +
             (isGoals ? 'Accept the goal changes — apply exactly once'
                      : isSession ? 'Accept session changes — apply exactly once'
+                     : isProjects ? 'Accept the project changes — apply exactly once'
                                  : 'Accept week ' + S.esc(String(p.proposed_week)) + ' — publish everything') + '</button>' +
           '<button type="button" class="btn btn-danger proposal-discard">Discard</button>' +
           '<span class="muted form-note">Accept publishes as one step; discard keeps the audit receipt only.</span>' +
@@ -488,8 +556,12 @@
             : isSession
               ? 'Accepting applies the recorded session history and its reviewed ' +
                 'effects to the live state — exactly once.'
-              : 'Accepting publishes the whole proposed week into the campaign — ' +
-                'clock, resources, chronicle, timeline — exactly once.'
+              : isProjects
+                ? 'Accepting applies the staged project operations to the live ' +
+                  'state — exactly once. Completion counters reached this way ' +
+                  'complete through the same rules a weekly tick uses.'
+                : 'Accepting publishes the whole proposed week into the campaign — ' +
+                  'clock, resources, chronicle, timeline — exactly once.'
         );
         if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
@@ -500,8 +572,10 @@
             ? 'Goal changes are canon — applied exactly once.'
             : isSession
               ? 'Session changes are canon — applied exactly once.'
-              : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
-                ' is canon — accepted exactly once.', 'ok');
+              : isProjects
+                ? 'Project changes are canon — applied exactly once.'
+                : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
+                  ' is canon — accepted exactly once.', 'ok');
           if (r.snapshot && (r.snapshot.state === 'failed' ||
               r.snapshot.state === 'unavailable')) {
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
@@ -754,17 +828,26 @@
 
   /* ----- record-a-session form (Phase 3: history + structured effects) ----- */
 
-  function effectRow(factions) {
+  function effectRow(factions, projects) {
     const opts = factions.map((f) =>
       '<option value="' + S.esc(String(f.id)) + '">' + S.esc(f.name || f.id) + '</option>').join('');
+    const projOpts = (projects || []).map((p) =>
+      '<option value="' + S.esc(String(p.id)) + '">' +
+        S.esc(String((p.title || p.id) + ' (' + String(p.progress) + '/' +
+                      String(p.target) + ')')) + '</option>').join('');
     return S.el(
       '<div class="sand-faction session-effect">' +
         '<div class="inline-form">' +
-          '<label class="field field-narrow"><span class="field-label">Faction</span>' +
-            '<select class="input e-faction">' + opts + '</select></label>' +
           '<label class="field field-narrow"><span class="field-label">Kind of change</span>' +
             '<select class="input e-type"><option value="set_resource">resource</option>' +
-              '<option value="set_field">fact (goal/kind/secret)</option></select></label>' +
+              '<option value="set_field">fact (goal/kind/secret)</option>' +
+              '<option value="set_project_progress">project progress</option>' +
+              '<option value="set_project_status">project status</option></select></label>' +
+          '<label class="field field-narrow e-faction-wrap"><span class="field-label">Faction</span>' +
+            '<select class="input e-faction">' + opts + '</select></label>' +
+          '<label class="field field-narrow hidden e-project-wrap"><span class="field-label">Project</span>' +
+            '<select class="input e-project">' + (projOpts ||
+              '<option value="">(no projects yet)</option>') + '</select></label>' +
           '<label class="field field-narrow e-res-wrap"><span class="field-label">Resource</span>' +
             '<select class="input e-res"><option>coin</option><option>muscle</option><option>legitimacy</option></select></label>' +
           '<label class="field field-narrow hidden e-field-wrap"><span class="field-label">Field</span>' +
@@ -783,7 +866,8 @@
     );
   }
 
-  function sessionPanel(root, factions) {
+  function sessionPanel(root, factions, projects) {
+    const simProjects = Array.isArray(projects) ? projects : [];
     const panel = S.el(
       '<section class="panel session-panel">' +
         '<h3 class="panel-title">Record a session</h3>' +
@@ -815,29 +899,43 @@
     const errBox = panel.querySelector('.form-error');
 
     function addRow() {
-      const row = effectRow(factions);
+      const row = effectRow(factions, simProjects);
       row.querySelector('.e-remove').addEventListener('click', () => row.remove());
       const typeSel = row.querySelector('.e-type');
       const resWrap = row.querySelector('.e-res-wrap');
       const fieldWrap = row.querySelector('.e-field-wrap');
+      const factionWrap = row.querySelector('.e-faction-wrap');
+      const projectWrap = row.querySelector('.e-project-wrap');
       const LEVELS = ['none', 'low', 'medium', 'high'];
       function sync() {
-        const isField = typeSel.value === 'set_field';
-        resWrap.classList.toggle('hidden', isField);
+        const t = typeSel.value;
+        const isField = t === 'set_field';
+        const isProject = t === 'set_project_progress' ||
+                          t === 'set_project_status';
+        resWrap.classList.toggle('hidden', isField || isProject);
         fieldWrap.classList.toggle('hidden', !isField);
+        factionWrap.classList.toggle('hidden', isProject);
+        projectWrap.classList.toggle('hidden', !isProject);
         const afterEl = row.querySelector('.e-after');
-        if (isField && afterEl.tagName === 'SELECT') {
-          const input = document.createElement('input');
-          input.type = 'text'; input.className = 'input e-after';
-          input.placeholder = 'the new value';
-          afterEl.replaceWith(input);
-        } else if (!isField && (afterEl.tagName === 'INPUT' ||
-                                !afterEl.options.length)) {
+        if (isField || t === 'set_project_status') {
+          if (afterEl.tagName === 'SELECT') {
+            const input = document.createElement('input');
+            input.type = 'text'; input.className = 'input e-after';
+            input.placeholder = isField ? 'the new value' : 'active | paused | abandoned';
+            afterEl.replaceWith(input);
+          }
+        } else if (afterEl.tagName === 'INPUT' || !afterEl.options.length) {
           // the template ships an empty select — a fresh row must get its
           // levels here, not only when toggling back from set_field
           const sel = document.createElement('select');
           sel.className = 'input e-after';
-          sel.innerHTML = LEVELS.map((l) => '<option>' + l + '</option>').join('');
+          sel.innerHTML = (t === 'set_project_progress')
+            ? '<option value="0">0</option><option value="1">1</option>' +
+              '<option value="2">2</option><option value="3">3</option>' +
+              '<option value="4">4</option><option value="5">5</option>' +
+              '<option value="6">6</option><option value="7">7</option>' +
+              '<option value="8">8</option>'
+            : LEVELS.map((l) => '<option>' + l + '</option>').join('');
           afterEl.replaceWith(sel);
         }
       }
@@ -859,15 +957,23 @@
           return m ? { actor: m[1], text: m[2].trim() } : { actor: 'world', text: ln };
         });
       const effects = Array.from(host.querySelectorAll('.session-effect')).map((row) => {
-        const isField = row.querySelector('.e-type').value === 'set_field';
+        const t = row.querySelector('.e-type').value;
+        const isField = t === 'set_field';
+        const isProject = t === 'set_project_progress' ||
+                          t === 'set_project_status';
         const base = {
-          type: isField ? 'set_field' : 'set_resource',
-          faction_id: row.querySelector('.e-faction').value,
+          type: t,
           after: row.querySelector('.e-after').value,
           reason: row.querySelector('.e-reason').value.trim()
         };
-        if (isField) base.field = row.querySelector('.e-field').value;
-        else base.resource = row.querySelector('.e-res').value;
+        if (isProject) {
+          base.project_id = row.querySelector('.e-project').value;
+          if (t === 'set_project_progress') base.after = Number(base.after) || 0;
+        } else {
+          base.faction_id = row.querySelector('.e-faction').value;
+          if (isField) base.field = row.querySelector('.e-field').value;
+          else base.resource = row.querySelector('.e-res').value;
+        }
         const was = row.querySelector('.e-was').value.trim();
         if (was) base.expected_before = was;
         return base;
@@ -892,6 +998,356 @@
       }
     });
 
+    root.appendChild(panel);
+  }
+
+  /* ----- faction projects: concrete undertakings with persistent progress ----- */
+
+  function requirementChips(project) {
+    const req = (project.requirements && typeof project.requirements === 'object')
+      ? project.requirements : {};
+    const keys = Object.keys(req);
+    if (!keys.length) return '<span class="muted">no requirements</span>';
+    return keys.map((k) =>
+      '<span class="pill chip chip-' + S.esc(String(req[k])) + '" ' +
+        'title="minimum eligibility — work cannot progress below this">' +
+        S.esc(k) + ' &ge; ' + S.esc(String(req[k])) + '</span>').join(' ') +
+      ((project.requirements_met === false)
+        ? ' <span class="pill fidelity fidelity-dead">unmet</span>' : '');
+  }
+
+  function projectHistoryItem(ev) {
+    const wk = (ev.week != null) ? '<span class="pill pill-when">week ' +
+      S.esc(String(ev.week)) + '</span>' : '';
+    const moved = (ev.progress_before != null && ev.project_id)
+      ? ' <span class="pill pill-kind">' + S.esc(String(ev.progress_before)) +
+        ' &rarr; ' + S.esc(String(ev.progress_after)) + '</span>' : '';
+    const text = ev.public_action && ev.public_action !== ev.action
+      ? ev.public_action + ' <span class="muted">(public line; DM: ' +
+        S.esc(String(ev.action || ev.text || '')) + ')</span>'
+      : (ev.text || ev.action || '');
+    return '<li>' + wk + moved + '<span class="event-text">' + S.esc(text) + '</span></li>';
+  }
+
+  function projectCard(host, project, factions, errBox) {
+    const owner = factions.find((f) => f.id === project.faction_id);
+    const ownerName = (owner && owner.name) || project.faction_id;
+    const status = project.status || 'active';
+    const atTarget = Number(project.progress) >= Number(project.target);
+    const blocked = project.completion_blocked;
+    const card = S.el(
+      '<article class="card project-card">' +
+        '<header class="faction-head">' +
+          '<h5 class="faction-name">' + S.esc(String(project.title || project.id)) + '</h5>' +
+          '<span class="pill pill-kind">' + S.esc(status) + '</span>' +
+          '<span class="pill pill-when" title="progress / target">' +
+            S.esc(String(project.progress)) + '/' + S.esc(String(project.target)) + '</span>' +
+        '</header>' +
+        '<p class="muted">' + S.esc(String(project.objective || '')) + '</p>' +
+        '<div class="chip-row">' + requirementChips(project) + '</div>' +
+        ((project.place_ids || []).length
+          ? '<div class="chip-row project-places">' + (project.place_ids || []).map((pid) =>
+              '<button type="button" class="pill pill-when project-place-link" data-place="' +
+              S.esc(pid) + '" title="Open this place (Places tab)">' + S.esc(pid) + '</button>').join('') + '</div>'
+          : '') +
+        (project.completion_text
+          ? '<p class="muted project-completion"><strong>On completion:</strong> ' +
+            S.esc(String(project.completion_text)) + '</p>' : '') +
+        (blocked ? '<div class="success-panel" style="border-color: #b23">' +
+          '<strong>Completion blocked:</strong> ' + S.esc(String(blocked)) + '</div>' : '') +
+        '<details class="project-history"><summary>History &amp; movement</summary>' +
+          '<div class="project-history-body"><p class="muted">Loading…</p></div>' +
+        '</details>' +
+        '<div class="inline-form project-actions">' +
+          (status === 'active'
+            ? '<button type="button" class="btn p-pause">Pause</button>' +
+              (atTarget ? '' : '<button type="button" class="btn p-abandon">Abandon</button>')
+            : status === 'paused'
+              ? '<button type="button" class="btn p-resume">Resume</button>' +
+                '<button type="button" class="btn p-abandon">Abandon</button>'
+              : '') +
+          (status !== 'completed' && status !== 'abandoned'
+            ? '<button type="button" class="btn p-edit">Edit terms</button>' : '') +
+        '</div>' +
+      '</article>'
+    );
+    // contextual "Open place" links (Places tab): one per place the project operates at
+    card.querySelectorAll('.project-place-link').forEach((btn) => {
+      btn.addEventListener('click', () => S.openPlace(btn.dataset.place));
+    });
+    const historyBox = card.querySelector('.project-history-body');
+    card.querySelector('.project-history').addEventListener('toggle', async function () {
+      if (!this.open || historyBox.dataset.loaded) return;
+      try {
+        const data = await S.api(S.campUrl('/simulation/projects/' +
+          encodeURIComponent(project.id)));
+        const hist = Array.isArray(data.history) ? data.history : [];
+        historyBox.innerHTML = hist.length
+          ? '<ul class="event-list">' + hist.map(projectHistoryItem).join('') + '</ul>'
+          : '<p class="muted">No recorded movement yet — work weeks, sabotage, ' +
+            'sessions and completions will appear here.</p>';
+        historyBox.dataset.loaded = '1';
+      } catch (err) {
+        historyBox.innerHTML = '';
+        historyBox.appendChild(S.errorPanel(err));
+      }
+    });
+    async function prepareOp(op) {
+      const ok = await S.confirmRun(
+        'Stage this project operation (' + op + ')? Nothing changes until ' +
+        'you accept the proposal above.'
+      );
+      if (!ok) return;
+      errBox.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/simulation/projects/prepare'), {
+          method: 'POST',
+          body: { operations: [op] }
+        });
+        S.toast('Project changes staged — review the proposal above, then accept.', 'ok');
+        S.rerenderIfCurrent('sim');
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+      }
+    }
+    const pauseBtn = card.querySelector('.p-pause');
+    if (pauseBtn) pauseBtn.addEventListener('click', () =>
+      prepareOp({ op: 'pause', project_id: project.id,
+                  reason: 'Paused from the Projects panel.' }));
+    const resumeBtn = card.querySelector('.p-resume');
+    if (resumeBtn) resumeBtn.addEventListener('click', () =>
+      prepareOp({ op: 'resume', project_id: project.id,
+                  reason: 'Resumed from the Projects panel.' }));
+    const abandonBtn = card.querySelector('.p-abandon');
+    if (abandonBtn) abandonBtn.addEventListener('click', () =>
+      prepareOp({ op: 'abandon', project_id: project.id,
+                  reason: 'Abandoned from the Projects panel.' }));
+    const editBtn = card.querySelector('.p-edit');
+    if (editBtn) editBtn.addEventListener('click', () =>
+      projectFormPanel(host, factions, errBox, project, () =>
+        S.rerenderIfCurrent('sim')));
+    return card;
+  }
+
+  function projectFormPanel(host, factions, errBox, existing, onStaged) {
+    // one form for create AND edit (existing != null): the same fields, an
+    // edit posts {op: 'edit', set: {...}} against the project's id
+    const old = existing || {};
+    host.innerHTML = '';
+    const LEVELS = ['none', 'low', 'medium', 'high'];
+    const reqSel = (key, val) =>
+      '<label class="field field-narrow"><span class="field-label">req ' + key + '</span>' +
+        '<select class="input pf-req" data-res="' + key + '">' +
+          '<option value=""' + (!val ? ' selected' : '') + '>&mdash;</option>' +
+          LEVELS.map((l) => '<option value="' + l + '"' +
+            (val === l ? ' selected' : '') + '>' + l + '</option>').join('') +
+        '</select></label>';
+    const eff = ((old.completion || {}).effects || [])[0] || {};
+    const panel = S.el(
+      '<section class="panel project-form-panel">' +
+        '<h3 class="panel-title">' + (existing ? 'Edit project terms — ' +
+          S.esc(String(old.title || old.id)) : 'New project') + '</h3>' +
+        '<p class="panel-note">A project is one concrete undertaking with a ' +
+        'counter: successful work weeks move it one step, successful sabotage ' +
+        'moves it back one, and reaching the target applies the preapproved ' +
+        'completion exactly once. One active project per faction. Staging is ' +
+        'free — no LLM anywhere.</p>' +
+        '<div class="form-block">' +
+          '<div class="inline-form">' +
+            '<label class="field field-narrow"><span class="field-label">Faction (owner)</span>' +
+              '<select class="input pf-owner"' + (existing ? ' disabled' : '') + '>' +
+                factions.map((f) => '<option value="' + S.esc(String(f.id)) + '"' +
+                  ((old.faction_id || '') === f.id ? ' selected' : '') + '>' +
+                  S.esc(String(f.name || f.id)) + '</option>').join('') +
+              '</select></label>' +
+            '<label class="field grow"><span class="field-label">Title</span>' +
+              '<input type="text" class="input pf-title" value="' +
+              S.esc(String(old.title || '')) + '" placeholder="e.g. Buy the ferry concession"></label>' +
+            '<label class="field field-narrow"><span class="field-label">Target steps</span>' +
+              '<input type="number" class="input pf-target" min="2" max="8" value="' +
+              S.esc(String(old.target || 4)) + '"></label>' +
+          '</div>' +
+          '<label class="field"><span class="field-label">Objective — what done looks like</span>' +
+            '<input type="text" class="input pf-objective" value="' +
+            S.esc(String(old.objective || '')) + '" placeholder="e.g. Secure the concession before the spring auctions."></label>' +
+          '<div class="inline-form">' +
+            '<label class="field grow"><span class="field-label">Places (optional, comma-separated ids)</span>' +
+              '<input type="text" class="input pf-places" value="' +
+              S.esc(String((old.place_ids || []).join(', '))) + '" placeholder="e.g. ferry-crossing"></label>' +
+            '<label class="field field-narrow"><span class="field-label">Visibility</span>' +
+              '<select class="input pf-visibility">' +
+                '<option value="restricted"' + ((old.visibility || 'restricted') === 'restricted' ? ' selected' : '') + '>restricted (hidden)</option>' +
+                '<option value="public"' + (old.visibility === 'public' ? ' selected' : '') + '>public</option>' +
+              '</select></label>' +
+            '<label class="field field-narrow"><span class="field-label">Known to (optional, comma-separated ids)</span>' +
+              '<input type="text" class="input pf-known" value="' +
+              S.esc(String((old.known_to || []).join(', '))) + '" placeholder="rivals told on purpose"></label>' +
+          '</div>' +
+          '<div class="inline-form">' +
+            reqSel('coin', (old.requirements || {}).coin) +
+            reqSel('muscle', (old.requirements || {}).muscle) +
+            reqSel('legitimacy', (old.requirements || {}).legitimacy) +
+          '</div>' +
+          '<label class="field"><span class="field-label">Completion — what the world looks like when the counter fills</span>' +
+            '<input type="text" class="input pf-completion" value="' +
+            S.esc(String((old.completion || {}).text || '')) + '" placeholder="e.g. The Wardens acquired the ferry concession."></label>' +
+          '<div class="inline-form">' +
+            '<label class="field field-narrow"><span class="field-label">Completion effect</span>' +
+              '<select class="input pf-eff-kind">' +
+                '<option value="">none</option>' +
+                '<option value="set_resource"' + (eff.type === 'set_resource' ? ' selected' : '') + '>resource</option>' +
+                '<option value="set_field"' + (eff.type === 'set_field' ? ' selected' : '') + '>fact (kind/goal/secret/species)</option>' +
+              '</select></label>' +
+            '<label class="field field-narrow pf-eff-res-wrap"><span class="field-label">Resource</span>' +
+              '<select class="input pf-eff-res"><option>coin</option><option>muscle</option><option>legitimacy</option></select></label>' +
+            '<label class="field field-narrow pf-eff-field-wrap hidden"><span class="field-label">Field</span>' +
+              '<select class="input pf-eff-field"><option>kind</option><option>goal</option><option>secret</option><option>species</option></select></label>' +
+            '<label class="field field-narrow"><span class="field-label">Was (optional)</span>' +
+              '<input type="text" class="input pf-eff-was" value="' + S.esc(String(eff.expected_before || '')) + '" placeholder="precondition"></label>' +
+            '<label class="field field-narrow"><span class="field-label">After</span>' +
+              '<input type="text" class="input pf-eff-after" value="' + S.esc(String(eff.after || '')) + '" placeholder="e.g. medium"></label>' +
+            '<label class="field grow"><span class="field-label">Effect reason</span>' +
+              '<input type="text" class="input pf-eff-reason" value="' + S.esc(String(eff.reason || '')) + '" placeholder="why completion means this"></label>' +
+          '</div>' +
+          '<div class="inline-form">' +
+            '<button type="button" class="btn btn-primary pf-stage">' +
+              (existing ? 'Stage the term edit for review' : 'Stage the new project for review') + '</button>' +
+            '<button type="button" class="btn pf-cancel">Cancel</button>' +
+            '<span class="muted form-note">Stages a proposal above — the campaign changes only if you accept it.</span>' +
+          '</div>' +
+          '<div class="form-error pf-error"></div>' +
+        '</div>' +
+      '</section>'
+    );
+    const kindSel = panel.querySelector('.pf-eff-kind');
+    const resWrap = panel.querySelector('.pf-eff-res-wrap');
+    const fieldWrap = panel.querySelector('.pf-eff-field-wrap');
+    if (eff.resource) panel.querySelector('.pf-eff-res').value = eff.resource;
+    if (eff.field) panel.querySelector('.pf-eff-field').value = eff.field;
+    function syncKind() {
+      const isRes = kindSel.value === 'set_resource';
+      resWrap.classList.toggle('hidden', !isRes);
+      fieldWrap.classList.toggle('hidden', isRes || kindSel.value === '');
+    }
+    kindSel.addEventListener('change', syncKind);
+    syncKind();
+    panel.querySelector('.pf-cancel').addEventListener('click', () => panel.remove());
+    panel.querySelector('.pf-stage').addEventListener('click', async () => {
+      const btn = panel.querySelector('.pf-stage');
+      if (btn.disabled) return;
+      const owner = existing ? old.faction_id
+        : panel.querySelector('.pf-owner').value;
+      const title = panel.querySelector('.pf-title').value.trim();
+      const objective = panel.querySelector('.pf-objective').value.trim();
+      if (!title || !objective) {
+        S.toast('A project needs a title and an objective.', 'error');
+        return;
+      }
+      const target = Number(panel.querySelector('.pf-target').value) || 4;
+      const places = panel.querySelector('.pf-places').value.split(',')
+        .map((s) => s.trim()).filter(Boolean);
+      const visibility = panel.querySelector('.pf-visibility').value;
+      const known = panel.querySelector('.pf-known').value.split(',')
+        .map((s) => s.trim()).filter(Boolean);
+      const requirements = {};
+      panel.querySelectorAll('.pf-req').forEach((sel) => {
+        if (sel.value) requirements[sel.getAttribute('data-res')] = sel.value;
+      });
+      const completion = { text: panel.querySelector('.pf-completion').value.trim() };
+      if (kindSel.value) {
+        const effRec = { type: kindSel.value, faction_id: owner,
+                         after: panel.querySelector('.pf-eff-after').value.trim(),
+                         reason: panel.querySelector('.pf-eff-reason').value.trim() ||
+                                 completion.text || 'Completion of ' + title };
+        if (kindSel.value === 'set_resource') effRec.resource = panel.querySelector('.pf-eff-res').value;
+        else effRec.field = panel.querySelector('.pf-eff-field').value;
+        const was = panel.querySelector('.pf-eff-was').value.trim();
+        if (was) effRec.expected_before = was;
+        completion.effects = [effRec];
+      }
+      const op = existing
+        ? { op: 'edit', project_id: old.id,
+            reason: 'Term edit from the Projects panel.',
+            set: { title: title, objective: objective, target: target,
+                   place_ids: places, visibility: visibility,
+                   known_to: known, requirements: requirements,
+                   completion: completion } }
+        : { op: 'create', reason: 'New project from the Projects panel.',
+            project: { faction_id: owner, title: title, objective: objective,
+                       target: target, place_ids: places,
+                       visibility: visibility, known_to: known,
+                       requirements: requirements, completion: completion } };
+      btn.disabled = true;
+      const box = panel.querySelector('.pf-error');
+      box.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/simulation/projects/prepare'), {
+          method: 'POST', body: { operations: [op] }
+        });
+        S.toast('Project changes staged — review the proposal above, then accept.', 'ok');
+        if (onStaged) onStaged(); else S.rerenderIfCurrent('sim');
+      } catch (err) {
+        box.innerHTML = '';
+        box.appendChild(S.errorPanel(err));
+        btn.disabled = false;
+      }
+    });
+    host.appendChild(panel);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+
+  function projectsPanel(root, factions) {
+    const panel = S.el(
+      '<section class="panel projects-panel">' +
+        '<h3 class="panel-title">Projects</h3>' +
+        '<p class="panel-note">What each faction is actually trying to finish, ' +
+        'and how far it has gotten. Owners see their own in full; rivals only ' +
+        'see what is public or told to them — exact counters here are DM ' +
+        'information.</p>' +
+        '<div class="projects-by-owner panel-body"></div>' +
+        '<div class="inline-form">' +
+          '<button type="button" class="btn project-new">+ New project</button>' +
+        '</div>' +
+        '<div class="project-form-host"></div>' +
+        '<div class="projects-error"></div>' +
+      '</section>'
+    );
+    const host = panel.querySelector('.projects-by-owner');
+    const formHost = panel.querySelector('.project-form-host');
+    const errBox = panel.querySelector('.projects-error');
+    panel.querySelector('.project-new').addEventListener('click', () =>
+      projectFormPanel(formHost, factions, errBox, null));
+    S.api(S.campUrl('/simulation/projects')).then((rep) => {
+      const projects = (rep && Array.isArray(rep.projects)) ? rep.projects : [];
+      if (!projects.length) {
+        host.appendChild(S.emptyState(
+          'No projects yet — a project gives a faction something concrete to ' +
+          'finish, one step at a time.'));
+        return;
+      }
+      const byOwner = {};
+      projects.forEach((p) => {
+        (byOwner[p.faction_id] = byOwner[p.faction_id] || []).push(p);
+      });
+      Object.keys(byOwner).forEach((fid) => {
+        const f = factions.find((x) => x.id === fid);
+        host.appendChild(S.el('<h4 class="project-owner">' +
+          S.esc(String((f && f.name) || fid)) + '</h4>'));
+        const grid = S.el('<div class="faction-grid"></div>');
+        byOwner[fid].forEach((p) =>
+          grid.appendChild(projectCard(host, p, factions, errBox)));
+        host.appendChild(grid);
+      });
+      if (Array.isArray(rep.findings) && rep.findings.length) {
+        errBox.appendChild(S.el(
+          '<ul class="findings-list">' + rep.findings.map((f) =>
+            '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'));
+      }
+    }).catch((err) => {
+      host.innerHTML = '';
+      host.appendChild(S.errorPanel(err));
+    });
     root.appendChild(panel);
   }
 
@@ -994,11 +1450,18 @@
     if (!factions.length) {
       factionBody.appendChild(S.emptyState('No factions in the simulation state.'));
     } else {
+      const placeNames = {};
+      ((sim && Array.isArray(sim.places)) ? sim.places : []).forEach((p) => {
+        if (p && p.id) placeNames[p.id] = p.name || p.id;
+      });
       const gridEl = S.el('<div class="faction-grid"></div>');
-      factions.forEach((f) => gridEl.appendChild(factionCard(f)));
+      factions.forEach((f) => gridEl.appendChild(factionCard(f, placeNames)));
       factionBody.appendChild(gridEl);
     }
     root.appendChild(factionPanel);
+
+    /* projects: concrete undertakings with persistent progress */
+    projectsPanel(root, factions);
 
     /* rumors board */
     const rumorPanel = S.el(
@@ -1225,6 +1688,6 @@
     if (factions.length) forecastCard(root);
 
     /* record-a-session: history + reviewed structured effects (Phase 3) */
-    if (factions.length) sessionPanel(root, factions);
+    if (factions.length) sessionPanel(root, factions, sim.projects);
   };
 }());
