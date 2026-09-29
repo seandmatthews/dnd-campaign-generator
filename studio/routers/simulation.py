@@ -33,10 +33,6 @@ import logging
 import re
 from pathlib import Path
 
-import yaml
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, StrictBool, field_validator
-
 import canon
 import engines
 import forecasts
@@ -44,11 +40,19 @@ import links
 import llm_client
 import proposals
 import publication
+import sessions
 import spine
 import timeline
-from routers.common import (campaign_lock_nowait, require_campaign,
-                            submit_campaign_job)
-from routers.common import ensure_publishable_409
+import yaml
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, StrictBool, field_validator
+
+from routers.common import (
+    campaign_lock_nowait,
+    ensure_publishable_409,
+    require_campaign,
+    submit_campaign_job,
+)
 
 router = APIRouter()
 
@@ -1009,6 +1013,10 @@ def get_proposal(name: str):
         "updates": bundle["updates"],
         "changes": bundle.get("changes") or [],
         "findings": bundle.get("findings") or [],
+        # session_changes after-images (knowledge/disclosure/decision) —
+        # the Sessions review UI reads these to show what acceptance will
+        # write beyond state
+        "extra": bundle.get("extra") or {},
         "chronicles": [
             {"file": f"simulation/chronicle/{fn}", "title": fn,
              "markdown": text}
@@ -1043,6 +1051,11 @@ def accept_proposal(name: str, pid: str):
                     proposals.set_status(name, pid, "accepted",
                                          decided_note="status repaired from "
                                                       "the accept receipt")
+                if b["manifest"].get("kind") == "session_changes":
+                    # reconstruct the draft/decision bookkeeping too: the
+                    # UI status is rebuilt from the receipt, never left
+                    # half-finished by a crash between publish and repair
+                    sessions.on_accepted(name, b["manifest"], b)
             except proposals.ProposalError:
                 pass  # bundle gone or damaged: the receipt still answers
             if "snapshot" not in prior:  # older receipts predate the field
@@ -1070,6 +1083,8 @@ def accept_proposal(name: str, pid: str):
             publication.record_receipt(name, key, result)
             proposals.set_status(name, pid, "accepted",
                                  decided_note="published via crash recovery")
+            if manifest.get("kind") == "session_changes":
+                sessions.on_accepted(name, manifest, bundle)
             snap = canon.snapshot_result(name, _accept_message(name, manifest,
                                                                None))
             publication.after_snapshot(name, prior_tx["transaction"], snap)
@@ -1081,7 +1096,30 @@ def accept_proposal(name: str, pid: str):
             "path": "simulation/state.yaml",
             "text": bundle["state_text"],
         }]
-        if manifest.get("kind") in STATE_ONLY_KINDS:
+        if manifest.get("kind") == "session_changes":
+            # the combined transaction: state after-image (effects already
+            # applied by the engine at prepare time) + the knowledge and
+            # disclosure after-images + the session decision record — one
+            # publication, one receipt, recover together
+            extra = bundle.get("extra") or {}
+            for key_, rel in (("knowledge", "simulation/knowledge.yaml"),
+                              ("disclosure",
+                               "simulation/party-knowledge.yaml")):
+                if extra.get(key_) is not None:
+                    writes.append({
+                        "path": rel,
+                        "text": yaml.safe_dump(
+                            extra[key_], sort_keys=False, allow_unicode=True,
+                            width=100),
+                    })
+            decision = extra.get("decision") or {}
+            writes.append({
+                "path": f"sessions/{manifest.get('session_id')}"
+                        f"/decisions/{pid}.yaml",
+                "text": sessions.decision_text(decision),
+            })
+            chron = None
+        elif manifest.get("kind") in STATE_ONLY_KINDS:
             chron = None
         else:
             entries = bundle["entries"]
@@ -1122,10 +1160,14 @@ def accept_proposal(name: str, pid: str):
                        f"staged transaction is kept and will be recovered "
                        f"automatically when the studio restarts")
 
-        week = manifest.get("proposed_week")
         result = _accept_result(manifest, bundle, pub["transaction"])
         if pub["state"] == "noop":
             result["noop"] = True
+        if manifest.get("kind") == "session_changes":
+            # canon landed: freeze the draft's selected suggestions and
+            # record the decision — best-effort; the receipt repairs it on
+            # idempotent replay
+            sessions.on_accepted(name, manifest, bundle)
         publication.record_receipt(name, key, result)
         # the week HAS landed and the receipt is recorded: a set_status
         # failure here must not surface as a 500 for a publish that
@@ -1171,6 +1213,16 @@ def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
             result["projects_added"] = len(diff.get("projects_added") or [])
             result["projects_changed"] = len(diff.get("projects_changed")
                                              or {})
+    elif manifest.get("kind") == "session_changes":
+        diff = bundle["diff"]
+        result["session_id"] = manifest.get("session_id")
+        result["events_added"] = len(diff.get("events_added") or [])
+        result["resources_changed"] = len(diff.get("resources") or {})
+        result["goals_changed"] = len(diff.get("fields") or {})
+        result["facts_added"] = len(diff.get("facts_added") or [])
+        result["facts_superseded"] = len(diff.get("facts_superseded") or [])
+        result["disclosed"] = len(diff.get("disclosed") or [])
+        result["suggestions"] = manifest.get("selected_suggestion_ids") or []
     else:
         result["chronicles"] = sorted(bundle["chronicles"])
         result["timeline_entries"] = len(bundle["entries"])
@@ -1188,6 +1240,9 @@ def _accept_operation(manifest: dict) -> str:
         return "accept goal updates from the ledger"
     if kind == "project_changes":
         return "accept project changes (create/edit/pause/resume/abandon)"
+    if kind == "session_changes":
+        return ("accept session changes (session "
+                f"{(manifest.get('run_record') or {}).get('session_id')})")
     return f"accept week {manifest.get('proposed_week')} proposal"
 
 
@@ -1200,6 +1255,9 @@ def _accept_message(name: str, manifest: dict, chron) -> str:
         return f"campaign/{name}: goal updates applied (goal review)"
     if kind == "project_changes":
         return f"campaign/{name}: project changes applied"
+    if kind == "session_changes":
+        return (f"campaign/{name}: session changes applied (session "
+                f"{(manifest.get('run_record') or {}).get('session_id')})")
     msg = f"campaign/{name}: week {manifest.get('proposed_week')}"
     if chron and chron.get("title"):
         msg += f" — {chron['title']}"
@@ -1215,11 +1273,16 @@ def discard_proposal(name: str, pid: str):
     require_campaign(name)
     with campaign_lock_nowait(name, "discarding the proposal"):
         try:
-            proposals.set_status(name, pid, "discarded",
-                                 decided_note="discarded by the DM; no canon "
-                                              "change ever happened")
+            manifest = proposals.set_status(
+                name, pid, "discarded",
+                decided_note="discarded by the DM; no canon "
+                             "change ever happened")
         except proposals.ProposalError as e:
             raise HTTPException(status_code=409, detail=str(e))
+        if manifest.get("kind") == "session_changes":
+            # reopen the prepared suggestions so the excluded/rest of the
+            # session can be prepared again against a new base
+            sessions.on_discarded(name, manifest)
         return {"discarded": pid}
 
 
@@ -1857,6 +1920,13 @@ def post_why(name: str, body: WhyBody):
         raise HTTPException(status_code=503, detail=f"engine failed to start: {e}")
     out = "\n".join(lines).strip()
     if rc != 0:
+        if "no recorded event" in out.lower():
+            # why.py exits 1 with that line when the faction has no history
+            # at this week — a normal state for week 0, not an engine crash
+            raise HTTPException(
+                status_code=404,
+                detail="no recorded events for this faction in week "
+                       f"{body.week} yet — run or accept a week first")
         raise HTTPException(
             status_code=502,
             detail=f"why engine failed (rc={rc})"

@@ -34,9 +34,20 @@ from starlette.staticfiles import StaticFiles
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import spine  # noqa: E402
-import publication  # noqa: E402
-from routers import campaigns, knowledge, lore, maps, places, review, simulation, system  # noqa: E402
+import publication
+import sessions
+import spine
+from routers import (
+    campaigns,
+    knowledge,
+    lore,
+    maps,
+    places,
+    review,
+    simulation,
+    system,
+)
+from routers import sessions as sessions_router
 
 STUDIO_DIR = Path(__file__).resolve().parent
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -107,7 +118,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Campaign Studio", version="0.1.0", lifespan=lifespan)
 
-for r in (campaigns, system, maps, simulation, lore, review, knowledge, places):
+for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, sessions_router):
     app.include_router(r.router)
 
 
@@ -177,6 +188,19 @@ async def campaign_file_error(request: Request, exc: spine.CampaignFileError):
     return JSONResponse({"error": str(exc)}, status_code=422)
 
 
+@app.exception_handler(sessions.SessionConflict)
+async def session_conflict_error(request: Request, exc):
+    """Stale editor / racing writer / a pending proposal in the way."""
+    return JSONResponse({"error": str(exc)}, status_code=409)
+
+
+@app.exception_handler(sessions.SessionError)
+async def session_error(request: Request, exc):
+    """A session-store input problem (unresolved suggestion, refused
+    batch, missing record)."""
+    return JSONResponse({"error": str(exc)}, status_code=422)
+
+
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception):
     """The contract says every error response is {"error": ...} — without
@@ -209,10 +233,24 @@ campaigns_root.mkdir(parents=True, exist_ok=True)
 app.mount("/campaign-file", _NoDotGit(directory=str(campaigns_root)),
           name="campaign-file")
 
+
+class _FreshStatic(StaticFiles):
+    """StaticFiles + `Cache-Control: no-cache`: the browser revalidates the
+    ETag on every load (304 when unchanged, so it stays cheap). Plain
+    StaticFiles sends only Last-Modified, and a page served minutes after an
+    edit heuristic-caches the OLD file for tens of minutes — a fixed bug
+    'still reproduces' because the page never fetched the fix."""
+
+    def file_response(self, *args, **kwargs):
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 # The one page (C's static/); mounted last so /api routes win.
 STATIC_DIR = STUDIO_DIR / "static"
 if STATIC_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True),
+    app.mount("/", _FreshStatic(directory=str(STATIC_DIR), html=True),
               name="static")
 else:
     @app.get("/", response_class=HTMLResponse)

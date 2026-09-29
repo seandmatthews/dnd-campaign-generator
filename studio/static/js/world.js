@@ -5,6 +5,12 @@
   'use strict';
   const S = window.Studio;
 
+  // The last failed backstory generation for this campaign. The run-panel
+  // error box is transient — any tab switch wipes it — so the card shows
+  // the remembered failure on re-render instead of looking like nothing
+  // happened. Cleared by the next successful run.
+  let backstoryFailure = null; // { campaign, error }
+
   /* ----- source badges: authored=ink, session=blue, sim:week-N=red ----- */
 
   function sourcePill(source) {
@@ -334,6 +340,11 @@
     const errBox = card.querySelector('.form-error');
     const resultBox = card.querySelector('.gen-result');
 
+    // show a remembered failure from before a tab switch (see above)
+    if (backstoryFailure && backstoryFailure.campaign === S.state.campaign) {
+      errBox.appendChild(S.errorPanel(backstoryFailure.error));
+    }
+
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       if (btn.disabled) return;
@@ -358,6 +369,7 @@
           logBox.scrollTop = logBox.scrollHeight;
         });
       })().then((result) => {
+        backstoryFailure = null;
         const r = result || {};
         const count = (r.entries != null) ? r.entries : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
@@ -374,6 +386,7 @@
         resultBox.classList.remove('hidden');
         S.toast('Backstory staged to Review', 'ok');
       }).catch((err) => {
+        backstoryFailure = { campaign: S.state.campaign, error: err };
         errBox.innerHTML = '';
         errBox.appendChild(S.errorPanel(err));
         S.toast('Generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');

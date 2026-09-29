@@ -19,10 +19,9 @@ in-world is not automatically party-known: the reveal IS the discovery.
 import datetime
 import logging
 
-import yaml
-
 import knowledge
 import spine
+import yaml
 
 log = logging.getLogger("studio.briefing")
 
@@ -209,31 +208,55 @@ def _save_disclosure(name: str, doc: dict) -> None:
         yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
 
 
+def disclosure_after_image(store: dict, facts: list, entries: list) -> dict:
+    """PURE document transform: return a NEW disclosure store with the
+    given reveal entries appended. entries: {fact_id, week?} — each fact
+    must exist, be current, and be PUBLIC in `facts` (the approved store's
+    fact list): faction-restricted knowledge is not the party's just
+    because the DM likes the idea. Duplicates of an already-revealed fact
+    are dropped (revealing twice discloses nothing new). Raises ValueError
+    naming the fact when a reveal is impossible — the caller decides
+    whether that refuses a whole batch (session prepare) or one request
+    (the reveal route)."""
+    import copy
+    by_id = {f.get("id"): f for f in (facts or []) if isinstance(f, dict)}
+    out = copy.deepcopy(store or {"schema_version": DISCLOSURE_SCHEMA,
+                                  "revealed": []})
+    out.setdefault("revealed", [])
+    have = {r.get("fact_id") for r in out["revealed"]}
+    for entry in entries or []:
+        fid = str((entry or {}).get("fact_id") or "")
+        fact = by_id.get(fid)
+        if fact is None:
+            raise ValueError(f"no such fact: {fid}")
+        if fact.get("visibility") != "public" or \
+                fact.get("status") not in (None, "current"):
+            raise ValueError(
+                "only current public facts can be revealed to the party — "
+                f"this fact is {fact.get('visibility')!r}/"
+                f"{fact.get('status') or 'current'} ({fid})")
+        if fid in have:
+            continue  # already disclosed — idempotent
+        out["revealed"].append({
+            "fact_id": fid,
+            "text": fact.get("text"),
+            "revealed_week": entry.get("week"),
+            "revealed": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+        })
+        have.add(fid)
+    return out
+
+
 def reveal(name: str, fact_id: str, week: int | None = None) -> dict:
     """Move ONE current public fact into the party-disclosure record. Only
     `public` facts can be revealed — faction-restricted knowledge is not
     the party's just because the DM likes the idea (that's a deliberate
     second decision via a new fact)."""
     doc = knowledge.load(name)
-    fact = next((f for f in doc["facts"] if f.get("id") == fact_id), None)
-    if fact is None:
-        raise ValueError(f"no such fact: {fact_id}")
-    if fact.get("visibility") != "public" or \
-            fact.get("status") not in (None, "current"):
-        raise ValueError(
-            "only current public facts can be revealed to the party — "
-            "this fact is "
-            f"{fact.get('visibility')!r}/{fact.get('status') or 'current'}")
-    store = load_disclosure(name)
-    if any(r.get("fact_id") == fact_id for r in store["revealed"]):
-        return store  # already disclosed — idempotent
-    store["revealed"].append({
-        "fact_id": fact_id,
-        "text": fact.get("text"),
-        "revealed_week": week,
-        "revealed": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(timespec="seconds"),
-    })
+    store = disclosure_after_image(
+        load_disclosure(name), doc.get("facts", []),
+        [{"fact_id": fact_id, "week": week}])
     _save_disclosure(name, store)
     return store
 

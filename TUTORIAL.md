@@ -197,7 +197,37 @@ handout.
 Run more weeks whenever you like — the world accumulates history. Your
 players never see the machinery; you harvest maps, lore and rumors from it.
 
-## Step 6 — where everything lives, and your next campaign
+## Step 6 — after play: session notes to campaign changes
+
+When the session ends, open the **Sessions** tab and paste your rough
+notes — exactly as scribbled:
+
+    The party burned the Mint's warehouse at the east quay. Its reserve
+    coin was destroyed. They learned that Captain Rell takes bribes, but
+    promised to keep it quiet. The Wardens now want to close the ferry.
+
+Saving needs no API key. Then:
+
+1. **Extract changes** (one metered LLM call, explicit confirm) or add
+   suggestions by hand. The extractor proposes; it never applies.
+2. Review the cards. Each shows the quotation from your notes it stands
+   on, the affected faction, the current value, and the proposed value.
+   An ambiguous name stays unresolved; an invented quotation blocks the
+   card. A mechanical grade or a public visibility waits for your
+   explicit checkbox. A secret the party learned is a DM-only fact —
+   making it public, and telling the party, are separate decisions.
+3. Tick the suggestions you want and **Prepare selected changes**. This
+   stages ONE proposal (Simulation tab) — state, knowledge, and party
+   disclosure together; nothing in the campaign has changed yet.
+4. Accept it there, once. The decision record cites your notes revision;
+   the next simulated week inherits the consequences, and the player
+   handout contains only what you deliberately disclosed.
+
+Preparation refuses while another proposal is pending — review that one
+first; your session keeps its draft. Editing notes later appends a new
+immutable revision; it never rewrites the evidence behind a review.
+
+## Step 7 — where everything lives, and your next campaign
 
     campaigns/<name>/
       campaign.yaml          # name, title, created

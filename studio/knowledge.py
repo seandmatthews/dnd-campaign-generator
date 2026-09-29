@@ -29,10 +29,9 @@ stays (provenance), flips status to superseded, and stops compiling.
 import datetime
 import uuid
 
-import yaml
-
 import publication
 import spine
+import yaml
 
 KNOWLEDGE_FILE = "simulation/knowledge.yaml"
 SCHEMA_VERSION = 1
@@ -107,6 +106,44 @@ def _validate_visibility(visibility, faction_ids) -> str | list:
         return [str(v) for v in visibility]
     raise KnowledgeError(
         "visibility must be 'dm_only', 'public', or a list of faction ids")
+
+
+def apply_fact_records(name: str, doc: dict, faction_ids: set,
+                       records: list) -> tuple:
+    """PURE document transform: apply fact records (upserts and supersedes)
+    to a caller-owned store doc and return (doc, created_facts) — no load,
+    no save, no publication; the caller compiles and publishes the result
+    (the session_changes flow builds its after-images with this instead of
+    calling several independent save functions).
+
+    Each record: {text, visibility, subjects?, place_ids?, source_file?,
+    supersedes_fact_id?}. An unknown supersedes_fact_id raises
+    KnowledgeError; superseding flips the old record to superseded on the
+    SAME doc (one store write when the caller saves). created_facts maps
+    the record's index to the new fact dict, so a caller can resolve
+    references to facts the same batch creates."""
+    created = {}
+    for i, rec in enumerate(records or []):
+        if not isinstance(rec, dict):
+            raise KnowledgeError(f"fact record {i + 1}: not a mapping")
+        old_id = rec.get("supersedes_fact_id")
+        old = None
+        if old_id:
+            old = next((f for f in doc["facts"]
+                        if f.get("id") == old_id), None)
+            if old is None:
+                raise KnowledgeError(f"no such fact: {old_id}")
+        fact = _apply_upsert(name, doc, faction_ids,
+                             text=rec.get("text"),
+                             visibility=rec.get("visibility"),
+                             subjects=rec.get("subjects"),
+                             place_ids=rec.get("place_ids"),
+                             source_file=rec.get("source_file") or "")
+        if old is not None:
+            old["status"] = "superseded"
+            old["superseded_by"] = fact["id"]
+        created[i] = fact
+    return doc, created
 
 
 def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,

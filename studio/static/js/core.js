@@ -559,6 +559,9 @@
 
   function showTab(name) {
     Studio.state.activeTab = name;
+    // remember the tab so a reload (or a tomorrow) lands back on it, the
+    // same way the campaign pick already does
+    try { localStorage.setItem('campaign-studio.tab', name); } catch (_) {}
     document.querySelectorAll('.tab').forEach((btn) => {
       btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
     });
@@ -644,6 +647,7 @@
             '<button type="button" class="btn" data-act="cancel">Cancel</button>' +
             '<button type="submit" class="btn btn-primary" data-act="create">Create</button>' +
           '</div>' +
+          '<div class="modal-error form-error"></div>' +
         '</form>' +
       '</div>'
     );
@@ -665,6 +669,10 @@
           if (onCreated) onCreated(created);
         })
         .catch((err) => {
+          // the toast alone was missable: keep the dialog open with the
+          // reason inline so a refused name is never a silent no-op
+          const box = overlay.querySelector('.modal-error');
+          if (box) { box.innerHTML = ''; box.appendChild(errorPanel(err)); }
           toast((err && err.error) ? err.error : 'Campaign could not be created.', 'error');
         });
     });
@@ -717,6 +725,15 @@
 
     let remembered = null;
     try { remembered = localStorage.getItem('campaign-studio.campaign'); } catch (_) {}
+    // restore the remembered tab, but only if it is still a real tab — a
+    // renamed section must never boot into "this tab has no renderer"
+    try {
+      const rememberedTab = localStorage.getItem('campaign-studio.tab');
+      if (rememberedTab &&
+          document.querySelector('.tab[data-tab="' + rememberedTab + '"]')) {
+        Studio.state.activeTab = rememberedTab;
+      }
+    } catch (_) {}
     const campaignsOk = await refreshCampaigns(remembered);
     if (campaignsOk) showTab(Studio.state.activeTab);
     // a failed list left the error panel in the active section: rendering a

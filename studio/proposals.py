@@ -33,10 +33,8 @@ import re
 import uuid
 from pathlib import Path
 
-import yaml
-
-import publication
 import spine
+import yaml
 
 PROPOSALS_DIR = "simulation/proposals"
 SCHEMA_VERSION = 1
@@ -73,21 +71,35 @@ def time_id() -> str:
 def create(name: str, *, base_week, proposed_week, base_revisions: dict,
            input_set_revisions: dict, artifacts: dict, run_record: dict,
            before_state: dict, kind: str = "simulated_week",
-           chronicle_meta: dict | None = None) -> str:
+           chronicle_meta: dict | None = None,
+           extra_artifacts: dict | None = None,
+           manifest_extra: dict | None = None,
+           diff_extra: dict | None = None,
+           proposal_id: str | None = None) -> str:
     """Stage a new pending bundle from in-memory artifact texts. artifacts:
     {"state": text, "chronicles": {filename: text}, "entries": [dicts],
     "updates": [dicts], "findings": [str]}. kind: "simulated_week",
-    "session_effects", or "goal_updates". chronicle_meta: the week's
-    primary-chronicle summary (parsed at run time, while the engine home
-    still holds the files) — acceptance reads it from here, because the
-    scratch copies may be gone by then. Returns the proposal id.
+    "session_effects", "goal_updates", "project_changes", or
+    "session_changes". chronicle_meta: the week's primary-chronicle summary
+    (parsed at run time, while the engine home still holds the files) —
+    acceptance reads it from here, because the scratch copies may be gone
+    by then. extra_artifacts: {name: text} written verbatim as
+    artifacts/<name>.yaml and declared in the manifest (session_changes'
+    knowledge/disclosure after-images ride this). manifest_extra: dict
+    merged into the manifest (session_id, selected suggestions...).
+    diff_extra: dict merged into the computed diff.json (knowledge/
+    disclosure deltas the state diff cannot see). Returns the proposal id.
     Caller holds the campaign lock."""
     d = spine.campaign_dir(name)
     if not (d / "campaign.yaml").is_file():
         # mkdir(parents=True) below would happily mint a junk campaign tree
         # for a stale/unknown name — refuse instead
         raise ProposalError(f"unknown campaign: {name}")
-    pid = new_id()
+    pid = proposal_id or new_id()
+    if proposal_id:
+        # a caller-supplied id (session_changes: the decision record embeds
+        # it) must pass the same validation the reader applies
+        _bundle(name, pid)  # raises ProposalError on an invalid id
     bdir = _root(d) / pid
     (bdir / "artifacts" / "chronicle").mkdir(parents=True)
     manifest = {
@@ -107,6 +119,12 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
     }
     if chronicle_meta:
         manifest["chronicle"] = chronicle_meta
+    for k, v in (manifest_extra or {}).items():
+        manifest[k] = v
+    for fname, text in sorted((extra_artifacts or {}).items()):
+        (bdir / "artifacts" / f"{fname}.yaml").write_text(
+            text, encoding="utf-8")
+        manifest["artifacts"][fname] = f"artifacts/{fname}.yaml"
     state_text = artifacts.get("state") or ""
     (bdir / "artifacts" / "state.yaml").write_text(state_text,
                                                    encoding="utf-8")
@@ -146,6 +164,8 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
     diff = diff_states(before_state,
                        yaml.safe_load(state_text) or {},
                        entries)
+    if diff_extra:
+        diff.update(diff_extra)
     (bdir / "artifacts" / "diff.json").write_text(
         json.dumps(diff, indent=2, ensure_ascii=False), encoding="utf-8")
     manifest["artifacts"]["diff"] = "artifacts/diff.json"
@@ -273,6 +293,17 @@ def load(name: str, proposal_id: str) -> dict:
             out["changes"] = []
         diff = json.loads((arts / "diff.json").read_text(encoding="utf-8"))
         out["diff"] = diff if isinstance(diff, dict) else {}
+        # session_changes and future kinds declare additional after-images
+        # (knowledge/disclosure/decision records) through the manifest; a
+        # declared-but-unreadable one is the same damaged-bundle condition
+        # as a damaged state — the except below names it
+        out["extra"] = {}
+        for key, rel in (manifest.get("artifacts") or {}).items():
+            if key in ("state", "chronicles", "timeline_entries", "goal_updates",
+                       "findings", "changes", "replay", "diff"):
+                continue
+            out["extra"][key] = yaml.safe_load(
+                (bdir / rel).read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError, ValueError) as e:
         raise ProposalError(f"proposal {proposal_id} is damaged: {e}")
     return out

@@ -385,6 +385,75 @@ shapes in this document true.
   Passthrough `{"week","faction","lines":[str]}` — lines render as an indented
   causal chain.
 
+### Sessions (session-notes-to-changes — reviewed campaign changes from play notes)
+- Layout: `sessions/<session-id>/session.yaml` + immutable
+  `notes/0001.md` revisions + `drafts/<draft-id>.yaml` +
+  `decisions/<proposal-id>.yaml`. DM material — outside every lore
+  generation glob; included in the private campaign export. Ids are
+  server-generated (`session-`/`draft-`/`suggestion-` + hex); an
+  extraction retry mints a new draft, never a new session; suggestions
+  get ids when the draft is saved, never per edit.
+- `POST /api/campaign/{name}/sessions`
+  `{"title":str,"notes":str,"event_week"?:int,"place_ids"?:[str],
+  "future_reason"?:str}` → 201. `event_week` defaults to the CURRENT
+  simulation week; a FUTURE week is 422 unless `future_reason` explains
+  it (session records never advance the clock). Notes > 30,000 chars are
+  refused (split the session). 422 on unknown place ids.
+- `GET /api/campaign/{name}/sessions` → `{"sessions":[metadata]}`.
+- `GET /api/campaign/{name}/sessions/{id}` → `{"session","notes":[
+  {file,revision,created,chars,text}],"drafts":[full drafts],
+  "decisions":[decision records]}`. 404 unknown id.
+- `POST /api/campaign/{name}/sessions/{id}/notes`
+  `{"notes":str,"expected_revision":int}` → 201 appends an immutable
+  revision; 409 on a stale expected_revision (editing never rewrites
+  evidence behind an existing proposal).
+- `PUT /api/campaign/{name}/sessions/{id}/drafts/{draft_id}`
+  `{"suggestions":[…],"expected_revision":int}` → the saved draft.
+  Suggestion ids are preserved (edits never re-mint identity); unknown
+  ids are 422; a stale expected_revision is 409 (another editor or a
+  finished extraction). Server-owned fields (`status`, `proposal`,
+  `accepted`) cannot be edited through this route.
+- `POST /api/campaign/{name}/sessions/{id}/extract` `{"confirm":true}`
+  → 202 job; `confirm` must be exactly true (the metered-spend gate).
+  One bounded LLM pass (at most two completion attempts; transport
+  retries metered) maps the notes to SEMANTIC suggestions; the adapter
+  resolves names against the captured roster (ambiguous names stay
+  unresolved — never fuzzy-matched into mechanical targets), validates
+  every evidence quotation against the cited notes revision, and saves a
+  NEW draft. A malformed response is a job error; the notes stay intact
+  and no fake "no changes" draft is written. Notes > 30,000 chars are
+  refused before any spend.
+- `POST /api/campaign/{name}/sessions/{id}/prepare`
+  `{"selected":[suggestion ids],"draft_id"?:str,
+  "expected_draft_revision"?:int}` → 200 (synchronous; two bounded
+  engine subprocess calls, no LLM). Stages ONE **`session_changes`
+  proposal**: state effects through the engine CLI on a captured copy,
+  knowledge/disclosure after-images in memory, the final knowledge
+  document compiled into the POST-EFFECT state, and the decision record —
+  all captured against exact base revisions. 422 when a selected
+  suggestion has validation findings (unresolved mapping, invented
+  quotation, unconfirmed grade/visibility), when two selected changes hit
+  the same faction field/resource (consolidate them), or when a
+  disclosure's fact is not selected; 409 when any proposal is already
+  pending (return to it first), the draft changed since review, or the
+  state changed mid-prepare. Nothing in canon changes here.
+- Accept/discard ride the EXISTING
+  `/simulation/proposal/{pid}/accept|discard` endpoints. `session_changes`
+  acceptance publishes state + knowledge + disclosure + the session
+  decision record through ONE `publication.publish` call (one receipt,
+  recover together; stable idempotency key campaign+session+proposal;
+  applied-effect ids derive from session/suggestion ids so retries
+  deduplicate). Discard reopens the prepared suggestions. Already
+  accepted suggestions can never be re-prepared (corrections = new
+  suggestions).
+- Manual drafting without an LLM: build a draft through the service
+  (`sessions.save_draft`), then review/prepare exactly as above — no API
+  key anywhere in the path.
+- CLI: `python studio/session_notes.py import|list|show|extract|prepare|
+  accept|discard …` — `extract` requires `--confirm-spend`; accept/discard
+  call the same service layer as HTTP. Standalone `agentic-simulator`
+  ingestion (`src/ingest.py`, `src/effects.py`) is untouched.
+
 ### Review (B stub → H, M4; vault stage 4; phase-1 publication)
 - `GET /api/campaign/{name}/review` → `{"items":[{"id","kind":
   "lore-entry|lore-page|timeline-approval|finding","source","title","body",

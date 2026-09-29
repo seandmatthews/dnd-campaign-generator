@@ -5,6 +5,15 @@
   'use strict';
   const S = window.Studio;
 
+  /* ----- project card state for the delegated action handlers -----
+     Every re-render (accepts, staging, job polls) rebuilds the faction and
+     project cards, and listeners bound to the old nodes died with them —
+     a Pause click after a week accept silently did nothing. The buttons
+     are now handled by ONE document-level listener (bottom of the file),
+     which looks the live project up here. */
+  const projectIndex = new Map();   // project id -> project object
+  let simFactionsCache = [];        // last rendered factions (for Edit terms)
+
   /* ----- resource chips: color by level none/low/medium/high ----- */
 
   function resLevel(v) {
@@ -93,12 +102,6 @@
         knowsList(f.knows) +
       '</article>'
     );
-    // contextual "Open place" link (Places tab): a faction's home pill opens
-    // that place's DM page instead of being dead chrome
-    const placeBtn = cardEl.querySelector('.faction-place-link');
-    if (placeBtn) {
-      placeBtn.addEventListener('click', () => S.openPlace(placeBtn.dataset.place));
-    }
     return cardEl;
   }
 
@@ -420,21 +423,29 @@
       const isSession = p.kind === 'session_effects';
       const isGoals = p.kind === 'goal_updates';
       const isProjects = p.kind === 'project_changes';
+      const isSsnChanges = p.kind === 'session_changes';
       const updates = Array.isArray(data.updates) ? data.updates : [];
       const changes = Array.isArray(data.changes) ? data.changes : [];
       const findings = Array.isArray(data.findings) ? data.findings : [];
       const title = isGoals
         ? 'Proposed goal updates — not canon yet'
-        : isSession
-          ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
-          : isProjects
-            ? 'Proposed project changes — not canon yet'
-            : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
+        : isSsnChanges
+          ? 'Session changes — session ' + S.esc(String((p.run_record && p.run_record.session_id) || '')) + ' — not canon yet'
+          : isSession
+            ? 'Session changes — ' + S.esc(String((p.run_record && p.run_record.source) || 'session'))
+            : isProjects
+              ? 'Proposed project changes — not canon yet'
+              : 'Proposed week ' + S.esc(String(p.proposed_week)) + ' &mdash; not canon yet';
       const subtitle = isGoals
         ? '<strong>The world has not changed yet.</strong> The engine read ' +
           'the ledger and proposes these goal changes for each faction. ' +
           'Accepting applies them exactly once; discarding changes nothing.'
-        : isSession
+        : isSsnChanges
+          ? '<strong>The world has not changed yet.</strong> These are the selected ' +
+            'consequences of one session: state effects, knowledge facts, and party ' +
+            'disclosures staged together. Accepting publishes them exactly once; ' +
+            'discarding changes nothing (and reopens the suggestions).'
+          : isSession
           ? '<strong>The world has not changed yet.</strong> These are the recorded ' +
             'session facts and the reviewed effects they justify. Accepting applies ' +
             'them exactly once; discarding changes nothing.'
@@ -486,6 +497,40 @@
           '</div>').join('') + '</div>';
       };
 
+      // session_changes: the knowledge facts and party disclosures this
+      // batch writes beyond state (from the bundle's after-images)
+      const ssnChangesBody = (data, diff) => {
+        const extra = (data && data.extra) || {};
+        let out = '';
+        const facts = (diff && diff.facts_added) || [];
+        const supd = (diff && diff.facts_superseded) || [];
+        const disc = (diff && diff.disclosed) || [];
+        if (facts.length) {
+          out += '<details class="proposal-events" open><summary>Knowledge facts written (' +
+            facts.length + ')</summary><ul class="event-list">' +
+            facts.map((f) => '<li><span class="event-text">' + S.esc(f.text || '') + '</span> ' +
+              (f.visibility === 'public'
+                ? '<span class="pill pill-vis-public">public in world</span>'
+                : '<span class="pill pill-vis-dm">DM only</span>') + '</li>').join('') +
+            '</ul></details>';
+        }
+        if (supd.length) {
+          out += '<p class="muted">Supersedes fact(s): ' +
+            supd.map((x) => '<code>' + S.esc(String(x)) + '</code>').join(', ') + '</p>';
+        }
+        if (disc.length) {
+          out += '<details class="proposal-events" open><summary>Disclosed to the party (' +
+            disc.length + ')</summary><ul class="event-list">' +
+            disc.map((d) => '<li><span class="event-text">' + S.esc(d.text || d.fact_id || '') +
+              '</span> <span class="pill pill-when">party handout</span></li>').join('') +
+            '</ul></details>';
+        }
+        if (!out) {
+          out = '<p class="muted">State changes only — no knowledge or disclosure writes.</p>';
+        }
+        return out;
+      };
+
       // proposals the engine cut during validation — why an update the
       // model proposed is not on the table (persisted in the bundle since
       // 2026-09-25; they used to live only in the ephemeral job log)
@@ -509,6 +554,7 @@
           : isProjects
             ? projectsBody() + goalsFindings()
             : '<table class="mini-table proposal-diff"><tbody>' + diffRows(diff) + '</tbody></table>' +
+            (isSsnChanges ? ssnChangesBody(data, diff) : '') +
             (evs.length
               ? '<details class="proposal-events"' + (isSession ? ' open' : '') + '><summary>' +
                   (isSession ? 'Recorded history &amp; effects (' : 'Proposed events (') + evs.length + ')</summary><ul class="event-list">' +
@@ -529,6 +575,7 @@
         '<div class="inline-form proposal-actions">' +
           '<button type="button" class="btn btn-primary proposal-accept">' +
             (isGoals ? 'Accept the goal changes — apply exactly once'
+                     : isSsnChanges ? 'Accept the session changes — publish state, knowledge, disclosure'
                      : isSession ? 'Accept session changes — apply exactly once'
                      : isProjects ? 'Accept the project changes — apply exactly once'
                                  : 'Accept week ' + S.esc(String(p.proposed_week)) + ' — publish everything') + '</button>' +
@@ -553,7 +600,11 @@
           isGoals
             ? 'Accepting applies the proposed goal changes to the factions ' +
               '— exactly once. The audit events cite the ledger.'
-            : isSession
+            : isSsnChanges
+              ? 'Accepting publishes this session in ONE step: the state ' +
+                'effects, the knowledge facts, and the party disclosures. ' +
+                'The decision record cites the notes revision. Exactly once.'
+              : isSession
               ? 'Accepting applies the recorded session history and its reviewed ' +
                 'effects to the live state — exactly once.'
               : isProjects
@@ -1029,14 +1080,15 @@
     return '<li>' + wk + moved + '<span class="event-text">' + S.esc(text) + '</span></li>';
   }
 
-  function projectCard(host, project, factions, errBox) {
+  function projectCard(project, factions) {
     const owner = factions.find((f) => f.id === project.faction_id);
     const ownerName = (owner && owner.name) || project.faction_id;
     const status = project.status || 'active';
     const atTarget = Number(project.progress) >= Number(project.target);
     const blocked = project.completion_blocked;
     const card = S.el(
-      '<article class="card project-card">' +
+      '<article class="card project-card" data-project-id="' +
+        S.esc(String(project.id)) + '">' +
         '<header class="faction-head">' +
           '<h5 class="faction-name">' + S.esc(String(project.title || project.id)) + '</h5>' +
           '<span class="pill pill-kind">' + S.esc(status) + '</span>' +
@@ -1071,64 +1123,101 @@
         '</div>' +
       '</article>'
     );
-    // contextual "Open place" links (Places tab): one per place the project operates at
-    card.querySelectorAll('.project-place-link').forEach((btn) => {
-      btn.addEventListener('click', () => S.openPlace(btn.dataset.place));
-    });
-    const historyBox = card.querySelector('.project-history-body');
-    card.querySelector('.project-history').addEventListener('toggle', async function () {
-      if (!this.open || historyBox.dataset.loaded) return;
-      try {
-        const data = await S.api(S.campUrl('/simulation/projects/' +
-          encodeURIComponent(project.id)));
+    // No per-card listeners here: pause/resume/abandon/edit, the place
+    // links and the history toggle are all handled by the document-level
+    // delegated listeners at the bottom of this file, which survive the
+    // re-renders that replace these cards.
+    return card;
+  }
+
+  /* ----- delegated project-card actions (survive re-renders) ----- */
+
+  function projectErrBox(card) {
+    const panel = card.closest('.projects-panel');
+    return panel ? panel.querySelector('.projects-error') : null;
+  }
+
+  async function prepareProjectOp(project, errBox, op) {
+    const ok = await S.confirmRun(
+      'Stage this project operation (' + op.op + ')? Nothing changes until ' +
+      'you accept the proposal above.'
+    );
+    if (!ok) return;
+    if (errBox) errBox.innerHTML = '';
+    try {
+      await S.api(S.campUrl('/simulation/projects/prepare'), {
+        method: 'POST',
+        body: { operations: [op] }
+      });
+      S.toast('Project changes staged — review the proposal above, then accept.', 'ok');
+      S.rerenderIfCurrent('sim');
+    } catch (err) {
+      if (errBox) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err));
+      } else {
+        S.toast((err && err.error) ? err.error : 'The project operation failed.', 'error');
+      }
+    }
+  }
+
+  document.addEventListener('click', (ev) => {
+    if (!(ev.target instanceof Element)) return;
+    const placeBtn = ev.target.closest('.faction-place-link, .project-place-link');
+    if (placeBtn) {
+      S.openPlace(placeBtn.getAttribute('data-place'));
+      return;
+    }
+    const btn = ev.target.closest('.p-pause, .p-resume, .p-abandon, .p-edit');
+    if (!btn) return;
+    const card = btn.closest('.project-card');
+    if (!card) return;
+    const project = projectIndex.get(card.getAttribute('data-project-id'));
+    if (!project) return;
+    const errBox = projectErrBox(card);
+    if (btn.classList.contains('p-pause')) {
+      prepareProjectOp(project, errBox, { op: 'pause', project_id: project.id,
+        reason: 'Paused from the Projects panel.' });
+    } else if (btn.classList.contains('p-resume')) {
+      prepareProjectOp(project, errBox, { op: 'resume', project_id: project.id,
+        reason: 'Resumed from the Projects panel.' });
+    } else if (btn.classList.contains('p-abandon')) {
+      prepareProjectOp(project, errBox, { op: 'abandon', project_id: project.id,
+        reason: 'Abandoned from the Projects panel.' });
+    } else if (btn.classList.contains('p-edit')) {
+      const panel = card.closest('.projects-panel');
+      const formHost = panel ? panel.querySelector('.project-form-host') : null;
+      if (formHost) {
+        projectFormPanel(formHost, simFactionsCache, errBox, project,
+          () => S.rerenderIfCurrent('sim'));
+      }
+    }
+  });
+
+  // 'toggle' does not bubble, but capture-phase ancestors still receive it
+  document.addEventListener('toggle', (ev) => {
+    const details = ev.target;
+    if (!(details instanceof Element) ||
+        !details.classList.contains('project-history') || !details.open) return;
+    const card = details.closest('.project-card');
+    const body = details.querySelector('.project-history-body');
+    if (!card || !body || body.dataset.loaded) return;
+    const project = projectIndex.get(card.getAttribute('data-project-id'));
+    if (!project) return;
+    S.api(S.campUrl('/simulation/projects/' + encodeURIComponent(project.id)))
+      .then((data) => {
         const hist = Array.isArray(data.history) ? data.history : [];
-        historyBox.innerHTML = hist.length
+        body.innerHTML = hist.length
           ? '<ul class="event-list">' + hist.map(projectHistoryItem).join('') + '</ul>'
           : '<p class="muted">No recorded movement yet — work weeks, sabotage, ' +
             'sessions and completions will appear here.</p>';
-        historyBox.dataset.loaded = '1';
-      } catch (err) {
-        historyBox.innerHTML = '';
-        historyBox.appendChild(S.errorPanel(err));
-      }
-    });
-    async function prepareOp(op) {
-      const ok = await S.confirmRun(
-        'Stage this project operation (' + op + ')? Nothing changes until ' +
-        'you accept the proposal above.'
-      );
-      if (!ok) return;
-      errBox.innerHTML = '';
-      try {
-        await S.api(S.campUrl('/simulation/projects/prepare'), {
-          method: 'POST',
-          body: { operations: [op] }
-        });
-        S.toast('Project changes staged — review the proposal above, then accept.', 'ok');
-        S.rerenderIfCurrent('sim');
-      } catch (err) {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-      }
-    }
-    const pauseBtn = card.querySelector('.p-pause');
-    if (pauseBtn) pauseBtn.addEventListener('click', () =>
-      prepareOp({ op: 'pause', project_id: project.id,
-                  reason: 'Paused from the Projects panel.' }));
-    const resumeBtn = card.querySelector('.p-resume');
-    if (resumeBtn) resumeBtn.addEventListener('click', () =>
-      prepareOp({ op: 'resume', project_id: project.id,
-                  reason: 'Resumed from the Projects panel.' }));
-    const abandonBtn = card.querySelector('.p-abandon');
-    if (abandonBtn) abandonBtn.addEventListener('click', () =>
-      prepareOp({ op: 'abandon', project_id: project.id,
-                  reason: 'Abandoned from the Projects panel.' }));
-    const editBtn = card.querySelector('.p-edit');
-    if (editBtn) editBtn.addEventListener('click', () =>
-      projectFormPanel(host, factions, errBox, project, () =>
-        S.rerenderIfCurrent('sim')));
-    return card;
-  }
+        body.dataset.loaded = '1';
+      })
+      .catch((err) => {
+        body.innerHTML = '';
+        body.appendChild(S.errorPanel(err));
+      });
+  }, true);
 
   function projectFormPanel(host, factions, errBox, existing, onStaged) {
     // one form for create AND edit (existing != null): the same fields, an
@@ -1328,6 +1417,7 @@
       }
       const byOwner = {};
       projects.forEach((p) => {
+        projectIndex.set(String(p.id), p); // for the delegated action handlers
         (byOwner[p.faction_id] = byOwner[p.faction_id] || []).push(p);
       });
       Object.keys(byOwner).forEach((fid) => {
@@ -1336,7 +1426,7 @@
           S.esc(String((f && f.name) || fid)) + '</h4>'));
         const grid = S.el('<div class="faction-grid"></div>');
         byOwner[fid].forEach((p) =>
-          grid.appendChild(projectCard(host, p, factions, errBox)));
+          grid.appendChild(projectCard(p, factions)));
         host.appendChild(grid);
       });
       if (Array.isArray(rep.findings) && rep.findings.length) {
@@ -1412,6 +1502,7 @@
     const season = clock.season || '';
     const premise = (sim && sim.premise) || '';
     const factions = (sim && Array.isArray(sim.factions)) ? sim.factions : [];
+    simFactionsCache = factions; // for the delegated Edit-terms handler
     const rumors = (sim && Array.isArray(sim.rumors)) ? sim.rumors : [];
     const events = (sim && Array.isArray(sim.events)) ? sim.events : [];
     const chronicles = (sim && Array.isArray(sim.chronicles)) ? sim.chronicles : [];

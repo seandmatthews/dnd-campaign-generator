@@ -213,10 +213,12 @@
         '<header class="review-head"><div class="review-badges">' +
           visPill(fact.visibility) + statusPill(fact) +
         '</div></header>' +
-        '<div class="fact-text"></div>' +
+        // not class="fact-text": that collides with the record form's
+        // textarea and every panel-scoped query used to match this div first
+        '<div class="fact-display-text"></div>' +
         '<div class="fact-meta"></div>' +
       '</article>');
-    card.querySelector('.fact-text').textContent = String(fact.text || '');
+    card.querySelector('.fact-display-text').textContent = String(fact.text || '');
     const meta = [];
     if (Array.isArray(fact.subjects) && fact.subjects.length) {
       meta.push('subjects: ' + fact.subjects.join(', '));
@@ -269,6 +271,38 @@
           'create a sandbox on the Agent Simulation tab to record new ones.</p>'));
     }
 
+    // bound BEFORE the data fetch: the empty-campaign path returns early
+    // below, and a form whose submit handler was never attached
+    // native-submits — reloading the page and losing the typed fact
+    panel.querySelector('.fact-form').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      // query INSIDE the form: fact cards render their display text as
+      // <div class="fact-text"> earlier in the panel, and a panel-scoped
+      // query matches that div first — .value undefined, the text key
+      // silently dropped, and every second fact 422s as "Field required"
+      const form = ev.currentTarget;
+      const btn = form.querySelector('.fact-record');
+      const errBox = form.querySelector('.form-error');
+      errBox.innerHTML = '';
+      const subjects = form.querySelector('.fact-subjects').value
+        .split(',').map((s) => s.trim()).filter(Boolean);
+      try {
+        await S.api(S.campUrl('/knowledge'), {
+          method: 'POST',
+          body: {
+            text: form.querySelector('.fact-text').value,
+            visibility: readVisibility(visScope),
+            source_file: form.querySelector('.fact-source').value.trim(),
+            subjects: subjects.length ? subjects : null
+          }
+        });
+        S.toast('Fact recorded and compiled where its visibility allows.', 'ok');
+        S.showTab('knowledge');
+      } catch (err) {
+        errBox.appendChild(S.errorPanel(err));
+      }
+    });
+
     let data;
     let disclosure;
     try {
@@ -301,29 +335,6 @@
       old.forEach((f) => list.appendChild(factCard(f, revealedIds, factions)));
     }
 
-    panel.querySelector('.fact-form').addEventListener('submit', async (ev) => {
-      ev.preventDefault();
-      const btn = panel.querySelector('.fact-record');
-      const errBox = panel.querySelector('.form-error');
-      errBox.innerHTML = '';
-      const subjects = panel.querySelector('.fact-subjects').value
-        .split(',').map((s) => s.trim()).filter(Boolean);
-      try {
-        await S.api(S.campUrl('/knowledge'), {
-          method: 'POST',
-          body: {
-            text: panel.querySelector('.fact-text').value,
-            visibility: readVisibility(visScope),
-            source_file: panel.querySelector('.fact-source').value.trim(),
-            subjects: subjects.length ? subjects : null
-          }
-        });
-        S.toast('Fact recorded and compiled where its visibility allows.', 'ok');
-        S.showTab('knowledge');
-      } catch (err) {
-        errBox.appendChild(S.errorPanel(err));
-      }
-    });
     return panel;
   }
 
