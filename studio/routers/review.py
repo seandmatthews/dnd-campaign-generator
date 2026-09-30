@@ -40,13 +40,13 @@ import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-import canon
 import engines
 import links
 import publication
 import spine
 import timeline
-from routers.common import (campaign_lock_nowait, require_campaign)
+from routers.common import (campaign_lock_nowait, finalize_publication,
+                            publication_500, require_campaign)
 from routers.common import ensure_publishable_409
 
 router = APIRouter()
@@ -56,12 +56,9 @@ PENDING_PATTERNS = (("lore", "pending-*.yaml"),
 # t-id allocation lives in timeline.py (the one timeline writer/serializer)
 _ENTRY_START_RE = re.compile(r"^- id:\s*(\S+)")
 
-# GET review runs check.py per pending file on a REQUEST THREAD: a wedged
-# run at the old 60s cap held that thread for a minute (a few open tabs
-# drain the threadpool everything else needs), and the findings are
-# advisory — never approval-blocking. 20s still covers check.py on any
-# real campaign; check.py itself keeps engines.run_check's 180s default
-# for direct CLI use.
+# check.py runs per pending file ON A REQUEST THREAD (a wedged run drained
+# the threadpool) — 20s, advisory, never blocking. check.py keeps
+# engines.run_check's 180s default for direct CLI use.
 CHECK_TIMEOUT_S = 20
 FINDINGS_BUDGET_S = 1.5  # soft budget for all check.py runs in one GET
 VAULT_FINDINGS_CAP = 20  # dangling/collision rows shown per GET
@@ -334,10 +331,6 @@ def get_review(name: str):
 # ------------------------------------------------------------------ mutate
 
 
-def _timeline_path(campaign_dir: Path) -> Path:
-    return timeline.timeline_path(campaign_dir)
-
-
 def _load_timeline(campaign_dir: Path):
     """(doc, entries) via the timeline module — 422 on a corrupt file."""
     try:
@@ -445,11 +438,6 @@ def _prior_result(name: str, body: ReviewBody, op: str,
     return {**result, "idempotent": True}
 
 
-def _receipt_key(name: str, body: ReviewBody, op: str,
-                 content_fallback: str) -> str:
-    return _idempotency_key(name, body, op, content_fallback)
-
-
 def _revision_conflict_409(e: publication.RevisionConflict) -> HTTPException:
     return HTTPException(
         status_code=409,
@@ -461,18 +449,16 @@ def _revision_conflict_409(e: publication.RevisionConflict) -> HTTPException:
 def post_approve(name: str, body: ReviewBody):
     d = require_campaign(name)
     with campaign_lock_nowait(name, "approving the review items"):
-        # fast-fail, not blocking: a week job holds this lock for its whole
-        # run, and a blocking approve used to pin the HTTP request (and the
-        # browser's patience) for up to half an hour — the accept would
-        # eventually land but read as an error
+        # fast-fail, not blocking (rationale in campaign_lock_nowait): a
+        # blocking approve pins the request for up to a half-hour week run
         ensure_publishable_409(name)
         prior = _prior_result(name, body, "approve", "")
         if prior:
             return prior
         path, inside = _pending_file(d, body.file)
         try:
-            key = _receipt_key(name, body, "approve",
-                               publication.file_revision(path))
+            key = _idempotency_key(name, body, "approve",
+                                   publication.file_revision(path))
             prior = publication.receipt(name, key)
             if prior:
                 return {**prior, "idempotent": True}
@@ -542,14 +528,12 @@ def post_approve(name: str, body: ReviewBody):
                     if k not in set(chosen_idx)]
             if keep:
                 out_doc = {k: v for k, v in doc.items() if k != "entries"}
-                # the remaining entries' provenance must carry forward across
-                # what THIS approval itself changed: it rewrites timeline.yaml
-                # (which the draft pinned as a source) and stubs pages into
-                # pinned lore/entities — left stale, approving the next entry
-                # 409s against a base revision this very batch moved. The
-                # draft records the POST-write revision (what disk will hold
-                # once this publish lands); `base` itself keeps the draft's
-                # pre-write pin — it is checked against current disk, now.
+                # provenance must carry forward across what THIS approval
+                # changed (it rewrites timeline.yaml and stubs pinned pages)
+                # — left stale, the next approve 409s against a base
+                # revision this batch moved. The draft records the POST-write
+                # revision; base keeps the pre-write pin, checked against
+                # current disk now.
                 pinned = dict(out_doc.get("base_revisions") or {})
                 for w in writes:
                     rel = w["path"]
@@ -566,8 +550,7 @@ def post_approve(name: str, body: ReviewBody):
                 out_doc["entries"] = keep
                 writes.append({
                     "path": inside,
-                    "text": yaml.safe_dump(out_doc, sort_keys=False,
-                                           allow_unicode=True, width=100)})
+                    "text": spine.dump_yaml(out_doc)})
             else:
                 writes.append({"path": inside, "delete": True})
 
@@ -582,11 +565,7 @@ def post_approve(name: str, body: ReviewBody):
         except HTTPException:
             raise  # deliberate 4xx from _select/_append_approved etc.
         except Exception as e:  # noqa: BLE001 — mid-flight publication failure
-            raise HTTPException(
-                status_code=500,
-                detail=f"the approval could not be published ({e}) — the "
-                       f"staged transaction is kept and will be recovered "
-                       f"automatically when the studio restarts")
+            raise publication_500("approval", e)
 
         result = {"approved": len(chosen), "entries": len(entries),
                   "pages": written, "pages_skipped": skipped, "stubs": stubbed,
@@ -600,9 +579,8 @@ def post_approve(name: str, body: ReviewBody):
                 (f", {skipped} skipped" if skipped else "") + ")"
         elif stubbed:
             msg += f" (+{stubbed} stub page(s))"
-        snap = canon.snapshot_result(name, msg)
-        publication.after_snapshot(name, pub["transaction"], snap)
-        result["snapshot"] = snap
+        result["snapshot"] = finalize_publication(
+            name, pub["transaction"], msg)
         # "approved" counts everything chosen (entries + page drafts) so the
         # pre-vault contract ("approved: N") still reads true
         return result
@@ -618,8 +596,8 @@ def post_delete(name: str, body: ReviewBody):
             return prior
         path, inside = _pending_file(d, body.file)
         try:
-            key = _receipt_key(name, body, "delete",
-                               publication.file_revision(path))
+            key = _idempotency_key(name, body, "delete",
+                                   publication.file_revision(path))
             prior = publication.receipt(name, key)
             if prior:
                 return {**prior, "idempotent": True}
@@ -633,8 +611,7 @@ def post_delete(name: str, body: ReviewBody):
             if keep:
                 out_doc = {k: v for k, v in doc.items() if k != "entries"}
                 out_doc["entries"] = keep
-                writes = [{"path": inside, "text": yaml.safe_dump(
-                    out_doc, sort_keys=False, allow_unicode=True, width=100)}]
+                writes = [{"path": inside, "text": spine.dump_yaml(out_doc)}]
             else:
                 writes = [{"path": inside, "delete": True}]
             pub = publication.publish(
@@ -648,18 +625,13 @@ def post_delete(name: str, body: ReviewBody):
         except HTTPException:
             raise
         except Exception as e:  # noqa: BLE001 — mid-flight publication failure
-            raise HTTPException(
-                status_code=500,
-                detail=f"the delete could not be published ({e}) — the "
-                       f"staged transaction is kept and will be recovered "
-                       f"automatically when the studio restarts")
+            raise publication_500("delete", e)
         result = {"deleted": len(chosen_idx),
                   "transaction": pub["transaction"]}
         if pub["state"] == "noop":
             result["noop"] = True
         publication.record_receipt(name, key, result)
-        snap = canon.snapshot_result(
-            name, f"campaign/{name}: delete {len(chosen_idx)} pending entries")
-        publication.after_snapshot(name, pub["transaction"], snap)
-        result["snapshot"] = snap
+        result["snapshot"] = finalize_publication(
+            name, pub["transaction"],
+            f"campaign/{name}: delete {len(chosen_idx)} pending entries")
         return result

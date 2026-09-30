@@ -54,10 +54,9 @@ def submit(kind: str, fn) -> str:
         "result": None,
         "error": None,
         "started": _now(),
-        # the DURING-the-run log is a ring: a 30-minute week logs every
-        # engine line, and the old append-everything list pinned the whole
-        # transcript in RAM until the finally-trim (the API only ever
-        # served the 40-line tail, so nothing observable changes)
+        # ring buffer: a 30-minute week logs every engine line; the old
+        # append-everything list pinned the whole transcript in RAM
+        # (the API only ever served the tail).
         "_log_all": collections.deque(maxlen=LOG_CAP),
     }
     with _LOCK:

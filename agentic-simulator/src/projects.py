@@ -79,9 +79,9 @@ TERMINAL_STATUSES = ("completed", "abandoned")
 RESUMABLE_STATUSES = ("paused",)
 VISIBILITIES = ("public", "restricted")
 INTENTS = ("ordinary", "work_project", "sabotage_project")
-LEVELS = ("none", "low", "medium", "high")
-_LEVEL_INDEX = {g: i for i, g in enumerate(LEVELS)}
-RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
+LEVELS = _store.RESOURCE_LEVELS
+_LEVEL_INDEX = _store.LEVEL_INDEX
+RESOURCE_KEYS = _store.RESOURCE_KEYS
 DEFAULT_TARGET = 4
 TARGET_MIN, TARGET_MAX = 2, 8
 EFFECT_TYPES = ("set_resource", "set_field")
@@ -490,9 +490,7 @@ def activation_overrides(state):
     ordinary quiet-week gate would hold them. A project with unmet
     requirements, or one sitting at target awaiting its completion
     correction, creates NO override — there is nothing to work toward."""
-    factions = {str(f.get("id")): f
-                for f in (state or {}).get("factions", [])
-                if isinstance(f, dict) and f.get("id")}
+    factions = _store.faction_map(state)
     out = {}
     for project in projects_of(state):
         if project.get("status") != "active":
@@ -807,7 +805,9 @@ def apply_operations(state, operations, week=None, id_factory=None):
     return norm_ops, findings
 
 
-def _one_active_clause(state, owner, ignore_pid=None):
+def one_active_clause(state, owner, ignore_pid=None):
+    """The owner's other ACTIVE project, if any — the one-active-per-faction
+    rule shared by DM operations and session effects."""
     for p in projects_of(state):
         if p.get("status") == "active" and p.get("faction_id") == owner \
                 and p.get("id") != ignore_pid:
@@ -821,7 +821,7 @@ def _op_create(state, op, oid, reason, week, id_factory, norm_ops, findings):
     if errs:
         findings.extend(f"operation {oid}: {e}" for e in errs)
         return
-    clash = _one_active_clause(state, record["faction_id"])
+    clash = one_active_clause(state, record["faction_id"])
     if clash is not None:
         findings.append(
             f"operation {oid}: {record['faction_id']} already runs the "
@@ -851,7 +851,7 @@ def _op_status(state, op, oid, kind, reason, norm_ops, findings):
             findings.append(f"operation {oid}: {pid!r} is {current!r} — "
                             "only a paused project can resume")
             return
-        clash = _one_active_clause(state, project.get("faction_id"),
+        clash = one_active_clause(state, project.get("faction_id"),
                                    ignore_pid=pid)
         if clash is not None:
             findings.append(
@@ -925,9 +925,7 @@ def _op_edit(state, op, oid, reason, norm_ops, findings):
 def report(state):
     """The DM view behind GET /simulation/projects: every project
     normalized, with computed requirement and completion findings."""
-    factions = {str(f.get("id")): f
-                for f in (state or {}).get("factions", [])
-                if isinstance(f, dict) and f.get("id")}
+    factions = _store.faction_map(state)
     out = []
     for project in projects_of(state):
         rec = copy.deepcopy(project)

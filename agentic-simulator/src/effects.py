@@ -69,12 +69,17 @@ import sys
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
-from store import STATE_FILE, places_of
+from store import (
+    RESOURCE_KEYS,
+    RESOURCE_LEVELS,
+    STATE_FILE,
+    faction_map,
+    places_of,
+    split_argv,
+)
 from store import load_state as _store_load
 from store import save_state as _store_save
 
-RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
-RESOURCE_LEVELS = ("none", "low", "medium", "high")
 FIELD_KEYS = ("goal", "kind", "secret", "species")
 EFFECT_TYPES = ("set_resource", "set_field",
                 "set_project_progress", "set_project_status")
@@ -83,6 +88,11 @@ PROJECT_EFFECT_TYPES = ("set_project_progress", "set_project_status")
 # shared mechanics (a weekly tick or the session progress pass), never by
 # a typed effect's text field
 PROJECT_STATUS_AFTER = ("active", "paused", "abandoned")
+
+
+def _stale(expected, where, current):
+    return (f"stale precondition: expected_before {expected!r} "
+            f"but {where} is {current!r}")
 
 
 def _validate_project_effect(effect, state):
@@ -116,9 +126,8 @@ def _validate_project_effect(effect, state):
                 return [(f"expected_before {effect.get('expected_before')!r} "
                          "is not an integer")]
             if expected != project.get("progress", 0):
-                return [(f"stale precondition: expected_before {expected!r} "
-                         f"but {pid} progress is "
-                         f"{project.get('progress', 0)!r}")]
+                return [_stale(expected, f"{pid} progress",
+                               project.get("progress", 0))]
     else:  # set_project_status
         after = str(after or "").strip()
         if after not in PROJECT_STATUS_AFTER:
@@ -128,14 +137,10 @@ def _validate_project_effect(effect, state):
         expected = effect.get("expected_before")
         if expected not in (None, "") \
                 and str(expected) != str(project.get("status", "active")):
-            return [(f"stale precondition: expected_before {expected!r} but "
-                     f"{pid} status is {project.get('status')!r}")]
+            return [_stale(expected, f"{pid} status", project.get("status"))]
         if after == "active" and status != "active":
             owner = project.get("faction_id")
-            clash = next((p for p in _projects.projects_of(state)
-                          if p.get("status") == "active"
-                          and p.get("faction_id") == owner
-                          and p.get("id") != pid), None)
+            clash = _projects.one_active_clause(state, owner, ignore_pid=pid)
             if clash is not None:
                 return [(f"{owner} already runs the active project "
                          f"{clash.get('id')!r} — one active project per "
@@ -162,8 +167,7 @@ def validate_effect(effect, state):
         errs.append(f"unknown type {etype!r} (use one of {', '.join(EFFECT_TYPES)})")
         return errs
     fid = str(effect.get("faction_id") or "").strip()
-    faction = next((f for f in state.get("factions", [])
-                    if f.get("id") == fid), None)
+    faction = faction_map(state).get(fid)
     if faction is None:
         errs.append(f"unknown faction_id {fid!r}")
         return errs  # preconditions below need the faction
@@ -180,8 +184,7 @@ def validate_effect(effect, state):
         if expected not in (None, ""):
             current = (faction.get("resources") or {}).get(resource)
             if str(expected) != str(current):
-                errs.append(f"stale precondition: expected_before {expected!r} "
-                            f"but {fid}.{resource} is {current!r}")
+                errs.append(_stale(expected, f"{fid}.{resource}", current))
     else:  # set_field
         field = str(effect.get("field") or "").strip()
         if field not in FIELD_KEYS:
@@ -194,9 +197,7 @@ def validate_effect(effect, state):
         if expected not in (None, ""):
             current = faction.get(field)
             if str(expected) != str(current or ""):
-                errs.append(f"stale precondition: expected_before "
-                            f"{expected!r} but {fid}.{field} is "
-                            f"{current!r}")
+                errs.append(_stale(expected, f"{fid}.{field}", current))
     if not str(effect.get("reason") or "").strip():
         errs.append("missing reason (the event's text — why did this happen?)")
     return errs
@@ -204,9 +205,7 @@ def validate_effect(effect, state):
 
 def _apply_one(state, effect, week):
     """Mutate state for one already-validated effect: the value change plus
-    exactly one sourced event. Project effects route target-reaching
-    counters and resumes through projects.completion_pass — the SAME
-    completion a weekly tick uses. Returns the event."""
+    exactly one sourced event. Returns the event."""
     import projects as _projects
     if effect["type"] in PROJECT_EFFECT_TYPES:
         pid = effect["project_id"]
@@ -234,8 +233,7 @@ def _apply_one(state, effect, week):
         state.setdefault("events", []).append(ev)
         state.setdefault("meta", {}).setdefault("applied_effects", []) \
             .append(str(effect["id"]))
-        # reaching target (or resuming a project already at target) invokes
-        # the same deterministic completion pass a tick uses
+        # routes through the shared completion pass (see module docstring)
         _projects.completion_pass(state, week)
         return ev
     fid = effect["faction_id"]
@@ -259,7 +257,7 @@ def _apply_one(state, effect, week):
     return ev
 
 
-def apply_effects(state, effects, week=None, source=None):
+def apply_effects(state, effects, week=None):
     """All-or-nothing: validate the whole batch against the CURRENT state,
     then apply. Already-applied ids are skipped (dedup), so re-applying a
     session record changes nothing twice. Returns (applied_count, errors).
@@ -352,7 +350,7 @@ def apply_session_record(record, state):
     if errors:
         return 0, 0, errors
     applied, effect_errors = apply_effects(state, record.get("effects") or [],
-                                           week=week, source=source)
+                                           week=week)
     errors.extend(effect_errors)
     if errors:
         return 0, 0, errors
@@ -375,36 +373,23 @@ def apply_session_record(record, state):
     return events, applied, []
 
 
-def _load(path):
-    with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
 def main(argv):
-    state_path = STATE_FILE
+    values, rest = split_argv(argv, "--state")
+    state_path = values.get("--state", STATE_FILE)
     mode = None
-    record_path = None
-    rest = []
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        if arg in ("--check", "--apply"):
-            mode = arg
-        elif arg == "--state" and i + 1 < len(argv):
-            state_path = argv[i + 1]
-            i += 1
-        elif arg.startswith("--state="):
-            state_path = arg.split("=", 1)[1]
+    pos = []
+    for a in rest:
+        if a in ("--check", "--apply"):
+            mode = a
         else:
-            rest.append(arg)
-        i += 1
-    if not mode or len(rest) != 1:
+            pos.append(a)
+    if not mode or len(pos) != 1:
         print("usage: python src/effects.py (--check|--apply) <session.yaml> "
               "[--state <state.yaml>]", file=sys.stderr)
         return 2
-    record_path = rest[0]
+    record_path = pos[0]
     try:
-        record = _load(record_path)
+        record = _store_load(record_path)
         state = _store_load(state_path)
     except (OSError, yaml.YAMLError) as e:
         print(f"error: {e}", file=sys.stderr)

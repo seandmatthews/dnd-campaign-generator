@@ -143,11 +143,6 @@
 
   /* =============================== detail =============================== */
 
-  function itemRow(label, bodyHtml) {
-    return '<li class="place-item"><span class="pill pill-muted place-rel">' +
-      S.esc(label) + '</span> ' + bodyHtml + '</li>';
-  }
-
   function sectionList(title, items, emptyText) {
     const sec = S.el('<section class="panel-inner"><h4>' + S.esc(title) +
       '</h4></section>');
@@ -204,7 +199,6 @@
       panel.appendChild(lore);
     }
 
-    // maps with a preferred-map selector
     const mapsSec = sectionList('Maps', v.maps.map((m) =>
       (m.preferred ? '<strong>' : '') + S.esc(m.scale) + ' — <code>' +
       S.esc(m.dir) + '</code>' + (m.preferred ? '</strong> (preferred)' : '') +
@@ -282,7 +276,6 @@
     }
     panel.appendChild(evSec);
 
-    // facts with visibility + disclosure badges
     panel.appendChild(sectionList('Facts', v.knowledge.map((f) => {
       let tag = f.visibility === 'public' ? 'public in-world' :
         (Array.isArray(f.visibility) ? 'visible to: ' + f.visibility.join(', ')

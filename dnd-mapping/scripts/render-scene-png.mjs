@@ -47,8 +47,7 @@ const h = Math.round(scene.grids.y * scene.pixels_per_grid);
 const svg = await readFile(join(sceneDir, "scene.svg"));
 
 // the SVG must already BE the target size: resize-with-fill would silently
-// distort a stale scene.svg instead of failing here (dimensions may be
-// floats — "3220.0" — compare numerically)
+// distort a stale scene.svg (dimensions may be floats — compare numerically)
 const intrinsic = /width="([\d.]+)" height="([\d.]+)"/.exec(svg.toString("utf-8"));
 if (!intrinsic) {
   console.error(`scene.svg has no width/height attributes — re-render it`);

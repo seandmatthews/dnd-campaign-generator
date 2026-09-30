@@ -109,6 +109,18 @@ def _safe_load(path: Path):
             f"Fix or delete the file, or restore it with git checkout -- {path}")
 
 
+def read_yaml_dict(path: Path) -> dict | None:
+    """Tolerant YAML-dict read for manifest-style files: safe_load a UTF-8
+    file and return it only when it parses to a mapping. A missing file, an
+    OSError, YAML that does not parse, or a non-mapping document all read
+    as None — the caller decides what absence means."""
+    try:
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
 def _replace_with_retry(tmp: Path, path: Path, attempts: int = 3) -> None:
     """os.replace, but tolerant of a Windows sharing violation: a reader
     holding the destination open without FILE_SHARE_DELETE makes the replace
@@ -132,6 +144,15 @@ def write_text_atomic(path: Path, text: str) -> Path:
     tmp.write_text(text, encoding="utf-8")
     _replace_with_retry(tmp, path)
     return path
+
+
+def dump_yaml(doc) -> str:
+    """THE serialization for every canon/spine file (sort_keys=False,
+    allow_unicode=True, width=100). One place on purpose: publication's
+    revision checks hash the exact bytes these calls produce, so writers
+    must not drift apart (timeline.dump's docstring is the contract's
+    canary)."""
+    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100)
 
 
 def valid_name(name: str) -> bool:
@@ -600,13 +621,18 @@ def load_state(name: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+def state_clock_week(doc: dict):
+    """meta.clock.week of a state document (None when absent) — the one
+    clock reader, shared by the session store and the simulation router."""
+    return ((doc.get("meta") or {}).get("clock") or {}).get("week")
+
+
 def write_state(name: str, doc: dict) -> Path:
     """Write simulation/state.yaml from a dict (the create-a-simulation
     flow). The caller validates content; this is the typed writer."""
     require_campaign(name)
     path = campaign_dir(name) / "simulation" / "state.yaml"
-    return write_text_atomic(
-        path, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
+    return write_text_atomic(path, dump_yaml(doc))
 
 
 def state_places(state: dict) -> list:

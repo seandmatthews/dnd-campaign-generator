@@ -11,6 +11,7 @@ must not drift. It lives here now, once.
 import re
 from pathlib import Path
 
+import spine
 import yaml
 
 T_ID_RE = re.compile(r"^t\d+$")
@@ -102,6 +103,6 @@ def append(doc, entries: list, chosen: list):
 
 def dump(doc) -> str:
     """THE serialization for lore/timeline.yaml — publication's
-    revision_of_bytes hashes exactly these bytes, so every writer of the
-    file must produce them through here."""
-    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100)
+    revision_of_bytes hashes exactly these bytes (spine.dump_yaml's exact
+    output), so every writer of the file must produce them through here."""
+    return spine.dump_yaml(doc)

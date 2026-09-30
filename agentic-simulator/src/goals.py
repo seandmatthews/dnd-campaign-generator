@@ -35,7 +35,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import llm
 from llm import BudgetExceeded, _extract_yaml, begin_run, complete, env_limit
-from store import load_state, places_of, validate_state
+from store import faction_map, load_state, places_of, split_argv, validate_state
 
 LEDGER_WINDOW = 40      # most recent events the model sees
 RUMOR_WINDOW = 20       # in-circulation claims the model sees
@@ -108,8 +108,7 @@ def propose_updates(state, ask):
     """ask(prompt) -> model text (injected so tests run without network).
     Returns (updates, findings): updates is the validated list
     [{faction_id, goal, reason}], findings the dropped ones with why."""
-    roster = {str(f["id"]): f for f in (state.get("factions") or [])
-              if isinstance(f, dict) and f.get("id")}
+    roster = faction_map(state)
     raw = ask(_PROMPT.format(goal_max=GOAL_MAX,
                              digest=yaml.safe_dump(
                                  digest(state), sort_keys=False,
@@ -179,26 +178,12 @@ def propose_updates(state, ask):
 
 
 def main(argv):
-    state_path = None
-    out_path = None
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a == "--state" and i + 1 < len(argv):
-            state_path = argv[i + 1]
-            i += 2
-        elif a.startswith("--state="):
-            state_path = a.split("=", 1)[1]
-            i += 1
-        elif a == "--out" and i + 1 < len(argv):
-            out_path = argv[i + 1]
-            i += 2
-        elif a.startswith("--out="):
-            out_path = a.split("=", 1)[1]
-            i += 1
-        else:
-            print(f"goals.py: unknown argument {a!r}", file=sys.stderr)
-            return 2
+    values, rest = split_argv(argv, "--state", "--out")
+    state_path = values.get("--state")
+    out_path = values.get("--out")
+    if rest:
+        print(f"goals.py: unknown argument {rest[0]!r}", file=sys.stderr)
+        return 2
     if not state_path or not out_path:
         print("usage: python src/goals.py --state <state.yaml> "
               "--out <goal-updates.yaml>", file=sys.stderr)

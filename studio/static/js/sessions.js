@@ -20,12 +20,9 @@
   const RESOURCES = ['coin', 'muscle', 'legitimacy'];
   const FIELDS = ['goal', 'kind', 'secret', 'species'];
 
-  // The last failed extraction per session ("campaign/sid" -> error object).
-  // A failed extractor must not read as "no suggestions yet": the tab can be
-  // re-rendered (or the DM returns later) while the job is still failing,
-  // and the transient error box would be wiped by then. Cleared on success.
-  // Survives tab switches; a full page reload forgets it (the server-side
-  // job log remains the durable record).
+  // "campaign/sid" -> last extraction error: a failure must not read as
+  // "no suggestions yet" across re-renders. Cleared on success. A page
+  // reload forgets it (the server job log is the durable record).
   const extractFailures = new Map();
 
   function camp() { return S.campUrl('/'); }
@@ -126,12 +123,10 @@
         ':' + S.esc(String(ev.line_start)) + '-' + S.esc(String(ev.line_end)) + '</span></div>';
     }
     if (val.length) {
-      body += '<ul class="findings-list ssn-blockers">' + val.map((v) =>
-        '<li>' + S.esc(String(v)) + '</li>').join('') + '</ul>';
+      body += S.stringList(val, 'ssn-blockers');
     }
     if (findings.length) {
-      body += '<ul class="findings-list muted">' + findings.map((f) =>
-        '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>';
+      body += S.stringList(findings, 'muted');
     }
     if (accepted) {
       body += '<p class="muted">Already canon — corrections go into a new suggestion.</p>';
@@ -203,9 +198,8 @@
             S.esc(String(draft.revision)) + ')' : 'no draft yet') + '</p>' +
         (draft && draft.extraction_findings && draft.extraction_findings.length
           ? '<details class="proposal-findings"><summary>Extraction notes (' +
-            draft.extraction_findings.length + ')</summary><ul class="findings-list">' +
-            draft.extraction_findings.map((f) => '<li>' + S.esc(String(f)) + '</li>').join('') +
-            '</ul></details>'
+            draft.extraction_findings.length + ')</summary>' +
+            S.stringList(draft.extraction_findings) + '</details>'
           : '') +
         '<div class="ssn-columns">' +
           '<section class="panel"><h4 class="panel-title">Notes (' +
@@ -281,8 +275,6 @@
           ' suggestion(s) — review the cards.', 'ok');
         S.showTab('sessions');
       } catch (err) {
-        // remember it: a tab switch or a later re-render must not turn the
-        // failure into a misleading "no suggestions yet"
         extractFailures.set(failKey, err);
         if (failBox) { failBox.innerHTML = ''; failBox.appendChild(S.errorPanel(err)); }
         errBox.textContent = (err && err.error) || 'Extraction failed.';
@@ -334,7 +326,7 @@
         return;
       }
       try {
-        await saveDraft(); // persist edits + selections + confirmations
+        await saveDraft();
         const r = await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
           '/prepare', {
           method: 'POST',

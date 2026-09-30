@@ -22,7 +22,8 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import projects
 import rumors
-from store import STATE_FILE, faction_place, places_of, load_state
+from store import STATE_FILE, faction_map, faction_place, places_of, \
+    load_state, split_argv
 
 # What an outsider can roughly estimate by watching, not by reading ledgers.
 _OUTSIDER_STRENGTH = {
@@ -32,15 +33,11 @@ _OUTSIDER_STRENGTH = {
     "none": "negligible",
 }
 
-# The prompt carries a rumor while it is still news: heard inside this many
-# weeks. Older claims stay in state.yaml (rumors.spread, why.py, and the
-# studio's rumor board read the full record) — they just stop riding in
-# every faction prompt, where ~3 new claims a week compounded linearly: a
-# week-50 faction re-sent ~150 stale lines (dead ones included) each week,
-# multiplying token cost and diluting attention on the current week.
-# Fidelity needs no filter of its own: spread() never adds a listener at
-# "dead", so a dead-as-heard entry cannot exist, and a rumor heard recently
-# at high fidelity is news even if it has since decayed elsewhere.
+# Rumors heard within this many weeks ride in the prompt; older ones stay
+# in state.yaml (rumors.spread, why.py, and the studio's board read the full
+# record). Unfiltered, ~3 new claims/week meant a week-50 faction re-sent
+# ~150 stale lines each week. No fidelity filter: spread() never adds a
+# listener at "dead".
 RUMOR_WINDOW_WEEKS = 8
 
 
@@ -88,8 +85,7 @@ def _project_tables(state, faction_id):
     completion effects. Hidden projects appear in neither."""
     place_names = {p["id"]: p.get("name") or p["id"]
                    for p in places_of(state)}
-    factions = {str(f.get("id")): f for f in state.get("factions", [])
-                if isinstance(f, dict) and f.get("id")}
+    factions = faction_map(state)
     own, visible = [], []
     for project in projects.projects_of(state):
         if str(project.get("faction_id")) == str(faction_id):
@@ -138,13 +134,10 @@ def faction_view(state, faction_id):
         })
         others.append(observed)
 
-    # The same fog-of-war rule the factions get, one level up: you see YOUR
-    # place in full detail (districts, population — whatever the file
-    # carries); every other place appears only as its public identity. A
-    # world-tier faction's "place" is the world entry, so its own-place
-    # detail is deliberately thin — what happens inside a burg reaches it
-    # through events, rumors, and DM-addressed knowledge, not through the
-    # state's own ledgers.
+    # Fog-of-war one level up: your place in full detail, every other place
+    # as public identity only. A world-tier faction's own-place detail is
+    # deliberately thin — interior happenings reach it via events, rumors,
+    # and DM-addressed knowledge, not the state's own ledgers.
     own = faction_place(state, me)
     other_places = [
         {"id": p["id"], "name": p["name"], "kind": p.get("kind") or "place"}
@@ -179,14 +172,8 @@ def main(argv):
     """`python src/views.py <faction_id> [--state PATH]`: print the view as
     YAML; 0 known faction, 2 unknown faction or bad args, 1 unreadable state."""
     args = argv
-    state_path = None
-    if "--state" in args:
-        i = args.index("--state")
-        if i + 1 >= len(args):
-            print("usage: python src/views.py <faction_id> [--state PATH]", file=sys.stderr)
-            return 2
-        state_path = args[i + 1]
-        args = args[:i] + args[i + 2:]
+    values, args = split_argv(args, "--state")
+    state_path = values.get("--state")
     if len(args) != 1 or args[0].startswith("-"):
         print("usage: python src/views.py <faction_id> [--state PATH]", file=sys.stderr)
         return 2

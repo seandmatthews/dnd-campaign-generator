@@ -53,12 +53,10 @@ from routers.common import require_campaign, submit_campaign_job
 
 router = APIRouter()
 
-# dnd-mapping's engine home is SHARED across campaigns (worlds/sites/<name>,
-# worlds/candidates), unlike the simulator it has no ENGINE_LOCK — the
-# per-campaign locks cannot see each other. This process-wide lock serializes
-# the staging sections: two campaigns generating same-named sites would
-# otherwise interleave artifacts (and wrap's *.uvtt glob could pick the other
-# run's file), and a concurrent import would blur the candidates diff.
+# dnd-mapping's engine home is SHARED across campaigns and has no
+# ENGINE_LOCK — per-campaign locks cannot see each other. This process-wide
+# lock serializes staging: same-named sites would interleave artifacts
+# (wrap globs *.uvtt) and a concurrent import would blur the candidates diff.
 MAPPING_LOCK = threading.Lock()
 
 _SEED_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -97,10 +95,10 @@ class WorldOptionsBody(BaseModel):
 # The steering surface for headless worldgen (the Maps tab form and the
 # world-options suggestion endpoint): every key overrides ONE randomized FMG
 # option for THIS generation — anything not set still re-rolls with the
-# seed, so steering is per world, never a house default. The enumerations
-# mirror FMG at tag 1.153.1 (src/data/heightmap-templates.ts,
-# src/generators/cultures-generator.ts); the runner deep-merges them over
-# the randomized options (FMG_OPTIONS env).
+# seed, so steering is per world, never a house default.
+# The enumerations mirror FMG at tag 1.153.1 (heightmap-templates.ts,
+# cultures-generator.ts); the runner deep-merges them over the randomized
+# options (FMG_OPTIONS env).
 _CULTURE_SETS = ("world", "european", "oriental", "english", "antique",
                  "highFantasy", "darkFantasy", "random")
 _HEIGHTMAP_TEMPLATES = ("volcano", "highIsland", "lowIsland", "continents",
@@ -438,7 +436,7 @@ def post_city(name: str, body: CityBody):
                 on_line=log, timeout=600)
             if rc != 0:
                 raise RuntimeError("gen-city.mjs failed (rc=%s): %s"
-                                   % (rc, " | ".join(lines[-8:])))
+                                   % (rc, engines.tail_detail(lines)))
             outputs = [p for p in sorted(out.iterdir()) if p.is_file()]
             if not outputs:
                 raise RuntimeError("gen-city.mjs produced no output files")
@@ -510,7 +508,7 @@ def post_world(name: str, body: WorldBody):
                 timeout=900, on_line=log, env=env)
             if rc != 0:
                 raise RuntimeError("headless FMG failed (rc=%s): %s"
-                                   % (rc, " | ".join(lines[-8:])))
+                                   % (rc, engines.tail_detail(lines)))
             dump = tmp / f"headless-{seed}.json"
             if not dump.is_file():
                 raise RuntimeError(
@@ -532,7 +530,7 @@ def post_world(name: str, body: WorldBody):
                     timeout=300, on_line=log)
                 if rc != 0:
                     raise RuntimeError("import_fmg.py failed (rc=%s): %s"
-                                       % (rc, " | ".join(lines[-8:])))
+                                       % (rc, engines.tail_detail(lines)))
                 produced = None
                 for ln in lines:  # the summary line: "<dump> -> <out>.yaml: ..."
                     m = re.search(r"-> (\S+\.yaml):", ln)
@@ -643,10 +641,6 @@ def post_site(name: str, body: SiteBody):
     def job(log):
         rel = f"worlds/sites/{site_name}"
         root = engines.DND_MAPPING
-        # worlds/sites/<name> is the shared engine home: two campaigns here
-        # at once interleave artifacts (wrap globs *.uvtt), so the whole
-        # staging chain holds MAPPING_LOCK (minutes of subprocess — fine,
-        # site generation is rare and serial for a single DM anyway)
         with MAPPING_LOCK:
 
             def stage(label, call, what):
@@ -654,7 +648,7 @@ def post_site(name: str, body: SiteBody):
                 rc, lines = call()
                 if rc != 0:
                     raise RuntimeError(f"{what} failed (rc={rc}): "
-                                       + " | ".join(lines[-8:]))
+                                       + engines.tail_detail(lines))
                 return lines
 
             stage(f"battlemap.py gen-{kind} --seed {seed} --name \"{site_name}\"",
@@ -680,7 +674,7 @@ def post_site(name: str, body: SiteBody):
                         "settlemaker (or python studio/doctor.py --fix), "
                         "then try again")
                 raise RuntimeError(f"render-scene-png.mjs failed (rc={rc}): "
-                                   + " | ".join(png_lines[-8:]))
+                                   + engines.tail_detail(png_lines))
             stage(f"battlemap.py wrap --dir {rel}",
                   lambda: engines.run_py(root, "src/battlemap.py", "wrap",
                                          "--dir", rel, timeout=300, on_line=log),

@@ -51,17 +51,7 @@
   /* ----- log tail for forms ----- */
 
   function makeLogBox(wrap) {
-    const logBox = wrap.querySelector('.log-tail');
-    return {
-      open() {
-        logBox.classList.remove('hidden');
-        logBox.textContent = '';
-      },
-      push(line) {
-        logBox.textContent += String(line == null ? '' : line) + '\n';
-        logBox.scrollTop = logBox.scrollHeight;
-      }
-    };
+    return S.makeLogBox(wrap.querySelector('.log-tail'));
   }
 
   /* ----- burg form ----- */
@@ -120,24 +110,14 @@
       ev.preventDefault();
       const burg = select.value;
       if (!burg || btn.disabled) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
-      log.open();
       const place = placeIn.value.trim();
-      (async () => {
-        const resp = await S.api(S.campUrl('/maps/cities'), {
-          method: 'POST',
-          body: place ? { burg: burg, place: place } : { burg: burg }
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
-        S.toast('City map ready: ' + ((result && result.slug) ? result.slug : burg), 'ok');
-        return result;
-      })().then(() => refreshCities()).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('City mapping failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-      }).finally(() => { btn.disabled = false; });
+      S.runJob({
+        path: S.campUrl('/maps/cities'),
+        body: place ? { burg: burg, place: place } : { burg: burg },
+        btn: btn, errBox: errBox, log: log,
+        doneMsg: (r) => 'City map ready: ' + ((r && r.slug) ? r.slug : burg),
+        failLabel: 'City mapping failed'
+      }).then(() => refreshCities()).catch(() => {});
     });
     return wrap;
   }
@@ -212,28 +192,18 @@
       const kind = kindSel.value;
       const nm = nameIn.value.trim();
       if (!nm || btn.disabled) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
-      log.open();
       const place = wrap.querySelector('.site-place').value.trim();
-      (async () => {
-        const resp = await S.api(S.campUrl('/maps/sites'), {
-          method: 'POST',
-          body: place ? { kind: kind, name: nm, place: place }
-                      : { kind: kind, name: nm }
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
-        S.toast('Scene ready: ' + ((result && result.slug) ? result.slug : nm), 'ok');
-        return result;
-      })().then((result) => {
+      S.runJob({
+        path: S.campUrl('/maps/sites'),
+        body: place ? { kind: kind, name: nm, place: place }
+                    : { kind: kind, name: nm },
+        btn: btn, errBox: errBox, log: log,
+        doneMsg: (r) => 'Scene ready: ' + ((r && r.slug) ? r.slug : nm),
+        failLabel: 'Scene generation failed'
+      }).then((result) => {
         showSiteResult(result);
         return refreshCities();
-      }).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('Scene generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-      }).finally(() => { btn.disabled = false; });
+      }).catch(() => {});
     });
     return wrap;
   }
@@ -428,7 +398,7 @@
     const forceTgl = wrap.querySelector('.force-toggle');
     if (forceTgl) {
       forceTgl.addEventListener('change', () => {
-        btn.disabled = !forceTgl.checked; // the replace-the-world escape hatch
+        btn.disabled = !forceTgl.checked;
       });
     }
 
@@ -458,29 +428,24 @@
       ev.preventDefault();
       const seed = seedIn.value.trim();
       if (!seed || btn.disabled) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
-      log.open();
-      (async () => {
-        const body = { seed: seed, force: forceTgl ? !!forceTgl.checked : false };
-        const options = collectSteerOptions(wrap);
-        if (options) body.options = options;
-        const resp = await S.api(S.campUrl('/world'), {
-          method: 'POST',
-          body: body
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        const result = await S.pollJob(resp.job_id, (line) => log.push(line));
-        const r = result || {};
-        S.toast('World generated: ' + (r.nations != null ? r.nations + ' nations, ' : '') +
-          (r.settlements != null ? r.settlements + ' settlements' : 'done'), 'ok');
-        return result;
-      })().then(() => {
+      const body = { seed: seed, force: forceTgl ? !!forceTgl.checked : false };
+      const options = collectSteerOptions(wrap);
+      if (options) body.options = options;
+      // reenable: false — without force checked the button must stay dead
+      // after one run (the replace-the-world escape hatch is the checkbox)
+      S.runJob({
+        path: S.campUrl('/world'),
+        body: body,
+        btn: btn, errBox: errBox, log: log, reenable: false,
+        doneMsg: (r) => {
+          r = r || {};
+          return 'World generated: ' + (r.nations != null ? r.nations + ' nations, ' : '') +
+            (r.settlements != null ? r.settlements + ' settlements' : 'done');
+        },
+        failLabel: 'World generation failed'
+      }).then(() => {
         S.showTab('maps'); // full re-render: hero, burg list, geography
-      }).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('World generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
+      }).catch(() => {
         btn.disabled = forceTgl ? !forceTgl.checked : false;
       });
     });
@@ -506,20 +471,13 @@
     const log = makeLogBox(wrap);
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
-      log.open();
-      try {
-        const resp = await S.api(S.campUrl('/maps/world-map'), { method: 'POST', body: {} });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        await S.pollJob(resp.job_id, (line) => log.push(line));
+      S.runJob({
+        path: S.campUrl('/maps/world-map'),
+        body: {}, btn: btn, errBox: errBox, log: log
+      }).then(() => {
         S.toast('World map rendered', 'ok');
         S.showTab('maps'); // hero re-checks world/map.svg on render
-      } catch (err) {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        btn.disabled = false;
-      }
+      }).catch(() => {});
     });
     return wrap;
   }

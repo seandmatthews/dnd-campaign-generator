@@ -479,9 +479,8 @@ def generate_entries(campaign_dir, focus="", log=None):
     # review GET may read this file mid-write — tmp+replace keeps it whole
     spine.write_text_atomic(
         pending_path,
-        yaml.safe_dump({"entries": entries, "created": created,
-                        "focus": focus or "", **provenance},
-                       sort_keys=False, allow_unicode=True, width=100))
+        spine.dump_yaml({"entries": entries, "created": created,
+                         "focus": focus or "", **provenance}))
     pending_name = f"lore/{pending_path.name}"
     log(f"staged {len(entries)} entries to {pending_name} — nothing touches "
         "timeline.yaml until approval")
@@ -643,9 +642,9 @@ def generate_missing_pages(campaign_dir, targets=None, log=None, limit=None):
 
     known = _canon_names(_read(campaign_dir / "world" / "geography.yaml"),
                          entities, styles)
-    # the linking pages are the prompt's grounding — a draft that repeats a
-    # name straight out of them is not a hallucination (they are markdown,
-    # invisible to the YAML-based canon scan) (found 2026-09-25)
+    # repeating a name from the grounding pages is not a hallucination —
+    # they are markdown, invisible to the YAML-based canon scan
+    # (found 2026-09-25)
     known |= _names_from_text(target_blocks)
     kept, findings = _missing_page_findings(raw_pages, groups, known)
     if not kept:
@@ -672,9 +671,8 @@ def generate_missing_pages(campaign_dir, targets=None, log=None, limit=None):
                for i, p in enumerate(kept)]
     spine.write_text_atomic(
         pending_path,
-        yaml.safe_dump({"entries": entries, "created": created,
-                        "mode": "missing-pages", **provenance},
-                       sort_keys=False, allow_unicode=True, width=100))
+        spine.dump_yaml({"entries": entries, "created": created,
+                         "mode": "missing-pages", **provenance}))
     pending_name = f"lore/{pending_path.name}"
     log(f"staged {len(entries)} page drafts to {pending_name} — nothing "
         "lands until approval in the Review tab")

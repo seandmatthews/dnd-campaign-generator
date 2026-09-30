@@ -28,10 +28,8 @@ import urllib.request
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# llm.env lives at the REPO ROOT, next to llm.env.example and TUTORIAL.md —
-# the same file studio/llm_client.py reads. (This used to point at this
-# directory's own llm.env, which the example's instructions never create;
-# _env_path still honors that legacy location for existing installs.)
+# llm.env lives at the REPO ROOT, the same file studio/llm_client.py reads;
+# _env_path still honors the legacy src/-local location.
 ENV_FILE = ROOT.parent / "llm.env"
 _LEGACY_ENV_FILE = ROOT / "llm.env"
 
@@ -93,9 +91,9 @@ def _find_key():
                 "config"]["providerConfigRules"]["providerRules"]
         except (OSError, ValueError, KeyError, TypeError):
             return ""
-        # rule 1 is the coding-plan key and the default endpoint needs it:
-        # scan it and the rest first, rule 0 LAST — the same order as
-        # studio/llm_client._find_legacy_key, so both sides pick the same key
+        # Rule 1 is the coding-plan key: scan rules 1..n, rule 0 LAST —
+        # same order as studio/llm_client._find_legacy_key, so both sides
+        # pick the same key
         order = list(range(1, len(rules))) + [0]
         for i in order:
             key = ((rules[i].get("config") or {}).get("access")
@@ -130,13 +128,11 @@ def resolve_config(env_file=None):
 
 
 def _post_json(cfg, body, timeout, attempts=3):
-    """POST and parse one completion response, retrying transient failures
-    with a short backoff. The config is resolved once per call, not per
-    attempt. Hard HTTP errors raise RuntimeError carrying a body snippet —
-    never a bare HTTPError. The per-run ceiling is checked and the call
-    counted BEFORE every attempt, retries included: a failed POST burns
-    provider time just like a successful one, and an unmetered retry loop
-    could spend past the ceiling with the counter still at zero."""
+    """POST and parse one completion, retrying transient failures with
+    short backoff; config resolved once per call. Hard HTTP errors raise
+    RuntimeError carrying a body snippet. Budget is checked and counted
+    BEFORE every attempt, retries included: a failed POST burns provider
+    time too, and an unmetered retry loop could spend past the ceiling."""
     last = None
     for attempt in range(attempts):
         if _BUDGET["calls"] >= _BUDGET["limit"]:
@@ -196,12 +192,9 @@ def env_limit():
     except ValueError:
         return None
 
-# Process-global, like the engine itself: run_live resets it in begin_run.
-# Safe today ONLY because the engine is a single-threaded CLI and the studio
-# serializes tick/goals as subprocesses under ENGINE_LOCK — an in-process
-# embedding (a route calling run_live directly) would share and clobber one
-# meter across concurrent runs. studio/llm_client.py uses a thread-local
-# meter for exactly this reason; mirror it here before ever embedding.
+# Process-global; safe only because the engine is a single-threaded CLI and
+# the studio serializes runs as subprocesses under ENGINE_LOCK. Mirror
+# studio/llm_client.py's thread-local meter before any in-process embedding.
 _BUDGET = {"calls": 0, "tokens": 0, "limit": env_limit() or 24}
 
 
@@ -220,15 +213,12 @@ def run_usage():
 
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
-    """Ask the model, letting it think as long as it needs: reasoning models
-    burn the token budget on thought (the API has no unbounded setting), so a
-    budget that runs out mid-thought returns an empty answer — or a
-    mid-sentence one — with finish_reason "length". When that happens,
-    double the budget and retry, keeping the longest answer seen. Token
-    usage is printed to stderr per call so cost is never invisible. The
-    per-run ceiling is enforced inside _post_json, before EVERY POST —
-    initial calls, length-extension retries, and HTTP retries alike — so no
-    attempt can spend past it (a failed attempt is metered too)."""
+    """Complete with a self-extending budget: reasoning models burn
+    max_tokens on thought (no unbounded API setting), so finish_reason
+    "length" means double max_tokens and retry, keeping the longest answer.
+    Usage printed to stderr per call. The per-run ceiling is enforced
+    inside _post_json before every POST, retries included — a failed
+    attempt is metered too."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -344,7 +334,8 @@ def _validate_project_action(p, actor_id, ctx):
         elif pid in ctx["visible"]:
             intent = "sabotage_project"
         else:
-            raise ValueError(_unknown_project_error(pid, actor_id, ctx))
+            raise ValueError(
+                f"unknown project_id {pid!r} — " + _project_menu(actor_id, ctx))
     if not pid:
         raise ValueError(
             f"intent {intent} needs project_id — "
@@ -400,17 +391,12 @@ def _project_menu(actor_id, ctx):
             f"projects: {', '.join(visible) or 'none'}")
 
 
-def _unknown_project_error(pid, actor_id, ctx):
-    return (f"unknown project_id {pid!r} — " + _project_menu(actor_id, ctx))
-
-
 def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=(),
               project_ctx=None):
     if not isinstance(p, dict) or not isinstance(p.get("action"), str) or not p["action"].strip():
         raise ValueError("missing or empty 'action'")
-    # project intent first: it may rewrite `target` (sabotage resolves to
-    # the project's owner) — the generic target check below then validates
-    # the FINAL target like any other proposal's
+    # Project intent first: it may rewrite target (sabotage resolves to the
+    # owner); the check below validates the final target.
     _validate_project_action(p, actor_id, project_ctx or
                              {"own": {}, "visible": {}})
     # target identity (typed): 'self' when empty, else one of the known

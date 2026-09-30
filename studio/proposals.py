@@ -137,24 +137,20 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
             f"artifacts/chronicle/{fn}"
     entries = artifacts.get("entries") or []
     (bdir / "artifacts" / "timeline-entries.yaml").write_text(
-        yaml.safe_dump(entries, sort_keys=False, allow_unicode=True,
-                       width=100), encoding="utf-8")
+        spine.dump_yaml(entries), encoding="utf-8")
     manifest["artifacts"]["timeline_entries"] = \
         "artifacts/timeline-entries.yaml"
     updates = artifacts.get("updates") or []
     (bdir / "artifacts" / "goal-updates.yaml").write_text(
-        yaml.safe_dump(updates, sort_keys=False, allow_unicode=True,
-                       width=100), encoding="utf-8")
+        spine.dump_yaml(updates), encoding="utf-8")
     manifest["artifacts"]["goal_updates"] = "artifacts/goal-updates.yaml"
     findings = artifacts.get("findings") or []
     (bdir / "artifacts" / "findings.yaml").write_text(
-        yaml.safe_dump(findings, sort_keys=False, allow_unicode=True,
-                       width=100), encoding="utf-8")
+        spine.dump_yaml(findings), encoding="utf-8")
     manifest["artifacts"]["findings"] = "artifacts/findings.yaml"
     changes = artifacts.get("changes") or []
     (bdir / "artifacts" / "project-changes.yaml").write_text(
-        yaml.safe_dump(changes, sort_keys=False, allow_unicode=True,
-                       width=100), encoding="utf-8")
+        spine.dump_yaml(changes), encoding="utf-8")
     manifest["artifacts"]["changes"] = "artifacts/project-changes.yaml"
     replay_text = artifacts.get("replay")
     if replay_text:
@@ -169,9 +165,8 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
     (bdir / "artifacts" / "diff.json").write_text(
         json.dumps(diff, indent=2, ensure_ascii=False), encoding="utf-8")
     manifest["artifacts"]["diff"] = "artifacts/diff.json"
-    (bdir / "proposal.yaml").write_text(
-        yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True,
-                       width=100), encoding="utf-8")
+    (bdir / "proposal.yaml").write_text(spine.dump_yaml(manifest),
+                                        encoding="utf-8")
     return pid
 
 
@@ -216,8 +211,7 @@ def set_status(name: str, proposal_id: str, status: str,
         manifest["decided"] = now
         if decided_note:
             manifest["decision_note"] = decided_note
-    spine.write_text_atomic(manifest_path, yaml.safe_dump(
-        manifest, sort_keys=False, allow_unicode=True, width=100))
+    spine.write_text_atomic(manifest_path, spine.dump_yaml(manifest))
     return manifest
 
 
@@ -225,12 +219,7 @@ def set_status(name: str, proposal_id: str, status: str,
 
 
 def _load_manifest(bdir: Path) -> dict | None:
-    try:
-        doc = yaml.safe_load(
-            (bdir / "proposal.yaml").read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else None
-    except (OSError, yaml.YAMLError):
-        return None
+    return spine.read_yaml_dict(bdir / "proposal.yaml")
 
 
 def find_pending(name: str) -> dict | None:

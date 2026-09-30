@@ -5,10 +5,8 @@
   'use strict';
   const S = window.Studio;
 
-  // The last failed backstory generation for this campaign. The run-panel
-  // error box is transient — any tab switch wipes it — so the card shows
-  // the remembered failure on re-render instead of looking like nothing
-  // happened. Cleared by the next successful run.
+  // Last failed backstory for this campaign: the transient error box dies on
+  // tab switch, so re-render shows this. Cleared on success.
   let backstoryFailure = null; // { campaign, error }
 
   /* ----- source badges: authored=ink, session=blue, sim:week-N=red ----- */
@@ -353,22 +351,14 @@
         'credits; the entries land in Review — nothing is applied directly.'
       );
       if (!ok) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
       resultBox.classList.add('hidden');
-      logBox.classList.remove('hidden');
-      logBox.textContent = '';
-      (async () => {
-        const resp = await S.api(S.campUrl('/lore/entries'), {
-          method: 'POST',
-          body: input.value.trim() ? { focus: input.value.trim() } : {}
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        return S.pollJob(resp.job_id, (line) => {
-          logBox.textContent += String(line == null ? '' : line) + '\n';
-          logBox.scrollTop = logBox.scrollHeight;
-        });
-      })().then((result) => {
+      const log = S.makeLogBox(logBox);
+      S.runJob({
+        path: S.campUrl('/lore/entries'),
+        body: input.value.trim() ? { focus: input.value.trim() } : {},
+        btn: btn, errBox: errBox, log: log,
+        failLabel: 'Generation failed'
+      }).then((result) => {
         backstoryFailure = null;
         const r = result || {};
         const count = (r.entries != null) ? r.entries : '?';
@@ -387,10 +377,7 @@
         S.toast('Backstory staged to Review', 'ok');
       }).catch((err) => {
         backstoryFailure = { campaign: S.state.campaign, error: err };
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('Generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-      }).finally(() => { btn.disabled = false; });
+      });
     });
     host.appendChild(card);
   }
@@ -571,22 +558,14 @@
         'credits; the drafts land in Review — nothing is applied directly.'
       );
       if (!ok) return;
-      btn.disabled = true;
-      errBox.innerHTML = '';
       resultBox.classList.add('hidden');
-      logBox.classList.remove('hidden');
-      logBox.textContent = '';
-      (async () => {
-        const resp = await S.api(S.campUrl('/lore/pages/missing'), {
-          method: 'POST',
-          body: { targets: targets.map((t) => t.target), limit: n }
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        return S.pollJob(resp.job_id, (line) => {
-          logBox.textContent += String(line == null ? '' : line) + '\n';
-          logBox.scrollTop = logBox.scrollHeight;
-        });
-      })().then((result) => {
+      const log = S.makeLogBox(logBox);
+      S.runJob({
+        path: S.campUrl('/lore/pages/missing'),
+        body: { targets: targets.map((t) => t.target), limit: n },
+        btn: btn, errBox: errBox, log: log,
+        failLabel: 'Generation failed'
+      }).then((result) => {
         const r = result || {};
         const count = (r.pages != null) ? r.pages : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
@@ -602,11 +581,7 @@
         resultBox.appendChild(go);
         resultBox.classList.remove('hidden');
         S.toast('Page drafts staged to Review', 'ok');
-      }).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('Generation failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-      }).finally(() => { btn.disabled = false; });
+      }).catch(() => {});
     });
     host.appendChild(card);
   }

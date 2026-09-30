@@ -31,7 +31,6 @@ import uuid
 
 import publication
 import spine
-import yaml
 
 KNOWLEDGE_FILE = "simulation/knowledge.yaml"
 SCHEMA_VERSION = 1
@@ -58,9 +57,7 @@ def load(name: str) -> dict:
 
 
 def _save(name: str, doc: dict) -> None:
-    spine.write_text_atomic(
-        _path(name),
-        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
+    spine.write_text_atomic(_path(name), spine.dump_yaml(doc))
 
 
 def source_revision(name: str, fact: dict) -> str:
@@ -296,12 +293,8 @@ def _publish_store_and_state(name: str, doc: dict, state: dict,
     state = dict(state or {})
     state["knowledge"] = compile_state_section(name, doc=doc)
     result = publication.publish(name, [
-        {"path": KNOWLEDGE_FILE,
-         "text": yaml.safe_dump(doc, sort_keys=False, allow_unicode=True,
-                                width=100)},
-        {"path": "simulation/state.yaml",
-         "text": yaml.safe_dump(state, sort_keys=False, allow_unicode=True,
-                                width=100)},
+        {"path": KNOWLEDGE_FILE, "text": spine.dump_yaml(doc)},
+        {"path": "simulation/state.yaml", "text": spine.dump_yaml(state)},
     ], operation=operation)
     return result
 
@@ -343,17 +336,3 @@ def compile_state_section(name: str, doc: dict | None = None) -> list:
                         "known_to": [str(v) for v in vis]})
         # dm_only: omitted entirely
     return out
-
-
-def compile_into_state(name: str) -> dict:
-    """Write the compiled knowledge section into simulation/state.yaml
-    through the publication helper (revision-checked, transactional).
-    Caller holds the campaign lock. Returns the publication result."""
-    compiled = compile_state_section(name)
-    state = spine.load_state(name)
-    state["knowledge"] = compiled
-    text = yaml.safe_dump(state, sort_keys=False, allow_unicode=True, width=100)
-    result = publication.publish(
-        name, [{"path": "simulation/state.yaml", "text": text}],
-        operation="compile knowledge into simulation state")
-    return result

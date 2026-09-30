@@ -10,7 +10,7 @@ Stages (each one sentence):
              building rings, doors as portals, image as base64.
 
 Usage:
-  python src/battlemap.py extract            # -> scenes/harbour-quay/scene.json
+  python src/battlemap.py extract            # -> worlds/ruravaqan/scenes/harbour-quay/scene.json
   python src/battlemap.py render             # -> scene.svg
   python src/battlemap.py wrap               # -> harbour-quay.uvtt (needs PNG)
 
@@ -36,10 +36,6 @@ PX_PER_M = PIXELS_PER_GRID / METERS_PER_GRID
 METERS_PER_UNIT = 10.759197265865302  # from the GeoJSON scale metadata
 
 
-def load_geojson():
-    return json.loads(GEOJSON.read_text(encoding="utf-8"))
-
-
 def u(m):
     """meters -> scene pixels"""
     return round(m * PX_PER_M, 2)
@@ -59,7 +55,7 @@ def xt(text):
 # ---------------------------------------------------------------- extract
 
 def extract():
-    g = load_geojson()
+    g = json.loads(GEOJSON.read_text(encoding="utf-8"))
     meta = g["metadata"]
     assert abs(meta["scale"]["meters_per_unit"] - METERS_PER_UNIT) < 1e-6
 
@@ -109,7 +105,6 @@ def extract():
                       "width_m": 2.0, "angle": round(angle, 1),
                       "closed": True, "kind": "door", "label": f"{bid} door"})
     # crates on the quay + bollards along the water line (dressing, not atlas data)
-    import random
     rng = random.Random(636343)
     props = []
     for f in picked:
@@ -160,9 +155,9 @@ def extract():
 
 
 # ---------------------------------------------------------------- site generators
-# Dungeons, caves and camps don't come from the settlemaker GeoJSON — they
-# have their own geometry sources feeding the SAME scene schema, so render
-# and wrap work unchanged. Generated sites live in worlds/sites/<name>/.
+# Dungeons/caves/camps bypass the settlemaker GeoJSON: their own geometry
+# feeds the SAME scene schema, so render and wrap work unchanged.
+# Output: worlds/sites/<name>/.
 
 import random
 
@@ -174,6 +169,31 @@ def _save_site(name, scene):
     out.mkdir(parents=True, exist_ok=True)
     (out / "scene.json").write_text(json.dumps(scene, indent=1), encoding="utf-8")
     return out
+
+
+def _scene(name, provenance, grids, ambient, features, doors, labels):
+    """The scene skeleton shared by the site generators; pixels_per_grid and
+    meters_per_grid (UVTT-critical) have exactly this one home."""
+    return {
+        "name": name,
+        "provenance": provenance,
+        "grids": {"x": grids[0], "y": grids[1]},
+        "pixels_per_grid": PIXELS_PER_GRID,
+        "meters_per_grid": METERS_PER_GRID,
+        "ambient": ambient,
+        "features": features,
+        "doors": doors,
+        "labels": labels,
+    }
+
+
+def _ground_rect(w_m, h_m, label, color=None):
+    """Full-rect ground polygon covering the whole scene."""
+    ground = {"kind": "ground", "polygon": [[0, 0], [w_m, 0], [w_m, h_m], [0, h_m]]}
+    if color:
+        ground["color"] = color
+    ground["label"] = label
+    return ground
 
 
 def _cell_walls(cells, cols, rows):
@@ -194,7 +214,7 @@ def _cell_walls(cells, cols, rows):
             if x == cols - 1 or not cells[y][x + 1]:
                 v_edges.append(("rig", x, y))
 
-    def runs(edges, along):
+    def runs(edges):
         groups = {}
         for kind, a, b in edges:
             groups.setdefault((kind, a), []).append(b)
@@ -212,11 +232,11 @@ def _cell_walls(cells, cols, rows):
         return out
 
     rings = []
-    for kind, y, x0, x1 in runs(h_edges, "x"):
+    for kind, y, x0, x1 in runs(h_edges):
         yy = y * METERS_PER_GRID + (0 if kind == "top" else METERS_PER_GRID)
         rings.append([[x0 * METERS_PER_GRID - T, yy - T], [(x1 + 1) * METERS_PER_GRID + T, yy - T],
                       [(x1 + 1) * METERS_PER_GRID + T, yy + T], [x0 * METERS_PER_GRID - T, yy + T]])
-    for kind, x, y0, y1 in runs(v_edges, "y"):
+    for kind, x, y0, y1 in runs(v_edges):
         xx = x * METERS_PER_GRID + (0 if kind == "lef" else METERS_PER_GRID)
         rings.append([[xx - T, y0 * METERS_PER_GRID - T], [xx + T, y0 * METERS_PER_GRID - T],
                       [xx + T, (y1 + 1) * METERS_PER_GRID + T], [xx - T, (y1 + 1) * METERS_PER_GRID + T]])
@@ -281,32 +301,21 @@ def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
         acx, acy = ax + aw // 2, ay + ah // 2
         bcx, bcy = bx + bw // 2, by + bh // 2
         carve(acx, acy, bcx, bcy)
-        # door where the corridor meets the destination room's edge
         edge_x, edge_y, angle = _door_cell(acy, acx, bx, by, bw, bh, bcx, bcy)
         doors.append({"at": [(edge_x + 0.5) * METERS_PER_GRID, (edge_y + 0.5) * METERS_PER_GRID],
                       "width_m": 1.8, "angle": angle,
                       "closed": bool(rng.random() < 0.5), "kind": "door", "label": "door"})
     feats = _floor_features(cells, cols, rows, floor_color="#6b6459", wall_color="#241f1d")
-    # torch lights in room centers
     lights = [{"kind": "light", "at": [(x + w / 2) * METERS_PER_GRID, (y + h / 2) * METERS_PER_GRID],
                "r": 6.0, "color": "#ffb45e", "label": "torch"} for x, y, w, h in rooms[:4]]
-    scene = {
-        "name": name,
-        "provenance": {"generator": f"battlemap.py gen-dungeon seed={seed}"},
-        "grids": {"x": cols, "y": rows},
-        "pixels_per_grid": PIXELS_PER_GRID,
-        "meters_per_grid": METERS_PER_GRID,
-        "ambient": "#120d0b",
-        "features": [
-            {"kind": "ground", "polygon": [[0, 0], [cols * METERS_PER_GRID, 0],
-                                           [cols * METERS_PER_GRID, rows * METERS_PER_GRID],
-                                           [0, rows * METERS_PER_GRID]], "label": "bedrock"},
-            *feats,
-            *lights,
-        ],
-        "doors": doors,
-        "labels": [{"text": name.upper(), "at": [cols * METERS_PER_GRID / 2, 2.2], "size": 26}],
-    }
+    scene = _scene(
+        name, {"generator": f"battlemap.py gen-dungeon seed={seed}"}, (cols, rows),
+        "#120d0b",
+        [_ground_rect(cols * METERS_PER_GRID, rows * METERS_PER_GRID, "bedrock"),
+         *feats, *lights],
+        doors,
+        [{"text": name.upper(), "at": [cols * METERS_PER_GRID / 2, 2.2], "size": 26}],
+    )
     out = _save_site(name, scene)
     print(f"dungeon '{name}': {len(rooms)} rooms, {len(doors)} doors -> {out}")
 
@@ -351,23 +360,15 @@ def gen_cave(seed="1", name="cave"):
               "width_m": 2.0, "angle": 0, "closed": False, "kind": "door", "label": "entrance"}]
     lights = [{"kind": "light", "at": [(x + 0.5) * METERS_PER_GRID, (y + 0.5) * METERS_PER_GRID],
                "r": 5.0, "color": "#ffb45e", "label": "campfire"} for x, y in best[::len(best) // 3 + 1][:3]]
-    scene = {
-        "name": name,
-        "provenance": {"generator": f"battlemap.py gen-cave seed={seed} (cellular automata, largest cavity)"},
-        "grids": {"x": cols, "y": rows},
-        "pixels_per_grid": PIXELS_PER_GRID,
-        "meters_per_grid": METERS_PER_GRID,
-        "ambient": "#0e0c0a",
-        "features": [
-            {"kind": "ground", "polygon": [[0, 0], [cols * METERS_PER_GRID, 0],
-                                           [cols * METERS_PER_GRID, rows * METERS_PER_GRID],
-                                           [0, rows * METERS_PER_GRID]], "label": "rock"},
-            *feats,
-            *lights,
-        ],
-        "doors": doors,
-        "labels": [{"text": name.upper(), "at": [cols * METERS_PER_GRID / 2, 2.2], "size": 26}],
-    }
+    scene = _scene(
+        name,
+        {"generator": f"battlemap.py gen-cave seed={seed} (cellular automata, largest cavity)"},
+        (cols, rows), "#0e0c0a",
+        [_ground_rect(cols * METERS_PER_GRID, rows * METERS_PER_GRID, "rock"),
+         *feats, *lights],
+        doors,
+        [{"text": name.upper(), "at": [cols * METERS_PER_GRID / 2, 2.2], "size": 26}],
+    )
     out = _save_site(name, scene)
     print(f"cave '{name}': {len(best)} floor cells -> {out}")
 
@@ -375,10 +376,7 @@ def gen_cave(seed="1", name="cave"):
 def gen_camp(seed="1", name="camp"):
     rng = random.Random(seed)
     w_m, h_m = 70.0, 46.0
-    feats = [
-        {"kind": "ground", "polygon": [[0, 0], [w_m, 0], [w_m, h_m], [0, h_m]],
-         "color": "#5e6b4a", "label": "marsh grass"},
-    ]
+    feats = [_ground_rect(w_m, h_m, "marsh grass", "#5e6b4a")]
     # marsh pools: irregular blobs (dressing)
     for i, (cx, cy) in enumerate([(12, 34), (58, 12)]):
         pts = []
@@ -417,18 +415,12 @@ def gen_camp(seed="1", name="camp"):
         {"kind": "light", "at": [8.0, 8.0], "r": 5.0, "color": "#ffb45e", "label": "watchfire"},
         {"kind": "light", "at": [62.0, 36.0], "r": 5.0, "color": "#ffb45e", "label": "watchfire"},
     ]
-    scene = {
-        "name": name,
-        "provenance": {"generator": f"battlemap.py gen-camp seed={seed}"},
-        "grids": {"x": 46, "y": 30},
-        "pixels_per_grid": PIXELS_PER_GRID,
-        "meters_per_grid": METERS_PER_GRID,
-        "ambient": "#1a2016",
-        "features": [*feats, *lights],
-        "doors": [],
-        "labels": [{"text": name.upper(), "at": [w_m / 2, 4.0], "size": 30},
-                   {"text": "the marsh", "at": [w_m / 2, h_m - 4], "size": 20}],
-    }
+    scene = _scene(
+        name, {"generator": f"battlemap.py gen-camp seed={seed}"}, (46, 30),
+        "#1a2016", [*feats, *lights], [],
+        [{"text": name.upper(), "at": [w_m / 2, 4.0], "size": 30},
+         {"text": "the marsh", "at": [w_m / 2, h_m - 4], "size": 20}],
+    )
     out = _save_site(name, scene)
     print(f"camp '{name}': {len(tents)} tents, {len(lights)} lights -> {out}")
 
@@ -527,10 +519,10 @@ def wrap(png_name="scene.png"):
         for f in scene["features"]
         if f.get("walls") and f["kind"] in ("building", "wall")
     ]
-    # Universal VTT (dd2vtt) shapes: a portal is its two-point segment in
-    # "bounds" plus a "position" center; a light is a "position" + "range".
-    # The earlier single-object bounds / flat x,y lights imported as walls
-    # fine but silently dropped doors and lights in spec-conforming VTTs.
+    # Universal VTT (dd2vtt): a portal is a two-point "bounds" segment plus a
+    # "position" center; a light is "position" + "range". The earlier flat
+    # shape imported as walls but silently dropped doors/lights in
+    # spec-conforming VTTs.
     portals = []
     for d in scene["doors"]:
         cx, cy = u(d["at"][0]), u(d["at"][1])
@@ -588,9 +580,9 @@ if __name__ == "__main__":
         render() if cmd == "render" else wrap(arg("--png", "scene.png"))
     elif cmd in ("gen-dungeon", "gen-cave", "gen-camp"):
         name = arg("--name", cmd.removeprefix("gen-"))
-        # --name becomes a directory under worlds/: a separator or dot-dot
-        # escapes the engine tree (the studio validates its own input; this
-        # guards the documented CLI entry point)
+        # --name becomes a directory under worlds/: separators or dot-dot escape
+        # the engine tree (the studio validates its own input; this guards the
+        # documented CLI entry point)
         if ("/" in name or "\\" in name or name in (".", "..")
                 or pathlib.Path(name).name != name):
             sys.exit(f"error: --name must be a bare directory name, got {name!r}")

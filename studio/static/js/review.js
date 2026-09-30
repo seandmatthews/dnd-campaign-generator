@@ -262,7 +262,7 @@
       return;
     }
 
-    // group per pending file, in queue order
+    // grouping preserves queue order
     const meta = {};
     (data && Array.isArray(data.files) ? data.files : []).forEach((f) => {
       if (f && f.file) meta[f.file] = f;

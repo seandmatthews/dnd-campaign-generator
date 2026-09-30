@@ -61,9 +61,7 @@ def d20(advantage=None):
 # through proposals. risk_acceptance stays on the record as flavor.
 DEFAULT_DC = 12
 _RESOURCE_BONUS = {"none": 0, "low": 1, "medium": 2, "high": 3}
-# Defense bonus rule: home ground is worth +2 on top of the defender's
-# current muscle bonus (kept distinct from offensive commitments).
-DEFENSE_BONUS = 2
+DEFENSE_BONUS = 2  # home ground; see the module docstring's defense rule
 _DEFENSE_ACTION = "defend (did not act this week)"
 
 

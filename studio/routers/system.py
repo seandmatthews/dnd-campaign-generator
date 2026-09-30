@@ -19,7 +19,6 @@ from routers.common import require_campaign
 
 router = APIRouter()
 
-# search tuning: the response cap and the per-line display trim
 SEARCH_CAP = 50
 SEARCH_LINE_MAX = 200
 # a "heading-ish" previous line worth showing as context: markdown headings,
@@ -33,19 +32,16 @@ def health():
             "week_run_in_progress": engines.week_flag_path().is_file()}
 
 
-# the full doctor fans out to subprocess probes (engine CLIs, an LLM probe)
-# — minutes of work on a request thread — so its result is cached briefly.
-# quick stays uncached: cheap, and the week-run flag should read live.
+# full doctor runs subprocess probes (engine CLIs + one live LLM probe) —
+# minutes on a request thread — so its result is cached 60s. quick=1 skips
+# the live probe (presence-only key check) and never caches, so a page load
+# can poll it. (tests monkeypatch doctor.report.)
 _DOCTOR_CACHE_S = 60.0
 _doctor_cache: dict = {"at": None, "report": None}
 
 
 @router.get("/api/doctor")
 def get_doctor(quick: bool = False):
-    # doctor.py is stdlib-only and runs its probes (engine CLIs + one tiny
-    # live LLM probe) per request; tests monkeypatch doctor.report.
-    # quick=1 skips the live LLM probe (presence-only key check) so a page
-    # load can poll it without spending tokens or waiting on the API.
     if quick:
         return doctor.report(live_llm=False)
     now = time.monotonic()

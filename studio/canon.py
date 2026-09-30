@@ -39,12 +39,9 @@ MESSAGE_MAX = 72
 
 _COMMIT_RE = re.compile(r"^\[[^\]]+ ([0-9a-f]+)\]", re.MULTILINE)
 
-# One snapshot at a time, process-wide. Several callers write from request
-# threads with only their campaign lock held (or none): two concurrent
-# snapshots race on git's index.lock, the loser's add fails, and its undo
-# point is silently lost — precisely in the concurrent cases where the user
-# most needs it. Campaign locks are always held OUTSIDE this one (a week
-# job holds the campaign lock, then snapshots), so no lock cycle.
+# One snapshot at a time, process-wide: concurrent snapshots race on git's
+# index.lock and the loser silently loses its undo point. Campaign locks are
+# always held OUTSIDE this one, so no lock cycle.
 _SNAPSHOT_LOCK = threading.Lock()
 
 

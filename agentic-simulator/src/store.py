@@ -1,6 +1,6 @@
-"""State-file I/O shared by every module that reads or writes world/state.yaml.
+"""State-file I/O and the engine's small shared vocabulary.
 
-One loader, one dumper, one default path — the four per-module copies this
+One loader, one dumper, one default path — the per-module copies this
 replaces had diverged in signature only. `load_state(path=None)` /
 `save_state(state, path=None)`: omit the path for the engine's own
 world/state.yaml; ingest passes its --state target explicitly.
@@ -22,6 +22,39 @@ STATE_FILE = ROOT / "world" / "state.yaml"
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# The resource ladder, canonically: keys, grades, grade order.
+RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
+RESOURCE_LEVELS = ("none", "low", "medium", "high")
+LEVEL_INDEX = {g: i for i, g in enumerate(RESOURCE_LEVELS)}
+
+
+def split_argv(argv, *valued_flags):
+    """Shared CLI parsing: (values, rest) — each flag in valued_flags
+    consumes `--flag X` or `--flag=X` (last wins); everything else lands
+    in rest, order kept."""
+    values, rest, i = {}, [], 0
+    while i < len(argv):
+        a = argv[i]
+        for flag in valued_flags:
+            if a == flag and i + 1 < len(argv):
+                values[flag] = argv[i + 1]
+                i += 1
+                break
+            if a.startswith(flag + "="):
+                values[flag] = a.split("=", 1)[1]
+                break
+        else:
+            rest.append(a)
+        i += 1
+    return values, rest
+
+
+def faction_map(state):
+    """Factions keyed by str(id), skipping non-dict or id-less entries —
+    the guarded lookup the goal review, views, and project reporting share."""
+    return {str(f.get("id")): f for f in (state or {}).get("factions", [])
+            if isinstance(f, dict) and f.get("id")}
+
 
 def load_state(path=None):
     with open(path or STATE_FILE, encoding="utf-8") as f:
@@ -37,13 +70,11 @@ def _place_id(name):
 
 
 def places_of(state):
-    """Every simulated place, normalized. The two-level schema is a
-    `places` list (city, towns, the world itself — anything factions can
-    belong to); the legacy single-`city` dict still works and stays the
-    file's shape until a campaign opts in. Each normalized place carries an
-    `id` (derived from the name when absent) and a `kind` (derived "city"
-    for the legacy shape). Order is the file's order; the FIRST place is
-    the primary — the default home of factions that name no `place`."""
+    """Every simulated place, normalized: the `places` list schema, or the
+    legacy single-`city` dict (kind "city"). Each place carries an `id`
+    (derived from the name when absent) and a `kind`; file order holds and
+    the FIRST place is primary — the default home of factions naming no
+    `place`."""
     raw = state.get("places") if isinstance(state, dict) else None
     out = []
     if isinstance(raw, list) and raw:
@@ -82,14 +113,11 @@ def faction_place(state, faction):
 
 
 def place_words(state, include_districts=True):
-    """Lowercase words that name any place (and, by default, its
-    districts). The scheduler and consistency subtract these from
-    faction-name tokens: a word that names a place must not activate or
-    veto a similarly-named faction (the Regency of Tasospon is not touched
-    by mentioning Tasospon), and one campaign may have many places now.
-    ingest passes include_districts=False — session notes say "the Mint"
-    when they mean the FACTION nicknamed after the district, so district
-    words must stay matchable there."""
+    """Lowercase words naming any place (and its districts unless
+    include_districts=False). Scheduler/consistency subtract these so a
+    place word never activates or vetoes a similarly-named faction; ingest
+    passes False because notes say "the Mint" meaning the FACTION nicknamed
+    after the district."""
     words = set()
     for p in places_of(state):
         words |= set(_WORD_RE.findall(str(p.get("name", "")).lower()))
@@ -100,13 +128,10 @@ def place_words(state, include_districts=True):
 
 
 def validate_state(state):
-    """The shape a week spends against — checked BEFORE any LLM call, because
-    every one of these gaps used to crash after the spend: a missing
-    `events` list died in apply_mechanical's append, a float or absent clock
-    died in write_chronicle's f"{week:04d}", a city-less state died in
-    faction_view. The state file is hand-edited by design, so a partial
-    edit must be refused with the missing piece named, not bought with a
-    week's provider spend. Raises ValueError."""
+    """The shape a week spends against, checked BEFORE any LLM call — each
+    gap here used to crash after the spend. The state file is hand-edited
+    by design, so refuse a partial edit naming the missing piece rather
+    than buying it with a week's provider spend. Raises ValueError."""
     if not isinstance(state, dict):
         raise ValueError("state is not a mapping (empty or corrupt file?)")
     places = places_of(state)
@@ -150,11 +175,9 @@ def save_state(state, path=None):
     tmp = path.with_name(path.name + ".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True, width=100)
-    # A concurrent reader holding the destination open makes Windows raise
-    # PermissionError for an instant; the reader is the innocent party —
-    # brief retries instead of losing the week to a sharing violation. (The
-    # studio's writers have had this tolerance all along; this is the one
-    # writer on the file both sides hammer.)
+    # Windows raises PermissionError for an instant while a concurrent
+    # reader holds the destination; retry rather than lose the week to a
+    # sharing violation.
     for attempt in range(3):
         try:
             os.replace(tmp, path)

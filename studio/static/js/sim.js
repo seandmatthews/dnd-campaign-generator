@@ -197,8 +197,6 @@
     host.appendChild(list);
   }
 
-  /* ----- tab renderer ----- */
-
   /* ----- create-a-simulation form (the fresh-campaign path) ----- */
 
   const RESOURCES = ['coin', 'muscle', 'legitimacy'];
@@ -370,8 +368,7 @@
           show(ch.after) + '</td></tr>');
       });
     });
-    // projects: additions plus every per-project movement (progress steps,
-    // status flips, term edits, completion blocks)
+    // projects: additions + per-project movement
     const projAdded = (diff && diff.projects_added) || [];
     if (projAdded.length) {
       rows.push('<tr><td>Projects added</td><td class="num">' +
@@ -536,16 +533,11 @@
       // 2026-09-25; they used to live only in the ephemeral job log)
       const goalsFindings = () => findings.length
         ? '<details class="proposal-findings"><summary>Dropped during ' +
-          'validation (' + findings.length + ')</summary><ul class="findings-list">' +
-          findings.map((f) => '<li>' + S.esc(String(f)) + '</li>').join('') +
-          '</ul></details>'
+          'validation (' + findings.length + ')</summary>' +
+          S.stringList(findings) + '</details>'
         : '';
 
-      panel.innerHTML = '';
-      // innerHTML, not S.el(): the content is multi-root (title + note +
-      // table + sections + actions) and S.el() keeps only the FIRST element
-      // — the rest was silently dropped and the missing .chronicle node then
-      // threw, making the catch() remove the whole panel (found 2026-09-25)
+      // innerHTML, not S.el(): multi-root content (see el() in core.js)
       panel.innerHTML =
         '<h3 class="panel-title">' + title + '</h3>' +
         '<p class="panel-note">' + subtitle + '</p>' +
@@ -764,22 +756,15 @@
         'the proposal afterwards.'
       );
       if (!ok) { btn.disabled = false; return; }
-      errBox.innerHTML = '';
-      logBox.classList.remove('hidden');
-      logBox.textContent = '';
-      (async () => {
-        const resp = await S.api(S.campUrl('/simulation/goal-review'), {
-          method: 'POST', body: {}
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+      S.runJob({
+        path: S.campUrl('/simulation/goal-review'),
+        body: {},
+        btn: btn, errBox: errBox, log: S.makeLogBox(logBox),
         // 50 min: the server's own watchdog for this job sits at 2800 s
-        // (~47 min) — the default 31-min poll cap used to give up while the
-        // job was still working and stage a proposal nobody was watching
-        return S.pollJob(resp.job_id, (line) => {
-          logBox.textContent += String(line == null ? '' : line) + '\n';
-          logBox.scrollTop = logBox.scrollHeight;
-        }, 50 * 60 * 1000);
-      })().then((result) => {
+        // (~47 min) — the default 31-min poll cap used to give up first
+        timeoutMs: 50 * 60 * 1000,
+        failLabel: 'Goal review failed'
+      }).then((result) => {
         const r = result || {};
         if (r.staged) {
           S.toast(r.proposed + ' goal update' + (r.proposed === 1 ? '' : 's') +
@@ -787,26 +772,16 @@
           S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
         } else {
           const jobFindings = Array.isArray(r.findings) ? r.findings : [];
+          // two nodes — one S.el() call would drop the second (see el() in core.js)
           errBox.innerHTML = '';
-          // two separate nodes: S.el() keeps only the FIRST element, so one
-          // concatenated two-root call silently dropped the findings list
-          // (same trap that killed the proposal panel — found 2026-09-25)
           errBox.appendChild(S.el(
             '<div class="success-panel">No goal updates proposed — the ' +
             'ledger does not justify any changes.</div>'));
           if (jobFindings.length) {
-            errBox.appendChild(S.el(
-              '<ul class="findings-list">' + jobFindings.map((f) =>
-                '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'));
+            errBox.appendChild(S.el(S.stringList(jobFindings)));
           }
-          btn.disabled = false;
         }
-      }).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('Goal review failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-        btn.disabled = false;
-      });
+      }).catch(() => {});
     });
     root.appendChild(card);
   }
@@ -848,31 +823,19 @@
         'your eyes, then you discard it.'
       );
       if (!ok) { btn.disabled = false; return; }
-      errBox.innerHTML = '';
-      logBox.classList.remove('hidden');
-      logBox.textContent = '';
-      (async () => {
-        const resp = await S.api(S.campUrl('/simulation/forecast'), {
-          method: 'POST',
-          body: { confirm: true, weeks: n }
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        // the give-up must scale with the run: the server's own per-week
-        // engine cap is 30 min, so a 3-week forecast legally runs 90 — the
-        // week-sized 31-minute default reported a false failure mid-run
-        return S.pollJob(resp.job_id, (line) => {
-          logBox.textContent += String(line == null ? '' : line) + '\n';
-          logBox.scrollTop = logBox.scrollHeight;
-        }, n * 31 * 60 * 1000 + 5 * 60 * 1000);
-      })().then(() => {
+      S.runJob({
+        path: S.campUrl('/simulation/forecast'),
+        body: { confirm: true, weeks: n },
+        btn: btn, errBox: errBox, log: S.makeLogBox(logBox),
+        // the give-up must scale with the run: the per-week engine cap is
+        // 30 min, so a 3-week forecast legally runs 90+ — the week-sized
+        // 31-minute default reported a false failure mid-run
+        timeoutMs: n * 31 * 60 * 1000 + 5 * 60 * 1000,
+        failLabel: 'Forecast failed'
+      }).then(() => {
         S.toast('Forecast staged — read it above, then discard it.', 'ok');
         S.rerenderIfCurrent('sim'); // re-render: the forecast panel leads with the weeks
-      }).catch((err) => {
-        errBox.innerHTML = '';
-        errBox.appendChild(S.errorPanel(err));
-        S.toast('Forecast failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-        btn.disabled = false;
-      });
+      }).catch(() => {});
     });
     root.appendChild(card);
   }
@@ -1430,9 +1393,7 @@
         host.appendChild(grid);
       });
       if (Array.isArray(rep.findings) && rep.findings.length) {
-        errBox.appendChild(S.el(
-          '<ul class="findings-list">' + rep.findings.map((f) =>
-            '<li>' + S.esc(String(f)) + '</li>').join('') + '</ul>'));
+        errBox.appendChild(S.el(S.stringList(rep.findings)));
       }
     }).catch((err) => {
       host.innerHTML = '';
@@ -1521,7 +1482,6 @@
       forecastPanel(root);
     }
 
-    /* header strip: week clock + season + premise */
     const nextWeek = (week != null && !Number.isNaN(Number(week))) ? Number(week) + 1 : '?';
     root.appendChild(S.el(
       '<section class="panel sim-header">' +
@@ -1551,7 +1511,6 @@
     }
     root.appendChild(factionPanel);
 
-    /* projects: concrete undertakings with persistent progress */
     projectsPanel(root, factions);
 
     /* rumors board */
@@ -1739,21 +1698,12 @@
         'The campaign changes only if you accept the proposal afterwards.'
       );
       if (!ok) return;
-      runBtn.disabled = true;
-      runErr.innerHTML = '';
-      runLog.classList.remove('hidden');
-      runLog.textContent = '';
-      (async () => {
-        const resp = await S.api(S.campUrl('/simulation/week'), {
-          method: 'POST',
-          body: { confirm: true }
-        });
-        if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
-        return S.pollJob(resp.job_id, (line) => {
-          runLog.textContent += String(line == null ? '' : line) + '\n';
-          runLog.scrollTop = runLog.scrollHeight;
-        });
-      })().then((result) => {
+      S.runJob({
+        path: S.campUrl('/simulation/week'),
+        body: { confirm: true },
+        btn: runBtn, errBox: runErr, log: S.makeLogBox(runLog),
+        failLabel: 'Week run failed'
+      }).then((result) => {
         const r = result || {};
         const held = Array.isArray(r.held) ? r.held : [];
         if (held.length) S.state.lastHeld = held; // banner on the re-render
@@ -1763,12 +1713,7 @@
           'ok'
         );
         S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
-      }).catch((err) => {
-        runErr.innerHTML = '';
-        runErr.appendChild(S.errorPanel(err));
-        S.toast('Week run failed' + (err && err.error ? ': ' + err.error : ''), 'error');
-        runBtn.disabled = false;
-      });
+      }).catch(() => {});
     });
     root.appendChild(runPanel);
 

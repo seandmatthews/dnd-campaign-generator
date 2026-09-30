@@ -172,12 +172,9 @@ class BudgetExceeded(RuntimeError):
     a clear incomplete status instead of burning an unbounded run."""
 
 
-# Per-run metering: an explicit ceiling on provider CALLS (and an
-# approximate token tally for the log). This is a budget guard, not an
-# invoice — the numbers are estimates, never the provider's exact charges.
-# The ceiling is explicit and configurable; a run that hits it stops
-# between calls with an incomplete status.
-#
+# Per-run metering: an explicit, configurable ceiling on provider CALLS
+# (token tally is an estimate — a budget guard, not an invoice). A run that
+# hits it stops between calls with an incomplete status.
 # Thread-local on purpose: generation jobs run one per campaign (per-campaign
 # locks do not serialize each other), and a single shared meter let campaign
 # B's begin_run() reset campaign A's ceiling mid-run — A's spend went

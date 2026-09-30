@@ -40,17 +40,13 @@ def _words(text):
     return set(_WORD_RE.findall(text.lower()))
 
 
-def _vs_target(event):
-    return events.vs_of(event)
-
-
 def _in_week(evs, fid, tokens, include_actor):
     """The shared walk: vs target (of another faction's event unless
     include_actor), text-mention, and — when include_actor — being the
     actor. _touched and _present are this predicate with the actor term
     on/off."""
     for ev in evs:
-        if _vs_target(ev) == fid and (include_actor or ev.get("actor") != fid):
+        if events.vs_of(ev) == fid and (include_actor or ev.get("actor") != fid):
             return True
         if include_actor and ev.get("actor") == fid:
             return True
@@ -77,14 +73,14 @@ def activation(state):
     components, each logged once: +2 targeted last week; +1 hostility
     (outgoing or incoming); +1 pressure (any resource "none"); -1 per
     consecutive week absent from all events, up to 3. Founding week
-    (clock week 0 — the studio's fresh-sandbox start: no history at all)
-    gets hostility/pressure plus +2 "founding week"; from clock week 1 on
-    the normal targeted/idle mechanics take over. act at score >= 2.
+    (clock week 0: no history) gets hostility/pressure plus +2 "founding
+    week"; from clock week 1 on the normal targeted/idle mechanics take
+    over. act at score >= 2.
 
     Project override: a faction whose eligible active project (requirements
     met, counter below target) is mid-flight acts even when the score would
-    hold it — an undertaking does not idle because the week is quiet. The
-    score and its reasons still stand beside it in the record.
+    hold it — an undertaking does not idle because the week is quiet; score
+    and reasons stay in the record.
     """
     week = state["meta"]["clock"]["week"]
     factions = state["factions"]

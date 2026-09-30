@@ -21,7 +21,6 @@ import logging
 
 import knowledge
 import spine
-import yaml
 
 log = logging.getLogger("studio.briefing")
 
@@ -51,22 +50,6 @@ def _chronicle_ref(name: str, week):
             return {"type": "chronicle", "file": c["file"],
                     "label": f"week {week} — {c['title']}"}
     return None
-
-
-def _map_refs(name: str, text: str):
-    """A city/site map whose slug appears in the item's text (best effort)."""
-    refs = []
-    low = text.lower()
-    try:
-        for kind in ("cities", "sites"):
-            for slug in spine.map_slugs(name, kind):
-                if slug.lower() in low:
-                    refs.append({"type": f"map/{kind}", "file": f"maps/{kind}/{slug}",
-                                 "label": slug})
-                    break
-    except Exception:  # noqa: BLE001
-        pass
-    return refs
 
 
 def build(name: str, since_week: int = 0, focus=None) -> dict:
@@ -203,9 +186,7 @@ def load_disclosure(name: str) -> dict:
 
 
 def _save_disclosure(name: str, doc: dict) -> None:
-    spine.write_text_atomic(
-        _disclosure_path(name),
-        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100))
+    spine.write_text_atomic(_disclosure_path(name), spine.dump_yaml(doc))
 
 
 def disclosure_after_image(store: dict, facts: list, entries: list) -> dict:

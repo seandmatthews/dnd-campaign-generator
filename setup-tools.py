@@ -85,7 +85,7 @@ def fmg_done():
         and (d / "node_modules" / "vitest" / "vitest.mjs").is_file()
 
 
-def fmg_apply(check):
+def fmg_apply():
     d = TOOLS / "Fantasy-Map-Generator"
     if d.exists() and not (d / ".git").is_dir():
         print(f"  !! {d} exists but is not a git clone — move it aside first")
@@ -125,7 +125,7 @@ def settle_done():
         and (d / "node_modules" / "sharp" / "package.json").is_file()
 
 
-def settle_apply(check):
+def settle_apply():
     d = TOOLS / "settlemaker"
     if d.exists() and not (d / ".git").is_dir():
         print(f"  !! {d} exists but is not a git clone — move it aside first")
@@ -180,7 +180,7 @@ def main():
         if done():
             print(f"[done]     {label}")
             if args.force and not args.check:
-                apply_step(args.check)
+                apply_step()
                 print(f"[refreshed] {label}")
             continue
         if args.check:
@@ -188,7 +188,7 @@ def main():
             incomplete.append(label)
             continue
         print(f"[setting up] {label}")
-        apply_step(args.check)
+        apply_step()
         print(f"[ready]    {label}" if done() else f"[warning]  {label} still incomplete")
 
     if args.check:

@@ -30,7 +30,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import events
-from store import STATE_FILE, load_state
+from store import STATE_FILE, faction_map, load_state, split_argv
 
 _BAR = 2        # content tokens two events must share to count as a build-on
 _MAX_LINKS = 3  # build-on links rendered at most, walking back from the anchor
@@ -44,10 +44,8 @@ def find_event(state, week, actor):
 
 
 def _name(state, actor):
-    for f in state["factions"]:
-        if f["id"] == actor:
-            return f["name"]
-    return actor
+    faction = faction_map(state).get(actor)
+    return faction["name"] if faction else actor
 
 
 def _tokens(text):
@@ -130,16 +128,8 @@ def main(argv):
     reads that state file instead of the engine home's world/state.yaml
     (the studio's why route passes the campaign's own canon state, which
     needs no copy-in and no engine lock)."""
-    state_path = None
-    rest = list(argv)
-    if "--state" in rest[1:]:
-        i = rest.index("--state")
-        if i + 1 >= len(rest):
-            print("usage: python src/why.py <week> <actor> [--json] "
-                  "[--state PATH]", file=sys.stderr)
-            return 2
-        state_path = rest[i + 1]
-        rest = rest[:i] + rest[i + 2:]
+    values, rest = split_argv(argv, "--state")
+    state_path = values.get("--state")
     try:
         state = load_state(state_path)
     except OSError as e:

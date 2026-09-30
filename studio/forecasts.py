@@ -75,12 +75,10 @@ def create(name: str, *, base_week, weeks: list, run_record: dict) -> str:
         }
         for w in weeks:
             fn = f"week-{int(w['week']):04d}.yaml"
-            (tmp / fn).write_text(
-                yaml.safe_dump(w, sort_keys=False, allow_unicode=True,
-                               width=100), encoding="utf-8")
+            (tmp / fn).write_text(spine.dump_yaml(w), encoding="utf-8")
             manifest.setdefault("artifacts", {})[f"week-{w['week']}"] = fn
-        spine.write_text_atomic(tmp / "manifest.yaml", yaml.safe_dump(
-            manifest, sort_keys=False, allow_unicode=True, width=100))
+        spine.write_text_atomic(tmp / "manifest.yaml",
+                                spine.dump_yaml(manifest))
         tmp.rename(bdir)  # same volume: the bundle appears complete or not
         return bdir.name
     finally:
@@ -88,12 +86,7 @@ def create(name: str, *, base_week, weeks: list, run_record: dict) -> str:
 
 
 def _load_manifest(bdir: pathlib.Path) -> dict | None:
-    try:
-        doc = yaml.safe_load(
-            (bdir / "manifest.yaml").read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else None
-    except (OSError, yaml.YAMLError):
-        return None
+    return spine.read_yaml_dict(bdir / "manifest.yaml")
 
 
 def find_active(name: str) -> dict | None:
@@ -141,6 +134,5 @@ def set_status(name: str, forecast_id: str, status: str,
     manifest["status"] = status
     if decided_note:
         manifest["decision_note"] = decided_note
-    spine.write_text_atomic(bdir / "manifest.yaml", yaml.safe_dump(
-        manifest, sort_keys=False, allow_unicode=True, width=100))
+    spine.write_text_atomic(bdir / "manifest.yaml", spine.dump_yaml(manifest))
     return manifest

@@ -15,22 +15,66 @@
 
   // esc is THE escaping rule (js/esc.js) — everything server- or LLM-derived
   // goes through it or textContent before touching innerHTML
-  const esc = (window.StudioEsc && window.StudioEsc.esc) || function (value) {
-    return String(value == null ? '' : value)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  };
+  const esc = window.StudioEsc.esc;
 
   function el(html) {
     const tpl = document.createElement('template');
     tpl.innerHTML = String(html).trim();
+    // first element ONLY: multi-root content must be built as separate
+    // S.el() calls or the rest is silently dropped
     const node = tpl.content.firstElementChild;
     if (!node) throw new Error('el(): template produced no element');
     return node;
   }
+
+  // log-tail boxes under forms: open() clears and shows, push() appends a
+  // line and keeps the view scrolled to the newest
+  Studio.makeLogBox = function (boxEl) {
+    return {
+      open() {
+        boxEl.classList.remove('hidden');
+        boxEl.textContent = '';
+      },
+      push(line) {
+        boxEl.textContent += String(line == null ? '' : line) + '\n';
+        boxEl.scrollTop = boxEl.scrollHeight;
+      }
+    };
+  };
+
+  // The one job-run flow shared by every form that POSTs a job: disable the
+  // button, clear the error box, open the log, POST, poll (log lines pushed
+  // as they arrive), toast doneMsg(result) on success. On failure: an
+  // errorPanel in errBox + a failLabel toast, and the error is RETHROWN so
+  // the caller can remember or decorate it. The button re-enables either
+  // way unless reenable === false (callers that gate the button on their
+  // own state re-enable in their own catch).
+  Studio.runJob = async function (o) {
+    if (o.btn) o.btn.disabled = true;
+    if (o.errBox) o.errBox.innerHTML = '';
+    if (o.log && o.log.open) o.log.open();
+    try {
+      const resp = await api(o.path, { method: 'POST', body: o.body });
+      if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
+      const result = await pollJob(resp.job_id,
+        o.log ? (line) => o.log.push(line) : null, o.timeoutMs);
+      if (o.doneMsg) {
+        toast(typeof o.doneMsg === 'function' ? o.doneMsg(result) : o.doneMsg, 'ok');
+      }
+      return result;
+    } catch (err) {
+      if (o.errBox) {
+        o.errBox.innerHTML = '';
+        o.errBox.appendChild(errorPanel(err));
+      }
+      if (o.failLabel) {
+        toast(o.failLabel + (err && err.error ? ': ' + err.error : ''), 'error');
+      }
+      throw err;
+    } finally {
+      if (o.btn && o.reenable !== false) o.btn.disabled = false;
+    }
+  };
 
   function fmtInt(value) {
     const n = Number(value);
@@ -75,9 +119,7 @@
     // server-side; reopen this tab after it finishes to see the result.
     const giveUpAfter = timeoutMs || (31 * 60 * 1000);
     return new Promise((resolve, reject) => {
-      // The server's log_tail is a rotating 40-line window (jobs.py LOG_CAP):
-      // consume it through StudioLogTail, which anchors on the last emitted
-      // line's text — an index alone freezes once the window fills.
+      // rotating window — see logtail.js for why anchoring, not indexing
       let logCursor = { seen: 0, last: null };
       let failures = 0;           // one hiccup must not kill a 30-minute watch
       let inFlight = false;       // slow polls must not overlap and double-log
@@ -298,8 +340,7 @@
       overlay.addEventListener('keydown', (ev) => {
         if (ev.key === 'Escape') done(false);
         if (ev.key === 'Tab') {
-          // minimal focus trap: the dialog is modal, Tab must not walk
-          // into the page behind it
+          // minimal focus trap (modal: Tab must not reach the page behind)
           const focusables = Array.from(
             overlay.querySelectorAll('button')).filter((b) => !b.disabled);
           if (!focusables.length) return;
@@ -559,9 +600,7 @@
 
   function showTab(name) {
     Studio.state.activeTab = name;
-    // remember the tab so a reload (or a tomorrow) lands back on it, the
-    // same way the campaign pick already does
-    try { localStorage.setItem('campaign-studio.tab', name); } catch (_) {}
+    try { localStorage.setItem('campaign-studio.tab', name); } catch (_) {} // survives reloads
     document.querySelectorAll('.tab').forEach((btn) => {
       btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
     });
@@ -608,8 +647,7 @@
           picked = list[0].name;
         }
         Studio.state.campaign = picked;
-        // remember the pick so a reload mid-prep lands back on it (a reload
-        // used to reset to the first campaign, found 2026-09-25)
+        // a reload used to reset to the first campaign (found 2026-09-25)
         try { localStorage.setItem('campaign-studio.campaign', picked); } catch (_) {}
       }
     } catch (err) {
@@ -747,6 +785,10 @@
   Studio.el = el;
   Studio.fmtInt = fmtInt;
   Studio.api = api;
+  Studio.stringList = function (items, cls) {
+    return '<ul class="findings-list' + (cls ? ' ' + esc(cls) : '') + '">' +
+      items.map((f) => '<li>' + esc(String(f)) + '</li>').join('') + '</ul>';
+  };
   // refresh a tab's content only if the user is still looking at it: a job
   // finishing server-side must not yank the DM across tabs (or wipe a form
   // they are typing in) — the caller's .then just skips the re-render

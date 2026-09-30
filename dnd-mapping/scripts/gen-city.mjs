@@ -1,30 +1,22 @@
 // gen-city.mjs — generate any burg of an FMG world with settlemaker.
 //
-// The generalized form of scripts/gen-ruravaqan.mjs: instead of a hardcoded
-// burg record and hand-computed road bearings, everything is DERIVED from a
-// world dump (the same data the atlas comes from):
+// Generalizes the removed one-off gen-ruravaqan.mjs: everything is DERIVED
+// from a world dump (the same data the atlas comes from):
 //
 //   burg record   read from the dump by name or index (`--burg`)
-//   roadBearings  neighbor burgs found along the world's own route geometry:
-//                 every route (road/trail/searoute) that touches the burg's
-//                 cell contributes the next burg on each side as an approach;
-//                 bearing = compass angle to that neighbor (0=N, y-down map).
-//                 Sorted by bearing, capped at 4 (what the worked example
-//                 passed; settlemaker itself is unbounded).
-//   harbourSize   'large' whenever the dump's `port` flag is set — without
-//                 this knob a `port` burg gets NO piers (see docs Tier 2).
-//   oceanBearing  JSON dumps carry pack.cells (poles + water type): bearing
-//                 to the nearest open-ocean cell. .map saves carry no cell
-//                 arrays, so the old script's assumption (due south) is kept
-//                 and flagged as `assumed` in params.yaml.
+//   roadBearings  neighbor burgs from the dump's own route geometry (see
+//                 deriveRoadBearings); sorted by bearing, capped at 4.
+//   harbourSize   'large' whenever the dump's port flag is set (otherwise
+//                 no piers).
+//   oceanBearing  bearing to nearest open-ocean cell (JSON dumps); .map
+//                 saves assume due south, flagged in params.yaml.
 //
 // CLI (this exact contract is what the studio invokes, see studio/API.md):
 //
 //   node scripts/gen-city.mjs --world <FMG world dump> --burg "<name|index>" --out <outdir>
 //
 // `--world` accepts what import_fmg.py accepts: an FMG full JSON export, a
-// headless JSON dump, or a .map save. Outputs in --out mirror
-// gen-ruravaqan.mjs: <slug>.svg + <slug>.geojson + params.yaml.
+// headless JSON dump, or a .map save.
 
 import { writeFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -33,14 +25,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 // settlemaker never imports more than 4 approaches in the worked example and
-// decays extras (RANK_DECAY 0.55/rank), so 4 is the cap gen-ruravaqan.mjs
-// implied. Sorted by bearing first so the cut is deterministic.
+// decays extras (RANK_DECAY 0.55/rank), so 4 is the cap. Sorted by bearing
+// first so the cut is deterministic.
 const MAX_ROAD_BEARINGS = 4;
 
 // Trail neighbors at or above this population (thousands) get class 'town',
-// smaller ones 'local'. Roads and searoutes are 'main'. This mirrors the
-// hand classes in gen-ruravaqan.mjs (Natabashe main, Mabashad town, Chogzi
-// local) and feeds settlemaker's road-width hierarchy.
+// smaller ones 'local'. Roads and searoutes are 'main'. Feeds settlemaker's
+// road-width hierarchy.
 const TOWN_CLASS_POP = 10;
 
 const usage = (code) => {
@@ -61,8 +52,8 @@ const usage = (code) => {
 
 // --- world dump loading (mirrors src/import_fmg.py's signature approach) ---
 
-// FMG lists open with a literal `0` placeholder at index 0; callers index by
-// id, so lists are kept RAW here (index == id) and filtered at lookup.
+// placeholder `0` entries are dropped at load; order is preserved, so
+// index == id for the survivors.
 const dicts = (list) => (Array.isArray(list) ? list.filter((el) => el && typeof el === "object") : []);
 
 async function loadWorld(path) {
@@ -82,7 +73,6 @@ async function loadWorld(path) {
       features: dicts(data.pack?.features),
       // raw cell arrays (poles `p`, water type `t`, feature `f`, biome id)
       cells: data.pack?.cells ?? null,
-      rawBurgs: data.pack?.burgs,
     });
     return world;
   }
@@ -172,8 +162,8 @@ function findBurg(burgs, arg) {
 // --- derivations ---
 
 /** Compass bearing from `a` to `b` in degrees 0..359; FMG maps are y-down,
- * so north is -y: bearing = atan2(dx, -dy). Same formula the original
- * script's hand-computed values used (Mish 263°, Natabashe 83°). */
+ * so north is -y: bearing = atan2(dx, -dy). Matches the removed
+ * hand-computed script's values (Mish 263°, Natabashe 83°). */
 function bearingDeg(fromX, fromY, toX, toY) {
   return Math.round(((Math.atan2(toX - fromX, -(toY - fromY)) * 180) / Math.PI + 360) % 360) % 360;
 }
@@ -198,8 +188,7 @@ const routeId = (route) => {
  * to the burg's own x/y), so on a freshly generated world it reduces to plain
  * route-graph adjacency — and it still finds approaches when the burg sits
  * mid-route rather than at a route end (coastal road chains, searoutes).
- */
-/**
+ *
  * @returns {Array<object>} settlemaker road-bearing entries enriched with
  *   `neighbor`/`neighborPop` provenance fields (stripped before the
  *   generateSettlement call, kept for params.yaml).
@@ -398,9 +387,8 @@ const record = {
 };
 
 const rawSeed = String(opt.seed !== undefined ? opt.seed : world.seed ?? "").trim();
-// Numeric seeds pass through; text seeds (world names like "my-world") hash
-// to a stable number — Number() gives NaN, and the same world must always
-// build the same city, so the derivation is deterministic, never random.
+// Numeric seeds pass through (mod 1e6); text seeds FNV-1a-hash so the same
+// world always builds the same city.
 const seedFromText = (s) => {
   // FNV-1a 32-bit over UTF-16 code units: deterministic per machine and
   // per world, which is the requirement — but NOT byte-canonical FNV, so a

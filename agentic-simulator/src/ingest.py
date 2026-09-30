@@ -28,7 +28,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import effects
-from store import ROOT, STATE_FILE, place_words
+from store import ROOT, STATE_FILE, place_words, split_argv
 from store import load_state as _store_load
 from store import save_state as _store_save
 
@@ -162,20 +162,8 @@ def save_state(state, path):
 
 
 def main(argv):
-    state_path = STATE_FILE
-    rest = []
-    i = 0
-    while i < len(argv):
-        if argv[i] == "--state" and i + 1 < len(argv):
-            state_path = argv[i + 1]
-            i += 2
-            continue
-        if argv[i].startswith("--state="):
-            state_path = argv[i].split("=", 1)[1]
-            i += 1
-            continue
-        rest.append(argv[i])
-        i += 1
+    values, rest = split_argv(argv, "--state")
+    state_path = values.get("--state", STATE_FILE)
     if "--apply" in rest:
         i = rest.index("--apply")
         paths = rest[:i] + rest[i + 1:]

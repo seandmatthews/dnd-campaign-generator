@@ -9,6 +9,7 @@ import contextlib
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import field_validator
 
 import canon
 import jobs
@@ -28,13 +29,63 @@ def require_campaign(name: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@contextlib.contextmanager
+def store_errors(*default_422, conflict=(), not_found=()):
+    """Convert listed store exception types to HTTPExceptions with the
+    mapped status and str(e) as the detail: not_found -> 404, conflict ->
+    409, everything in default_422 -> 422. Checked in that order, so a
+    subclass listed in not_found/conflict wins over its parent in
+    default_422. HTTPException passes through untouched."""
+    try:
+        yield
+    except not_found as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except conflict as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except default_422 as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+def finalize_publication(name: str, transaction_id: str | None,
+                         message: str) -> dict:
+    """The canonical post-publication snapshot: commit the campaign-wide
+    git point and hand it to the transaction that just landed. Returns the
+    snapshot result for responses that surface it."""
+    snap = canon.snapshot_result(name, message)
+    publication.after_snapshot(name, transaction_id, snap)
+    return snap
+
+
+def publication_500(op: str, e: Exception) -> HTTPException:
+    """The mid-flight-publication 500: the staged transaction is kept on
+    disk and boot recovery rolls it forward, so the message says that
+    instead of reading as a bare failure."""
+    return HTTPException(
+        status_code=500,
+        detail=f"the {op} could not be published ({e}) — the staged "
+               "transaction is kept and will be recovered automatically "
+               "when the studio restarts")
+
+
+def strict_confirm(reason: str):
+    """The `confirm` field validator for expensive-action bodies: the value
+    must be exactly true (StrictBool already refuses the string "true"),
+    and the 422 must name WHY this action is gated. Assign in a model body:
+    `confirm: StrictBool` + `_confirm_is_true = strict_confirm("...")`."""
+    @field_validator("confirm")
+    @classmethod
+    def _confirm_is_true(cls, v):
+        if v is not True:
+            raise ValueError(f"confirm must be exactly true — {reason}")
+        return v
+    return _confirm_is_true
+
+
 def ensure_publishable_409(name: str) -> None:
     """Refuse publication-path writers while the campaign has unresolved
     recovery conflicts (409 with the affected files + how to resolve)."""
-    try:
+    with store_errors(conflict=(publication.PublicationConflictError,)):
         publication.ensure_publishable(name)
-    except publication.PublicationConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
 
 
 def ensure_entities_migrated(name: str):

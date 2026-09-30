@@ -12,7 +12,6 @@ transactional. They never accept arbitrary file paths — a mutation names
 a source kind, source record id, relationship, and expected revision.
 """
 
-import canon
 import places
 import publication
 import spine
@@ -22,20 +21,21 @@ from pydantic import BaseModel
 from routers.common import (
     campaign_lock_nowait,
     ensure_publishable_409,
+    finalize_publication,
     require_campaign,
+    store_errors,
 )
 
 router = APIRouter()
 
-
-def _map_place_errors(e: places.PlaceError) -> HTTPException:
-    """PlaceConflict (stale revision / identity) -> 409, PlaceNotFound ->
-    404, every other PlaceError -> 422."""
-    if isinstance(e, places.PlaceConflict):
-        return HTTPException(status_code=409, detail=str(e))
-    if isinstance(e, places.PlaceNotFound):
-        return HTTPException(status_code=404, detail=str(e))
-    return HTTPException(status_code=422, detail=str(e))
+# the shared error mapping for every place read and write below: place
+# store + spine errors -> 422, PlaceConflict (stale revision / identity)
+# -> 409, PlaceNotFound -> 404 (exception tuples for store_errors — the
+# context manager itself is single-use, so each route builds its own)
+_PLACE_422 = (places.PlaceError, spine.CampaignError)
+_PLACE_CONFLICT = (places.PlaceConflict,
+                   publication.PublicationConflictError)
+_PLACE_NOT_FOUND = (places.PlaceNotFound,)
 
 
 @router.get("/api/campaign/{name}/places")
@@ -51,10 +51,9 @@ def get_place(name: str, place_id: str):
     """The consolidated DM view: identity, maps, people, factions,
     projects, recent events, facts, pending, forecasts, mentions."""
     require_campaign(name)
-    try:
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND):
         return places.place_view(name, place_id)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
 
 
 @router.get("/api/campaign/{name}/places/{place_id}/events")
@@ -69,13 +68,12 @@ def get_place_events(name: str, place_id: str, window: str = "recent",
                             detail="window must be 'recent' or 'all'")
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    try:
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND):
         view = places.place_view(name, place_id, window=window,
                                  include_descendants=include_descendants,
                                  event_limit=limit, event_offset=offset,
                                  mention_limit=1)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
     return {"place": view["place"], "events": view["events"],
             "counts": view["counts"]["events"]}
 
@@ -88,11 +86,10 @@ def get_place_mentions(name: str, place_id: str,
     require_campaign(name)
     limit = max(1, min(limit, 200))
     offset = max(0, offset)
-    try:
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND):
         view = places.place_view(name, place_id, mention_limit=limit,
                                  mention_offset=offset, event_limit=1)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
     return {"place": view["place"], "mentions": view["mentions"],
             "counts": view["counts"]["mentions"]}
 
@@ -108,31 +105,22 @@ class LinkBody(BaseModel):
 @router.post("/api/campaign/{name}/places/{place_id}/link")
 def post_link(name: str, place_id: str, body: LinkBody):
     """The one-time 'Link place records' action: persist the place_id onto
-    the lore page (minting a durable id for lore-only records; adopting
-    the simulation's id when one exists, so no state rewrite is needed).
-    One file, one transaction; the page is re-read under the campaign lock
-    and merged, and the revision read then is the publish baseline — an
-    external edit mid-flight is a 409, never a silent overwrite. Passing
-    expected_page_revision extends that guarantee to edits since the DM's
-    view was rendered."""
+    the lore page. The page is re-read under the campaign lock and the
+    revision read then is the publish baseline — an external edit mid-flight
+    is a 409, never a silent overwrite; expected_page_revision extends that
+    guarantee to edits since the DM's view was rendered."""
     require_campaign(name)
-    try:
-        with campaign_lock_nowait(name, "linking place records"):
-            ensure_publishable_409(name)
-            result = places.link(name, place_id, page=body.page,
-                                 expected_page_revision=
-                                 body.expected_page_revision)
-            if result.get("transaction"):
-                snap = canon.snapshot_result(
-                    name, f"campaign/{name}: link place "
-                          f"{result.get('linked')}")
-                publication.after_snapshot(name, result["transaction"], snap)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
-    except spine.CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except publication.PublicationConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND), \
+            campaign_lock_nowait(name, "linking place records"):
+        ensure_publishable_409(name)
+        result = places.link(name, place_id, page=body.page,
+                             expected_page_revision=
+                             body.expected_page_revision)
+        if result.get("transaction"):
+            finalize_publication(
+                name, result["transaction"],
+                f"campaign/{name}: link place {result.get('linked')}")
     return result
 
 
@@ -150,25 +138,20 @@ class PatchBody(BaseModel):
 @router.patch("/api/campaign/{name}/places/{place_id}")
 def patch_place(name: str, place_id: str, body: PatchBody):
     require_campaign(name)
-    try:
-        with campaign_lock_nowait(name, "updating the place"):
-            ensure_publishable_409(name)
-            result = places.patch(
-                name, place_id, name_=body.name,
-                parent_place_id=body.parent_place_id, aliases=body.aliases,
-                preferred_map=body.preferred_map,
-                expected_page_revision=body.expected_page_revision)
-            if result.get("transaction"):
-                snap = canon.snapshot_result(
-                    name, f"campaign/{name}: patch place {place_id} "
-                          f"({', '.join(result.get('patched') or [])})")
-                publication.after_snapshot(name, result["transaction"], snap)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
-    except publication.PublicationConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except spine.CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND), \
+            campaign_lock_nowait(name, "updating the place"):
+        ensure_publishable_409(name)
+        result = places.patch(
+            name, place_id, name_=body.name,
+            parent_place_id=body.parent_place_id, aliases=body.aliases,
+            preferred_map=body.preferred_map,
+            expected_page_revision=body.expected_page_revision)
+        if result.get("transaction"):
+            finalize_publication(
+                name, result["transaction"],
+                f"campaign/{name}: patch place {place_id} "
+                f"({', '.join(result.get('patched') or [])})")
     return result
 
 
@@ -186,22 +169,17 @@ class AssociationBody(BaseModel):
 @router.post("/api/campaign/{name}/places/{place_id}/associations")
 def post_association(name: str, place_id: str, body: AssociationBody):
     require_campaign(name)
-    try:
-        with campaign_lock_nowait(name, "updating place associations"):
-            ensure_publishable_409(name)
-            result = places.associate(
-                name, place_id, source_kind=body.source_kind,
-                source_id=body.source_id, relationship=body.relationship,
-                add=body.add, expected_revision=body.expected_revision)
-            if result.get("transaction"):
-                snap = canon.snapshot_result(
-                    name, f"campaign/{name}: associate {body.source_kind} "
-                          f"{body.source_id} -> {place_id}")
-                publication.after_snapshot(name, result["transaction"], snap)
-    except places.PlaceError as e:
-        raise _map_place_errors(e)
-    except spine.CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except publication.PublicationConflictError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+    with store_errors(*_PLACE_422, conflict=_PLACE_CONFLICT,
+                    not_found=_PLACE_NOT_FOUND), \
+            campaign_lock_nowait(name, "updating place associations"):
+        ensure_publishable_409(name)
+        result = places.associate(
+            name, place_id, source_kind=body.source_kind,
+            source_id=body.source_id, relationship=body.relationship,
+            add=body.add, expected_revision=body.expected_revision)
+        if result.get("transaction"):
+            finalize_publication(
+                name, result["transaction"],
+                f"campaign/{name}: associate {body.source_kind} "
+                f"{body.source_id} -> {place_id}")
     return result

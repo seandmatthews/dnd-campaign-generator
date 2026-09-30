@@ -60,16 +60,14 @@ import rumors
 import scheduler
 import consistency
 import resolve
-from store import STATE_FILE, load_state, save_state, validate_state, places_of
+from store import RESOURCE_LEVELS, STATE_FILE, load_state, save_state, \
+    validate_state, places_of
 from why import why_cli
 from views import faction_view
-from resolve import resolve_tick
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TEMPLATE_FILE = ROOT / "agents" / "faction.md"
 CHRONICLE_DIR = ROOT / "chronicle"
-
-_LEVELS = ("none", "low", "medium", "high")
 
 
 class WeekAborted(RuntimeError):
@@ -83,13 +81,14 @@ def step_resource(resources, committed, direction):
     direction is +1 / -1. Commit nothing, nothing steps."""
     staked = [
         k for k, v in (committed or {}).items()
-        if k in resources and v in _LEVELS and v != "none"
+        if k in resources and v in RESOURCE_LEVELS and v != "none"
     ]
     if not staked:
         return
-    strongest = max(staked, key=lambda k: _LEVELS.index(committed[k]))
-    i = _LEVELS.index(resources[strongest])
-    resources[strongest] = _LEVELS[max(0, min(len(_LEVELS) - 1, i + direction))]
+    strongest = max(staked, key=lambda k: RESOURCE_LEVELS.index(committed[k]))
+    i = RESOURCE_LEVELS.index(resources[strongest])
+    resources[strongest] = RESOURCE_LEVELS[
+        max(0, min(len(RESOURCE_LEVELS) - 1, i + direction))]
 
 
 def event_record(state, faction_id, outcome):
@@ -168,10 +167,8 @@ def apply_outcomes(state, outcomes, proposals):
 
 
 def run_live(state):
-    # fail before anything expensive: a hand-edited or partial state used to
-    # crash AFTER the faction calls' spend (apply_mechanical's events
-    # append, write_chronicle's city/faction reads) — validate_state names
-    # the missing piece instead
+    # a hand-edited or partial state used to crash AFTER the faction calls'
+    # spend; validate_state names the missing piece before anything expensive
     try:
         validate_state(state)
     except ValueError as e:
@@ -200,12 +197,10 @@ def run_live(state):
     seed = random.SystemRandom().getrandbits(31)
     resolve.set_rng(seed)
     state.setdefault("meta", {}).setdefault("rng_seeds", {})[str(week)] = seed
-    # explicit per-run call ceiling, checked between calls: LLM_MAX_CALLS
-    # when set, else a default that scales with the roster — a week is ~2
-    # calls per faction (proposal + one validation retry) plus narration,
-    # and every metered POST attempt spends the ceiling, retries included,
-    # so the default leaves one spare attempt-set per faction (the old flat
-    # 24 exhausted itself mid-week on a large roster)
+    # Per-run ceiling: LLM_MAX_CALLS, else a roster-scaled default (~2
+    # calls/faction + narration; every metered POST spends it, retries
+    # included, leaving one spare attempt-set per faction). The old flat 24
+    # exhausted itself mid-week on a large roster.
     llm.begin_run(limit=llm.env_limit()
                   or max(24, 3 * len(state["factions"]) + 6))
 
@@ -223,12 +218,11 @@ def run_live(state):
         try:
             p = llm.propose(view, template, faction["id"])
         except llm.BudgetExceeded:
-            # exhaustion is not a dead agent: swallowing it would save an
-            # all-holds week as canon (exit 0, clock advanced) — a spent-out
-            # run indistinguishable from a quiet one. Abort instead: nothing
-            # has been written yet (clock bump and rumor spread live only in
-            # memory), and the non-zero exit keeps the studio from staging
-            # the half-run week as a proposal.
+            # Swallowing budget exhaustion would save an all-holds week as
+            # canon (exit 0, clock advanced — indistinguishable from a quiet
+            # week). Abort instead: nothing is written yet (clock bump and
+            # rumor spread are memory-only), and the non-zero exit keeps the
+            # studio from staging the half-run week.
             usage = llm.run_usage()
             raise WeekAborted(
                 f"per-run LLM ceiling reached ({usage['calls']} calls, "
@@ -241,10 +235,8 @@ def run_live(state):
             continue
         for w in consistency.check(p, state, faction["id"], last_week=prev_week):
             print(f"  [consistency] {faction['id']}: {w['kind']} — {w['detail']}")
-        # project actions are validated against the pre-week state BEFORE
-        # resolution (llm.propose checked the faction's view first; this is
-        # the state-truth backstop). An invalid project action is refused —
-        # the faction holds — never silently resolved as an ordinary one.
+        # State-truth backstop (projects.py's contract): an invalid project
+        # action is refused — the faction holds, never resolved as ordinary.
         updates, pfindings = projects.validate_action(p, state, faction["id"])
         if pfindings:
             print(f"  {faction['id']:<14} HOLDS (project action refused: "
@@ -271,12 +263,11 @@ def run_live(state):
     # event ledger, the replay trail, and the project history join on it
     for p in proposals:
         p.setdefault("action_id", f"act-{week:04d}-{p['actor']}")
-    # the resolver's exact input, frozen before it (or apply_outcomes) can
-    # touch the live object — the replay stores this so a week can be
-    # re-resolved AFTER the state has moved on (the next bug the old
-    # hash-only scheme had: verification failed immediately post-week)
+    # Freeze the resolver's exact input before mutation so the week can be
+    # re-resolved after the state has moved on (the old hash-only scheme
+    # failed verification immediately post-week).
     replay_input = copy.deepcopy(state)
-    outcomes = resolve_tick(proposals, state)
+    outcomes = resolve.resolve_tick(proposals, state)
     for o in outcomes:
         kind = "defensive" if o.get("defensive") else \
                "CONTESTED WIN" if o["contested"] and o["success"] else \
@@ -290,11 +281,9 @@ def run_live(state):
 
     state["rumors"] = state.get("rumors", []) + rumors.spawn_from_events(state)
 
-    # write order: the state is the canon commit point — save it first, then
-    # the replay trail, then the chronicle prose. A crash after the state
-    # write loses only derived artifacts (a re-run re-copies canon and
-    # re-proposes); the old order (chronicle first) could leave a chronicle
-    # for a week the state never recorded.
+    # State is the canon commit point: save it first, then replay trail,
+    # then chronicle — a crash after loses only derived artifacts. The old
+    # order could leave a chronicle for a week the state never recorded.
     save_state(state)
     save_replay(week, seed, proposals, outcomes, base_state_sha, replay_input,
                 projects_report=project_report)
@@ -395,7 +384,7 @@ def replay_verify(path):
                         "resolved against a state that no longer exists")
             state = load_state(STATE_FILE)
         resolve.set_rng(doc["seed"])
-        recomputed = resolve_tick(doc["proposals"], state)
+        recomputed = resolve.resolve_tick(doc["proposals"], state)
     except (OSError, yaml.YAMLError, KeyError, ValueError, TypeError) as e:
         return False, f"replay file is unreadable or malformed: {e}"
     if recomputed != doc["outcomes"]:
@@ -412,7 +401,7 @@ def replay_verify(path):
     try:
         pstate = copy.deepcopy(state)
         resolve.set_rng(doc["seed"])
-        poutcomes = resolve_tick(doc["proposals"], pstate)
+        poutcomes = resolve.resolve_tick(doc["proposals"], pstate)
         apply_outcomes(pstate, poutcomes, doc["proposals"])
         reproject = projects.apply_week(pstate, doc["proposals"], poutcomes)
     except (KeyError, ValueError, TypeError) as e:
@@ -468,9 +457,8 @@ def write_chronicle(state, week, outcomes, held=(), projects_report=None):
     if match:
         title = match.group(1).strip()
         prose = prose[:match.start()].rstrip()
-    # cap the slug: the model was asked for 3-6 words but a disobedient
-    # 150-char title line must not push the filename past Windows MAX_PATH
-    # and kill the week AFTER its spend (spine caps entity stems at 80 too)
+    # a disobedient 150-char title must not push the filename past Windows
+    # MAX_PATH after the spend (the spine caps entity stems at 80 too)
     slug = re.sub(r"[^a-z0-9]+", "-", (title or "the week").lower()) \
         .strip("-")[:80].rstrip("-")
     out = _free_chronicle_path(week, slug or "untitled")

@@ -235,11 +235,10 @@ app.mount("/campaign-file", _NoDotGit(directory=str(campaigns_root)),
 
 
 class _FreshStatic(StaticFiles):
-    """StaticFiles + `Cache-Control: no-cache`: the browser revalidates the
-    ETag on every load (304 when unchanged, so it stays cheap). Plain
-    StaticFiles sends only Last-Modified, and a page served minutes after an
-    edit heuristic-caches the OLD file for tens of minutes — a fixed bug
-    'still reproduces' because the page never fetched the fix."""
+    """StaticFiles + Cache-Control: no-cache, so the browser revalidates the
+    ETag every load. Plain StaticFiles heuristic-caches the OLD file for tens
+    of minutes — a fixed bug 'still reproduces' because the page never
+    fetched the fix."""
 
     def file_response(self, *args, **kwargs):
         resp = super().file_response(*args, **kwargs)

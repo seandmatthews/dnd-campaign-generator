@@ -32,10 +32,6 @@ import sessions as session_store
 import spine
 
 
-def _lock(name: str):
-    return spine.campaign_lock(name)
-
-
 def cmd_import(args) -> int:
     if args.notes_file:
         notes = pathlib.Path(args.notes_file).read_text(encoding="utf-8")
@@ -44,7 +40,7 @@ def cmd_import(args) -> int:
     else:
         print("error: give --notes-file PATH or --notes TEXT", file=sys.stderr)
         return 2
-    with _lock(args.campaign):
+    with spine.campaign_lock(args.campaign):
         doc = session_store.create(
             args.campaign, title=args.title, notes=notes,
             event_week=args.week, place_ids=args.place or [],
@@ -68,10 +64,8 @@ def cmd_list(args) -> int:
 
 
 def cmd_show(args) -> int:
-    import yaml
     detail = session_store.session_detail(args.campaign, args.session_id)
-    print(yaml.safe_dump(detail, sort_keys=False, allow_unicode=True,
-                         width=100))
+    print(spine.dump_yaml(detail))
     return 0
 
 
@@ -87,7 +81,7 @@ def cmd_extract(args) -> int:
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    with _lock(args.campaign):
+    with spine.campaign_lock(args.campaign):
         result = session_store.run_extraction(
             args.campaign, args.session_id,
             log=lambda line: print(f"[extract] {line}"))

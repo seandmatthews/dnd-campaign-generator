@@ -1145,8 +1145,7 @@ def associate(name: str, place_id: str, *, source_kind: str,
                 else [p for p in current if p != pid]
             record = f"faction:{source_id}"
         result = _locked_publish(
-            name, [{"path": rel, "text": yaml.safe_dump(
-                state, sort_keys=False, allow_unicode=True, width=100)}],
+            name, [{"path": rel, "text": spine.dump_yaml(state)}],
             operation=f"{relationship} <- {pid} ({record})",
             base_revisions={rel: base_revision})
         return {"source": rel, "record": record,
@@ -1165,8 +1164,7 @@ def associate(name: str, place_id: str, *, source_kind: str,
         base_revision = expected_revision or publication.file_revision(
             d / Path(*rel.split("/")))
         result = _locked_publish(
-            name, [{"path": rel, "text": yaml.safe_dump(
-                doc, sort_keys=False, allow_unicode=True, width=100)}],
+            name, [{"path": rel, "text": spine.dump_yaml(doc)}],
             operation=f"fact {source_id} about <- {pid}",
             base_revisions={rel: base_revision})
         return {"source": rel, "record_id": source_id,
@@ -1200,8 +1198,8 @@ def associate(name: str, place_id: str, *, source_kind: str,
         if isinstance(params, dict):
             params["place_id"] = pid if add else None
             params = {k: v for k, v in params.items() if v is not None}
-            writes.append({"path": params_rel, "text": yaml.safe_dump(
-                params, sort_keys=False, allow_unicode=True, width=100)})
+            writes.append({"path": params_rel,
+                           "text": spine.dump_yaml(params)})
             base[params_rel] = expected_revision or \
                 publication.file_revision(params_path)
     result = _locked_publish(

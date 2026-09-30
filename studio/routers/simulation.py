@@ -50,7 +50,11 @@ from pydantic import BaseModel, StrictBool, field_validator
 from routers.common import (
     campaign_lock_nowait,
     ensure_publishable_409,
+    finalize_publication,
+    publication_500,
     require_campaign,
+    store_errors,
+    strict_confirm,
     submit_campaign_job,
 )
 
@@ -98,14 +102,9 @@ _CLAUSE_PUNCT_RE = re.compile(r"[—–,;:.!?()\[\]]")
 class WeekBody(BaseModel):
     # StrictBool: the string "true" must not pass the expensive-button gate
     confirm: StrictBool
-
-    @field_validator("confirm")
-    @classmethod
-    def _confirm_is_true(cls, v):
-        if v is not True:
-            raise ValueError("confirm must be exactly true — this runs a real "
-                             "week: it spends API credits and advances the canon clock")
-        return v
+    _confirm_is_true = strict_confirm(
+        "this runs a real week: it spends API credits and advances the "
+        "canon clock")
 
 
 class ForecastBody(BaseModel):
@@ -114,14 +113,8 @@ class ForecastBody(BaseModel):
     occupying the pending-proposal slot. N× a week's API spend."""
     confirm: StrictBool
     weeks: int = 2
-
-    @field_validator("confirm")
-    @classmethod
-    def _confirm_is_true(cls, v):
-        if v is not True:
-            raise ValueError("confirm must be exactly true — this runs a "
-                             "real forecast: it spends N weeks of API credits")
-        return v
+    _confirm_is_true = strict_confirm(
+        "this runs a real forecast: it spends N weeks of API credits")
 
     @field_validator("weeks")
     @classmethod
@@ -409,12 +402,9 @@ def post_create_state(name: str, body: CreateStateBody):
     doc["rumors"] = []
 
     replaced = state_file.is_file()
-    # Hold the campaign lock across write + snapshot: without it, a week job
-    # finishing for this campaign would copy its (premise-derived) state back
-    # over the user's brand-new sandbox and commit on top — the replace would
-    # be silently lost to history. Fast-fail, not blocking: it's one file
-    # write plus a git commit, but a week run holds this lock for its whole
-    # 30-minute ceiling and a blocked create reads as a hung page.
+    # Lock across write+snapshot: a concurrent week job would copy its
+    # premise-derived state back over the new sandbox and lose the replace.
+    # Fast-fail — a blocked create reads as a hung page.
     with campaign_lock_nowait(name, "creating the simulation sandbox"):
         spine.write_state(name, doc)
         snap = canon.snapshot_result(
@@ -462,10 +452,8 @@ def get_view(name: str, faction_id: str):
     if faction_id not in ids:
         raise HTTPException(status_code=404,
                             detail=f"unknown faction: {faction_id}")
-    # views.py reads ONE file, and its --state flag points it anywhere:
-    # hand it the campaign's own canon state directly. No copy-in means no
-    # shared-engine-home critical section — a view works for any campaign
-    # while any week runs (canon is untouched until a proposal is accepted).
+    # no copy-in: views.py reads the campaign's own state via --state (see
+    # module note above the get_view routes)
     try:
         rc, lines = engines.run_py(
             engines.AGENTIC_SIMULATOR, "src/views.py", faction_id,
@@ -535,18 +523,12 @@ def post_week(name: str, body: WeekBody):
         write_week_flag(name)
         log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
-        # the engine home is one shared scratch file across campaigns: the
-        # whole copy-in -> tick sequence is a critical section
-        # (engines.ENGINE_LOCK). Lock order: campaign lock (held by this job)
-        # outside, engine lock inside — views/why take only the engine lock.
+        # Lock order: campaign lock (held by this job) outside, engine
+        # lock inside — views/why take only the engine lock.
         with _engine_lock_logged(log, "a week run or forecast"):
             return _run_week_proposal(name, d, log)
 
     return submit_campaign_job("sim-week", name, job)
-
-
-def _clock_week(doc: dict):
-    return ((doc.get("meta") or {}).get("clock") or {}).get("week")
 
 
 def _state_snapshot(state_path: Path) -> tuple[str, str]:
@@ -565,7 +547,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
     bundle the DM reviews. Flag clearing happens however the block exits."""
     try:
         base_doc = spine.load_state(name)
-        base_week = _clock_week(base_doc)
+        base_week = spine.state_clock_week(base_doc)
         # fail BEFORE any spend: a hand-edited float week (week: 4.0) would
         # otherwise crash tick.py mid-run after the faction calls, and re-
         # crash on every retry — each attempt a full week's API cost
@@ -601,7 +583,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
             for ln in lines[-10:]:  # make sure the tail shows the failure
                 log(ln)
             raise RuntimeError("tick --live failed rc=%s: %s"
-                               % (rc, " | ".join(lines[-10:])))
+                               % (rc, engines.tail_detail(lines, 10)))
 
         engine_state = engines.engine_state_path()
         try:
@@ -612,7 +594,7 @@ def _run_week_proposal(name: str, d: Path, log) -> dict:
         if not isinstance(after_doc, dict):
             raise RuntimeError("the engine's state does not parse as a "
                                "mapping — no proposal staged")
-        proposed_week = _clock_week(after_doc)
+        proposed_week = spine.state_clock_week(after_doc)
 
         # invalid candidates never become approvable bundles (a float clock
         # would slip the != check — 5.0 == 5 — and poison the manifest)
@@ -711,7 +693,7 @@ def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
     canon-able, so there is no accept — the DM reads and discards."""
     try:
         base_doc = spine.load_state(name)
-        base_week = _clock_week(base_doc)
+        base_week = spine.state_clock_week(base_doc)
         # fail BEFORE any spend (same rule as the week flow: a hand-edited
         # float week would otherwise burn the first tick then re-crash)
         if not isinstance(base_week, int) or isinstance(base_week, bool):
@@ -737,7 +719,7 @@ def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
                     log(ln)
                 raise RuntimeError(
                     "forecast week %d failed rc=%s: %s"
-                    % (base_week + i, rc, " | ".join(lines[-10:])))
+                    % (base_week + i, rc, engines.tail_detail(lines, 10)))
             try:
                 after_text = engines.engine_state_path().read_text(
                     encoding="utf-8")
@@ -748,12 +730,12 @@ def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
                 raise RuntimeError(
                     "the engine's state does not parse as a mapping — "
                     "forecast aborted")
-            week = _clock_week(after_doc)
+            week = spine.state_clock_week(after_doc)
             if not isinstance(week, int) or isinstance(week, bool) \
-                    or week != _clock_week(prev_doc) + 1:
+                    or week != spine.state_clock_week(prev_doc) + 1:
                 raise RuntimeError(
                     "the engine did not advance exactly one week "
-                    f"({_clock_week(prev_doc)} -> {week}) — forecast aborted")
+                    f"({spine.state_clock_week(prev_doc)} -> {week}) — forecast aborted")
             new_files = sorted(
                 {p.name for p in chronicle_dir.glob("*.md")} - before) \
                 if chronicle_dir.is_dir() else []
@@ -1001,11 +983,9 @@ def get_proposal(name: str):
             "created": pending.get("created"),
             "run_record": pending.get("run_record") or {},
             "base_revisions": pending.get("base_revisions") or {},
-            # ADVISORY, deliberately not enforced at accept (unlike the
-            # review flow's fingerprints): a week publishes state/chronicle/
-            # timeline, and lore-page churn between generation and accept
-            # does not make the week stale. The field exists so the UI can
-            # show what the run read.
+            # advisory, deliberately not enforced at accept (unlike review
+            # fingerprints): lore-page churn does not stale a week. UI
+            # display only.
             "input_set_revisions": pending.get("input_set_revisions") or {},
         },
         "diff": bundle["diff"],
@@ -1085,9 +1065,9 @@ def accept_proposal(name: str, pid: str):
                                  decided_note="published via crash recovery")
             if manifest.get("kind") == "session_changes":
                 sessions.on_accepted(name, manifest, bundle)
-            snap = canon.snapshot_result(name, _accept_message(name, manifest,
-                                                               None))
-            publication.after_snapshot(name, prior_tx["transaction"], snap)
+            snap = finalize_publication(
+                name, prior_tx["transaction"],
+                _accept_message(name, manifest, None))
             return {**result, "snapshot": snap, "idempotent": True}
         d = spine.campaign_dir(name)
 
@@ -1108,9 +1088,7 @@ def accept_proposal(name: str, pid: str):
                 if extra.get(key_) is not None:
                     writes.append({
                         "path": rel,
-                        "text": yaml.safe_dump(
-                            extra[key_], sort_keys=False, allow_unicode=True,
-                            width=100),
+                        "text": spine.dump_yaml(extra[key_]),
                     })
             decision = extra.get("decision") or {}
             writes.append({
@@ -1123,13 +1101,10 @@ def accept_proposal(name: str, pid: str):
             chron = None
         else:
             entries = bundle["entries"]
-            try:
+            with store_errors(timeline.TimelineBadFile,
+                      conflict=(timeline.TimelineConflict,)):
                 tdoc, tentries = timeline.load(d)
                 new_timeline = timeline.append(tdoc, tentries, entries)
-            except timeline.TimelineConflict as e:
-                raise HTTPException(status_code=409, detail=str(e))
-            except timeline.TimelineBadFile as e:
-                raise HTTPException(status_code=422, detail=str(e))
             writes.append({
                 "path": "lore/timeline.yaml",
                 "text": timeline.dump(new_timeline),
@@ -1154,11 +1129,7 @@ def accept_proposal(name: str, pid: str):
         except publication.PublicationConflictError as e:
             raise HTTPException(status_code=409, detail=str(e))
         except Exception as e:  # noqa: BLE001 — mid-flight failure
-            raise HTTPException(
-                status_code=500,
-                detail=f"the proposal could not be published ({e}) — the "
-                       f"staged transaction is kept and will be recovered "
-                       f"automatically when the studio restarts")
+            raise publication_500("proposal", e)
 
         result = _accept_result(manifest, bundle, pub["transaction"])
         if pub["state"] == "noop":
@@ -1188,8 +1159,7 @@ def accept_proposal(name: str, pid: str):
                     _log.info("linked lore names in chronicle/%s", fn)
             except Exception as e:  # noqa: BLE001 — advisory, never blocking
                 _log.warning("chronicle linkify skipped for %s: %s", fn, e)
-        snap = canon.snapshot_result(name, msg)
-        publication.after_snapshot(name, pub["transaction"], snap)
+        snap = finalize_publication(name, pub["transaction"], msg)
         result["snapshot"] = snap
         return result
 
@@ -1271,14 +1241,12 @@ def discard_proposal(name: str, pid: str):
     the bundle stays on disk as an audit receipt. Rejected content is never
     fed into future prompts."""
     require_campaign(name)
-    with campaign_lock_nowait(name, "discarding the proposal"):
-        try:
-            manifest = proposals.set_status(
-                name, pid, "discarded",
-                decided_note="discarded by the DM; no canon "
-                             "change ever happened")
-        except proposals.ProposalError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+    with campaign_lock_nowait(name, "discarding the proposal"), \
+            store_errors(conflict=(proposals.ProposalError,)):
+        manifest = proposals.set_status(
+            name, pid, "discarded",
+            decided_note="discarded by the DM; no canon "
+                         "change ever happened")
         if manifest.get("kind") == "session_changes":
             # reopen the prepared suggestions so the excluded/rest of the
             # session can be prepared again against a new base
@@ -1352,16 +1320,12 @@ def post_session(name: str, body: SessionBody):
     tmp_dir = Path(tempfile.mkdtemp(prefix="studio-session-"))
     try:
         record_path = tmp_dir / "session.yaml"
-        record_path.write_text(
-            yaml.safe_dump(record, sort_keys=False, allow_unicode=True,
-                           width=100), encoding="utf-8")
+        record_path.write_text(spine.dump_yaml(record), encoding="utf-8")
 
-        # capture the base state and its revision TOGETHER under the lock:
-        # the after-image must be judged against the exact bytes the engine
-        # applied it to. The old order read the revision AFTER the engine
-        # ran — a proposal accept landing in between pinned a pre-accept
-        # after-image to post-accept revisions, so the accept-time staleness
-        # check passed and the publish silently overwrote the accepted week.
+        # capture base + revision TOGETHER under the lock — the after-image
+        # is judged against these exact bytes. Reading the revision after the
+        # engine ran let an accept land in between and the publish silently
+        # overwrite the accepted week.
         with campaign_lock_nowait(name, "recording the session"):
             state_path = d / "simulation" / "state.yaml"
             state_text, base_revision = _state_snapshot(state_path)
@@ -1421,7 +1385,7 @@ def post_session(name: str, body: SessionBody):
                        "nothing was staged")
         pid = proposals.create(
             name, kind="session_effects",
-            base_week=_clock_week(base_doc), proposed_week=_clock_week(base_doc),
+            base_week=spine.state_clock_week(base_doc), proposed_week=spine.state_clock_week(base_doc),
             base_revisions=base_revisions, input_set_revisions={},
             artifacts={"state": after_text, "chronicles": {}, "entries": []},
             run_record={"kind": "session", "source": source,
@@ -1539,9 +1503,8 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
     import tempfile
     tmp_dir = Path(tempfile.mkdtemp(prefix="studio-projects-"))
     try:
-        # capture the base state and its revision TOGETHER under the lock
-        # (same rule as the session flow: the after-image must be judged
-        # against the exact bytes the engine applied it to)
+        # capture base + revision together under the lock (same rule as the
+        # session flow, line ~1359)
         with campaign_lock_nowait(name, "preparing project changes"):
             state_path = d / "simulation" / "state.yaml"
             state_text, base_revision = _state_snapshot(state_path)
@@ -1549,8 +1512,7 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
         copy_path.write_text(state_text, encoding="utf-8")
         changes_path = tmp_dir / "changes.yaml"
         changes_path.write_text(
-            yaml.safe_dump({"operations": operations}, sort_keys=False,
-                           allow_unicode=True, width=100), encoding="utf-8")
+            spine.dump_yaml({"operations": operations}), encoding="utf-8")
 
         # the engine's --preview validates AND produces the candidate in one
         # run; rc 1 means the batch is refused whole (no partial edits)
@@ -1572,8 +1534,7 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
         if not candidate_doc:
             raise RuntimeError("the engine's preview carried no candidate "
                                "state — nothing staged")
-        candidate_text = yaml.safe_dump(
-            candidate_doc, sort_keys=False, allow_unicode=True, width=100)
+        candidate_text = spine.dump_yaml(candidate_doc)
 
         # the state the engine validated against must still be canon
         with campaign_lock_nowait(name, "staging the project proposal"):
@@ -1596,8 +1557,8 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
                            "staged")
             pid = proposals.create(
                 name, kind="project_changes",
-                base_week=_clock_week(candidate_doc),
-                proposed_week=_clock_week(candidate_doc),
+                base_week=spine.state_clock_week(candidate_doc),
+                proposed_week=spine.state_clock_week(candidate_doc),
                 base_revisions={"simulation/state.yaml": base_revision},
                 input_set_revisions={},
                 artifacts={"state": candidate_text, "chronicles": {},
@@ -1678,7 +1639,7 @@ def post_goal_review(name: str):
                     log(ln)
                 raise RuntimeError(
                     "goal review failed rc=%s: %s"
-                    % (rc, " | ".join(lines[-10:])))
+                    % (rc, engines.tail_detail(lines, 10)))
             try:
                 updates = yaml.safe_load(
                     updates_path.read_text(encoding="utf-8")) or {}
@@ -1700,7 +1661,7 @@ def post_goal_review(name: str):
             # the engine's own validator decides — the same set_field path a
             # DM-recorded session takes, so a proposed goal cannot carry
             # anything a hand-written effect could not
-            source = "goal-review:week-" + str(_clock_week(base_doc))
+            source = "goal-review:week-" + str(spine.state_clock_week(base_doc))
             record = {"source": source, "events": [], "effects": []}
             for u in found:
                 eff = {
@@ -1714,9 +1675,7 @@ def post_goal_review(name: str):
                 eff["id"] = _effect_id(eff)
                 record["effects"].append(eff)
             record_path = tmp_dir / "session.yaml"
-            record_path.write_text(
-                yaml.safe_dump(record, sort_keys=False, allow_unicode=True,
-                               width=100), encoding="utf-8")
+            record_path.write_text(spine.dump_yaml(record), encoding="utf-8")
             rc, lines = engines.run_py(
                 engines.AGENTIC_SIMULATOR, "src/effects.py",
                 "--check", str(record_path), "--state", str(copy_path),
@@ -1765,8 +1724,8 @@ def post_goal_review(name: str):
             pass
         pid = proposals.create(
             name, kind="goal_updates",
-            base_week=_clock_week(base_doc),
-            proposed_week=_clock_week(base_doc),
+            base_week=spine.state_clock_week(base_doc),
+            proposed_week=spine.state_clock_week(base_doc),
             base_revisions={"simulation/state.yaml": base_revision},
             input_set_revisions={},
             artifacts={"state": after_text, "chronicles": {}, "entries": [],
@@ -1875,14 +1834,13 @@ def discard_forecast(name: str, fid: str):
     was never canon; the bundle stays on disk as a receipt. Discarded
     projections are never fed into future prompts."""
     require_campaign(name)
-    with campaign_lock_nowait(name, "discarding the forecast"):
-        try:
-            forecasts.set_status(name, fid, "discarded",
-                                 decided_note="discarded by the DM after "
-                                              "reading; nothing was ever "
-                                              "canon")
-        except forecasts.ForecastError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+    with campaign_lock_nowait(name, "discarding the forecast"), \
+            store_errors(conflict=(forecasts.ForecastError,)):
+        forecasts.set_status(
+            name, fid, "discarded",
+            decided_note="discarded by the DM after "
+                         "reading; nothing was ever "
+                         "canon")
         return {"discarded": fid}
 
 

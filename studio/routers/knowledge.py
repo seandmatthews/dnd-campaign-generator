@@ -19,9 +19,9 @@ import briefing
 import canon
 import knowledge
 import publication
-import spine
 from routers.common import (campaign_lock_nowait, ensure_publishable_409,
-                            require_campaign)
+                            finalize_publication, require_campaign,
+                            store_errors)
 
 router = APIRouter()
 
@@ -79,9 +79,9 @@ def post_knowledge(name: str, body: FactBody):
                 visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects,
                 place_ids=body.place_ids)
-            snap = canon.snapshot_result(
-                name, f"campaign/{name}: record fact {fact['id']}")
-            publication.after_snapshot(name, pub["transaction"], snap)
+            snap = finalize_publication(
+                name, pub["transaction"],
+                f"campaign/{name}: record fact {fact['id']}")
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except publication.PublicationConflictError as e:
@@ -103,9 +103,9 @@ def post_supersede(name: str, fact_id: str, body: SupersedeBody):
                 name, fact_id, text=body.text, visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects,
                 place_ids=body.place_ids)
-            snap = canon.snapshot_result(
-                name, f"campaign/{name}: supersede fact {fact_id}")
-            publication.after_snapshot(name, pub["transaction"], snap)
+            snap = finalize_publication(
+                name, pub["transaction"],
+                f"campaign/{name}: supersede fact {fact_id}")
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except publication.PublicationConflictError as e:
@@ -121,7 +121,8 @@ def post_reconcile(name: str, fact_id: str):
     recorded revision catches up to the current bytes. The approved text is
     unchanged — staleness clears, nothing else moves."""
     require_campaign(name)
-    with campaign_lock_nowait(name, "reconciling the fact"):
+    with campaign_lock_nowait(name, "reconciling the fact"), \
+            store_errors(knowledge.KnowledgeError):
         doc = knowledge.load(name)
         fact = next((f for f in doc["facts"] if f.get("id") == fact_id), None)
         if fact is None:
@@ -130,10 +131,7 @@ def post_reconcile(name: str, fact_id: str):
         if not fact.get("source_file"):
             raise HTTPException(status_code=422,
                                 detail="this fact has no source file")
-        try:
-            knowledge.reconcile(name, fact_id)
-        except knowledge.KnowledgeError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+        knowledge.reconcile(name, fact_id)
         snap = canon.snapshot_result(
             name, f"campaign/{name}: reconcile fact {fact_id}")
         updated = next(f for f in knowledge.load(name)["facts"]
@@ -174,7 +172,8 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
     """Disclose one current public fact to the party — the explicit reveal
     that makes public-in-world knowledge party knowledge."""
     require_campaign(name)
-    with campaign_lock_nowait(name, "revealing the fact"):
+    with campaign_lock_nowait(name, "revealing the fact"), \
+            store_errors(ValueError):
         week = None
         if isinstance(body, dict) and body.get("week") is not None:
             try:
@@ -183,10 +182,7 @@ def post_reveal(name: str, fact_id: str, body: dict | None = None):
                 raise HTTPException(
                     status_code=422,
                     detail=f"week must be an integer, got {body['week']!r}")
-        try:
-            briefing.reveal(name, fact_id, week=week)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail=str(e))
+        briefing.reveal(name, fact_id, week=week)
         snap = canon.snapshot_result(
             name, f"campaign/{name}: reveal fact {fact_id}")
         return {"revealed": fact_id, "snapshot": snap}

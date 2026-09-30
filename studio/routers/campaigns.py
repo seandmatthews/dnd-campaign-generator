@@ -8,7 +8,8 @@ import canon
 import publication
 import spine
 from routers.common import (campaign_lock_nowait, ensure_entities_migrated,
-                            ensure_publishable_409, require_campaign)
+                            ensure_publishable_409, require_campaign,
+                            store_errors)
 
 router = APIRouter()
 
@@ -32,12 +33,9 @@ def list_campaigns():
 def create_campaign(body: NewCampaign):
     """Start a campaign from nothing: directory + campaign.yaml + empty
     section dirs. The world itself arrives via POST .../world (seed)."""
-    try:
+    with store_errors(spine.CampaignError,
+                      conflict=(spine.CampaignExists,)):
         created = spine.create_campaign(body.name.strip(), body.title)
-    except spine.CampaignExists as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except spine.CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
     canon.snapshot(created["name"], f"campaign/{created['name']}: created")
     return created
 

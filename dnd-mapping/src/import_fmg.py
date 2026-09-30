@@ -120,16 +120,12 @@ def slugify(name):
     return s or "unnamed"
 
 
-# Rivers: FMG names every river and gives its course as a cell-id polyline.
-# Lore grounding wants names and which settlements they touch, not geometry:
-# each river lists the most POPULOUS burgs within RIVER_NEAR map units of
-# its course (cell centers), capped — alphabetical order would silently
-# drop capitals for alphabet soup (found 2026-09-25: 4 of 40 rivers on seed
-# 913 lost real settlements) — and only the RIVER_LIMIT biggest by
-# discharge are kept so the file stays terse (the summary still counts
-# them all). River names are NOT disambiguated from burg names in the YAML
-# ("the river Chang" vs "the town Chang"): the lore prompt reads the text
-# as-is and the ambiguity is accepted.
+# Rivers: lore wants names + which settlements they touch, not geometry.
+# Each river lists its most POPULOUS burgs within RIVER_NEAR map units of
+# its course (cell centers) — alphabetical order silently dropped capitals
+# (found 2026-09-25: 4 of 40 rivers on seed 913) — capped at RIVER_LIMIT
+# by discharge so the file stays terse (the summary counts them all).
+# River/burg name collisions ("the river Chang") are accepted as-is.
 RIVER_LIMIT = 40
 RIVER_NEAR = 5.0  # map units on the FMG grid (maps are typically 1280x720)
 RIVER_SETTLEMENTS_CAP = 6
@@ -146,9 +142,8 @@ def _has_graph_arrays(pack):
 
 
 def _river_settlements(pack, burgs, rivers):
-    """{river_index: [burg dicts within RIVER_NEAR of the course]}.
-    Needs the graph arrays (cells.v, vertices.p) — full JSON exports have
-    them; a .map-section import gracefully yields no settlement lists."""
+    """{river_index: [burg dicts within RIVER_NEAR of the course]}. Needs
+    the graph arrays (see _has_graph_arrays); otherwise {}."""
     if not _has_graph_arrays(pack):
         return {}
     cells = pack.get("cells")
@@ -171,8 +166,6 @@ def _river_settlements(pack, burgs, rivers):
         best = None
         for r in rivers:
             ri = r.get("i")
-            if not isinstance(ri, int):
-                continue  # a river without an index cannot be keyed
             for ci in r.get("cells", []):
                 c = centers[ci] if (isinstance(ci, int)
                                     and not isinstance(ci, bool)
@@ -295,9 +288,9 @@ def summarize(info, pack, settings=None):
     def burg_name(i):
         return next((b["name"] for b in burgs if b.get("i") == i), None)
 
-    # climate context: everything below degrades to absent — a dump without
-    # options (old headless dumps) or without per-cell data (.map-section
-    # imports) simply carries no climate fields rather than wrong ones
+    # climate context degrades to absent, never wrong: no options (old
+    # headless dumps) or no per-cell data (.map-section imports) means no
+    # climate fields
     map_opts = _map_options(settings)
     biome_names = {b["i"]: b["name"] for b in pack.get("biomes", [])
                    if isinstance(b, dict) and isinstance(b.get("i"), int)}
@@ -327,8 +320,7 @@ def summarize(info, pack, settings=None):
             "capital": burg_name(s.get("capital")),
             "culture": culture_by_id.get(s.get("culture")),
         }
-        # where the nation sits: dominant biome over its cells (marine
-        # excluded — nations are land) and the capital's latitude
+        # dominant biome + capital latitude
         biome = dominant_biome.get(s["i"])
         if biome:
             entry["biome"] = biome
@@ -448,11 +440,8 @@ def import_file(path):
     # full JSON exports report every section found, so `missing` is .map-only
     missing = sorted(set(_SIGNATURES) - found)
     doc = summarize(info, pack, settings)
-    # provenance records the dump's own seed + name, never a wall-clock or
-    # mtime stamp: re-importing an unchanged dump must stay byte-identical
-    # ("never hand-edit" only works if regeneration is diff-clean), and an
-    # mtime is not reproducible content — it permanently dirtied tracked
-    # derivatives on every regeneration (found 2026-09-23)
+    # byte-stable provenance: seed + version only (see module docstring; an
+    # mtime permanently dirtied every regeneration — found 2026-09-23)
     seed = info.get("seed")
     suffix = str(seed)[-4:] if seed not in (None, "") else "noseed"
     slug = f"{slugify(info.get('mapName') or 'unnamed')}-{suffix}"

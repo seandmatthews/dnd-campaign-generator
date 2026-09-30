@@ -47,10 +47,9 @@ def _fold(word):
 
 
 def _words(text):
-    """All folded word tokens of the text. Unicode letters, not [A-Za-z]:
-    an é/ü/ñ campaign name tokenized as punctuation yielded no content
-    tokens, so unknown_actor/unwitnessed_event silently never fired — a
-    false green for exactly the campaigns worth checking."""
+    """All folded word tokens. Unicode letters, not [A-Za-z]: ASCII
+    tokenizing silently never fired unknown_actor/unwitnessed_event on
+    é/ü/ñ names — a false green."""
     return [_fold(w) for w in re.findall(r"[^\W\d_]+", text)]
 
 

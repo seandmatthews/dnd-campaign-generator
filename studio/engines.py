@@ -112,12 +112,16 @@ def engine_chronicle_dir() -> Path:
     return AGENTIC_SIMULATOR / "chronicle"
 
 
-# The per-run transcript cap: week staging re-parses the whole run output
-# for HOLDS lines (a week prints dozens), error paths read the tail — but a
-# chatty node worldgen used to pin its ENTIRE transcript in RAM for the
-# run's duration, doubled by the job log. Past the cap, lines are dropped
-# from the head and a marker says so.
+# Transcript cap: week staging re-parses for HOLDS lines, errors read the
+# tail; a chatty node worldgen used to pin the whole transcript in RAM.
+# Past the cap, head lines drop with a marker.
 RUN_LINE_CAP = 4000
+
+
+def tail_detail(lines: list, n: int = 8) -> str:
+    """The standard engine-failure detail: the last n transcript lines
+    joined with ' | ' (one place, so the tail convention stays uniform)."""
+    return " | ".join(lines[-n:])
 
 
 def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple:

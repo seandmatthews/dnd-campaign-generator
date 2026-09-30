@@ -34,6 +34,7 @@ captures base revisions under the campaign lock and rechecks them before
 staging; an external edit in between is a 409, never a silent overwrite.
 """
 
+import contextlib
 import copy
 import datetime
 import hashlib
@@ -43,6 +44,7 @@ from pathlib import Path
 
 import briefing
 import knowledge
+import proposals
 import publication
 import spine
 import yaml
@@ -103,7 +105,7 @@ def _session_dir(name: str, session_id: str) -> Path:
 
 
 def _dump(doc: dict) -> str:
-    return yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, width=100)
+    return spine.dump_yaml(doc)
 
 
 def _now() -> str:
@@ -111,22 +113,9 @@ def _now() -> str:
         timespec="seconds")
 
 
-def _load_yaml(path: Path) -> dict | None:
-    try:
-        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        return doc if isinstance(doc, dict) else None
-    except (OSError, yaml.YAMLError):
-        return None
-
-
 def _save_yaml(path: Path, doc: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     spine.write_text_atomic(path, _dump(doc))
-
-
-def _rev_of(text: str) -> str:
-    """The repository's standard revision representation for staged bytes."""
-    return publication.revision_of_bytes(text)
 
 
 # ---------------------------------------------------------------- sessions
@@ -221,10 +210,9 @@ def _save_notes_revision(sdir: Path, doc: dict, notes: str) -> dict:
         raise SessionConflict(f"notes revision {rel} already exists")
     target.parent.mkdir(parents=True, exist_ok=True)
     spine.write_text_atomic(target, notes)
-    # the recorded revision is the hash of the EXACT bytes on disk (not of
-    # the in-memory text — spine's atomic write is text-mode, so a Windows
-    # CRLF translation would otherwise make every later staleness check
-    # fail forever)
+    # revision hashes the EXACT bytes on disk: spine's atomic write is
+    # text-mode, so a Windows CRLF translation would break every later
+    # staleness check.
     entry = {"file": rel, "revision": publication.file_revision(target),
              "created": _now(), "chars": len(notes)}
     doc.setdefault("notes", []).append(entry)
@@ -232,7 +220,7 @@ def _save_notes_revision(sdir: Path, doc: dict, notes: str) -> dict:
 
 
 def load(name: str, session_id: str) -> dict:
-    doc = _load_yaml(_session_dir(name, session_id) / "session.yaml")
+    doc = spine.read_yaml_dict(_session_dir(name, session_id) / "session.yaml")
     if not doc:
         raise SessionError(f"no such session: {session_id}")
     return doc
@@ -246,7 +234,7 @@ def list_sessions(name: str) -> list:
     for sdir in sorted(root.iterdir(), reverse=True):
         if not sdir.is_dir():
             continue
-        doc = _load_yaml(sdir / "session.yaml")
+        doc = spine.read_yaml_dict(sdir / "session.yaml")
         if not doc:
             continue
         out.append({
@@ -361,7 +349,7 @@ def save_draft(name: str, session_id: str, *, origin: str,
 
 
 def load_draft(name: str, session_id: str, draft_id: str) -> dict:
-    draft = _load_yaml(_draft_path(name, session_id, draft_id))
+    draft = spine.read_yaml_dict(_draft_path(name, session_id, draft_id))
     if not draft:
         raise SessionError(f"no such draft: {draft_id}")
     return draft
@@ -746,7 +734,7 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
     # capture the exact base under the lock: after-images are judged
     # against these bytes at accept time
     with _locked(name, "preparing the session changes"):
-        pending = _pending_or_none(name)
+        pending = proposals.find_pending(name)
         if pending:
             raise SessionConflict(
                 f"a proposal is awaiting review ({pending.get('proposal_id')})"
@@ -883,7 +871,7 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
             for d_ in disclosed]
 
     with _locked(name, "staging the session proposal"):
-        pending = _pending_or_none(name)
+        pending = proposals.find_pending(name)
         if pending:
             raise SessionConflict(
                 f"a proposal appeared while the session changes were being "
@@ -895,7 +883,7 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                 "simulation/state.yaml changed while the session changes "
                 "were being prepared — prepare again against the current "
                 "state; nothing was staged")
-        pid = _new_proposal_id()
+        pid = proposals.new_id()
         decision = {
             "schema_version": DECISION_SCHEMA,
             "proposal_id": pid,
@@ -911,16 +899,15 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                                      {x.get("id") for x in selected}],
             "decided": None,
         }
-        import proposals as proposal_store
         extra_artifacts = {"decision": _dump(decision)}
         if fact_records:
             extra_artifacts["knowledge"] = _dump(knowledge_doc)
         if disclosed:
             extra_artifacts["disclosure"] = _dump(disclosure_doc)
-        pid = proposal_store.create(
+        pid = proposals.create(
             name, kind="session_changes",
-            base_week=_clock_week(base_doc),
-            proposed_week=_clock_week(after_doc),
+            base_week=spine.state_clock_week(base_doc),
+            proposed_week=spine.state_clock_week(after_doc),
             base_revisions=base_revisions,
             input_set_revisions={},
             artifacts={"state": _dump(after_doc), "chronicles": {},
@@ -958,50 +945,25 @@ def _suggestion_audit(s: dict, created_facts: dict) -> dict:
     return out
 
 
-def _clock_week(doc: dict):
-    return ((doc.get("meta") or {}).get("clock") or {}).get("week")
-
-
 def _snapshot(path: Path) -> tuple:
     data = path.read_bytes()
     return data.decode("utf-8"), hashlib.sha256(data).hexdigest()
 
 
-def _pending_or_none(name: str):
-    import proposals as proposal_store
-    return proposal_store.find_pending(name)
-
-
-def _new_proposal_id() -> str:
-    import proposals as proposal_store
-    return proposal_store.new_id()
-
-
+@contextlib.contextmanager
 def _locked(name: str, action: str):
-    """Contextmanager form of the campaign lock for the service layer
-    (prepare runs its own two critical sections). A held lock (a week job)
-    fails FAST with SessionConflict — an HTTP request must never block on
-    a 30-minute run. NEVER nested inside a held lock (Lock is not
-    reentrant)."""
-    return _LockCtx(spine.campaign_lock(name), action)
-
-
-class _LockCtx:
-    def __init__(self, lock, action):
-        self._lock = lock
-        self._action = action
-
-    def __enter__(self):
-        if not self._lock.acquire(timeout=1.0):
-            raise SessionConflict(
-                f"{self._action} cannot run right now: another job is "
-                "already modifying this campaign (a week run?) — retry "
-                "when it finishes. Nothing was changed.")
-        return self
-
-    def __exit__(self, *exc):
-        self._lock.release()
-        return False
+    """Campaign lock for the service layer; fails fast with SessionConflict
+    (never a blocking HTTP request). NEVER nested — Lock is not reentrant."""
+    lock = spine.campaign_lock(name)
+    if not lock.acquire(timeout=1.0):
+        raise SessionConflict(
+            f"{action} cannot run right now: another job is "
+            "already modifying this campaign (a week run?) — retry "
+            "when it finishes. Nothing was changed.")
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 # ------------------------------------------------------------- acceptance
@@ -1073,7 +1035,7 @@ def load_decision(name: str, session_id: str, proposal_id: str) -> dict | None:
     if not pid or ".." in pid or not _PROPOSAL_ID_RE.fullmatch(pid):
         raise SessionError(f"invalid proposal id: {proposal_id!r}")
     path = _session_dir(name, session_id) / "decisions" / f"{pid}.yaml"
-    return _load_yaml(path)
+    return spine.read_yaml_dict(path)
 
 
 def session_detail(name: str, session_id: str) -> dict:
@@ -1090,7 +1052,7 @@ def session_detail(name: str, session_id: str) -> dict:
         notes.append({**entry, "text": text})
     drafts = []
     for draft_id in session.get("drafts") or []:
-        draft = _load_yaml(sdir / "drafts" / f"{draft_id}.yaml")
+        draft = spine.read_yaml_dict(sdir / "drafts" / f"{draft_id}.yaml")
         if draft:
             drafts.append(draft)
     decisions = []

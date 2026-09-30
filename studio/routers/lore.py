@@ -21,7 +21,8 @@ import links
 import llm_client
 import loregen
 import spine
-from routers.common import ensure_entities_migrated, require_campaign, submit_campaign_job
+from routers.common import (ensure_entities_migrated, require_campaign,
+                            store_errors, submit_campaign_job)
 from spine import CampaignError, CampaignExists, CampaignNotFound
 
 router = APIRouter()
@@ -117,12 +118,9 @@ def get_entity_page(name: str, page: str):
 @router.put("/api/campaign/{name}/lore/style/{file}")
 def put_style(name: str, file: str, body: TextBody):
     require_campaign(name)
-    try:
+    with store_errors(CampaignError,
+                      not_found=(CampaignNotFound,)):
         spine.write_style(name, file, body.text)
-    except CampaignNotFound as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
     canon.snapshot(name, f"campaign/{name}: update style/{file}")
     return {"ok": True}
 

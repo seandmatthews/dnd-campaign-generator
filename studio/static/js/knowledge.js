@@ -276,10 +276,9 @@
     // native-submits — reloading the page and losing the typed fact
     panel.querySelector('.fact-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      // query INSIDE the form: fact cards render their display text as
-      // <div class="fact-text"> earlier in the panel, and a panel-scoped
-      // query matches that div first — .value undefined, the text key
-      // silently dropped, and every second fact 422s as "Field required"
+      // query INSIDE the form: card text used to share a class with the
+      // textarea, and a panel-scoped query silently dropped it (422
+      // "Field required")
       const form = ev.currentTarget;
       const btn = form.querySelector('.fact-record');
       const errBox = form.querySelector('.form-error');
