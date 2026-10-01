@@ -1,0 +1,4 @@
+# Build inputs and outputs of build_release.py — all regenerable.
+cache/
+work/
+dist/
