@@ -39,8 +39,10 @@ from pathlib import Path
 import canon
 import engines
 import forecasts
+import llm_client
 import proposal_flows
 import proposals
+import simdesign
 import spine
 import yaml
 from fastapi import APIRouter, HTTPException
@@ -312,6 +314,34 @@ def post_create_state(name: str, body: CreateStateBody):
     return {"ok": True, "week": 0,
             "factions": [f["id"] for f in doc["factions"]],
             "snapshot": snap}
+
+
+class DesignBody(BaseModel):
+    premise: str
+    places: list[str] = []
+
+
+@router.post("/api/campaign/{name}/simulation/design")
+def post_simulation_design(name: str, body: DesignBody):
+    """Premise -> a designed sandbox draft (ONE metered LLM pass, re-asked
+    once when the reply fails validation, then 502 with the validator's
+    words — the world-options posture). The design PREFILLS the
+    Create a simulation form; nothing is staged and simulation/state.yaml
+    is not touched — Create stays the accept, on the unchanged free path.
+    Secrets come back separately as proposed DM-only knowledge drafts and
+    never ride in the faction docs. Fed-or-refused: with no world file and
+    no named places there is nothing to ground the design in (422)."""
+    require_campaign(name)
+    try:
+        return simdesign.design_simulation(name, body.premise, body.places)
+    except simdesign.FedOrRefused as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except simdesign.DesignError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except llm_client.BudgetExceeded as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeError as e:  # llm_client's readable provider errors
+        raise HTTPException(status_code=503, detail=str(e))
 
 
 @router.get("/api/campaign/{name}/simulation")

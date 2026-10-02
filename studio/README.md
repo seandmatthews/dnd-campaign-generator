@@ -146,8 +146,10 @@ Work through the app, or copy the state back into the campaign yourself.
   each one into an LLM draft grounded in the linking pages, staged to
   Review like everything else.
 - **Agent Simulation** — the faction sandbox: create it right on the tab
-  (premise + 2-5 factions, no LLM involved — it writes
-  `simulation/state.yaml`), then fog-of-war views, proposed weeks, the
+  (premise + 2-5 factions — create is free, no LLM; arrive without a
+  concept and one metered LLM pass will draft the factions from your
+  premise to prefill the form, which you then edit and Create), then
+  fog-of-war views, proposed weeks, the
   chronicle, why-chains, rumor spread. **Propose week** runs the engine
   against scratch data (costs API credits) and stages a proposal: the diff
   (clock, resources, events, rumors), the proposed chronicle, and the

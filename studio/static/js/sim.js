@@ -229,13 +229,91 @@
     );
   }
 
+  /* ----- premise-to-sandbox design (one metered LLM pass; prefill only) --
+     The design fills the create form below; NOTHING is created or staged
+     until Create simulation is clicked (the unchanged free path), and the
+     secret drafts stay out of the faction rows — they are proposed DM-only
+     knowledge facts for the Knowledge tab, after the sandbox exists. */
+
+  function copyHint(text) {
+    const done = () => S.toast('Copied — paste it where you want it.', 'ok');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () =>
+        S.toast('Copy failed — select the text manually.', 'error'));
+    } else {
+      S.toast('Copy is not available here — select the text manually.', 'info');
+    }
+  }
+
+  function designExtras(design) {
+    /* suggested projects (copyable hints) + secret drafts (DM-only) — two
+       S.el calls, one root would drop the second (see el() in core.js) */
+    const wrap = document.createElement('div');
+    const projects = Array.isArray(design.projects) ? design.projects : [];
+    if (projects.length) {
+      const hints = S.el(
+        '<details class="proposal-events" open><summary>Suggested projects ' +
+          '(copyable hints — stage them from the Projects panel after creating)</summary>' +
+          projects.map((p) =>
+            '<div class="design-hint"><span class="event-text"><strong>' +
+              S.esc(String(p.title || '')) + '</strong> — ' +
+              S.esc(String(p.faction || '')) + ': ' +
+              S.esc(String(p.objective || '')) +
+              ' (target ' + S.esc(String(p.target)) + ')</span>' +
+              '<button type="button" class="btn design-copy" title="Copy this hint">' +
+              'Copy</button></div>').join('') + '</details>');
+      hints.querySelectorAll('.design-copy').forEach((btn, i) => {
+        const p = projects[i];
+        btn.addEventListener('click', () => copyHint(
+          (p.title || '') + ' — ' + (p.objective || '') +
+          ' (target ' + p.target + ', owner ' + (p.faction || '') + ')'));
+      });
+      wrap.appendChild(hints);
+    }
+    const secrets = Array.isArray(design.secrets) ? design.secrets : [];
+    if (secrets.length) {
+      const drafts = S.el(
+        '<details class="secret" open><summary>Proposed DM-only knowledge ' +
+          'facts (drafts — add them in the Knowledge tab after creating; ' +
+          'they never enter the sandbox state)</summary>' +
+          secrets.map((s) =>
+            '<div class="design-hint"><span class="event-text">' +
+              S.esc(String(s.faction || '')) + ': ' +
+              S.esc(String(s.text || '')) + '</span>' +
+              '<button type="button" class="btn design-copy" title="Copy this draft">' +
+              'Copy</button></div>').join('') + '</details>');
+      drafts.querySelectorAll('.design-copy').forEach((btn, i) => {
+        const s = secrets[i];
+        btn.addEventListener('click', () => copyHint(
+          (s.faction || '') + ': ' + (s.text || '')));
+      });
+      wrap.appendChild(drafts);
+    }
+    return wrap;
+  }
+
   function createSimulationPanel(root) {
     const panel = S.el(
       '<section class="panel">' +
         '<h3 class="panel-title">Create a simulation</h3>' +
-        '<p class="panel-note">A sandbox is a premise and 2-5 factions that want ' +
-          'things from each other. Nothing here calls the LLM or costs credits — ' +
-          'this is the DM&rsquo;s setup; a week run is where generation happens.</p>' +
+        '<div class="form-block design-block">' +
+          '<p class="panel-note">No concept yet? Say the tension in a paragraph ' +
+            'and one LLM pass drafts the factions below — you edit anything, ' +
+            'then Create. Nothing is written until Create simulation.</p>' +
+          '<label class="field"><span class="field-label">The premise — the tension, one paragraph</span>' +
+            '<textarea class="input design-premise" rows="3" ' +
+              'placeholder="e.g. The toll bridge burned the night the wardens raised the toll. Provisions councils blame the ferry league; the ferry league blames the wardens; the charters say both owe the crown."></textarea></label>' +
+          '<label class="field"><span class="field-label">Places it happens (optional, comma-separated) — grounds the design</span>' +
+            '<input type="text" class="input design-places" placeholder="e.g. Provis, Dunmore"></label>' +
+          '<div class="inline-form">' +
+            '<button type="button" class="btn btn-primary design-run">Design the sandbox</button>' +
+            '<button type="button" class="btn design-regenerate hidden">Regenerate</button>' +
+            '<span class="muted form-note">One metered LLM pass — it spends a ' +
+              'little API credit and fills the form below.</span>' +
+          '</div>' +
+          '<div class="design-error"></div>' +
+          '<div class="design-result"></div>' +
+        '</div>' +
         '<div class="form-block">' +
           '<label class="field"><span class="field-label">Premise — the tension, one line</span>' +
             '<textarea class="input sand-premise" rows="2" ' +
@@ -256,7 +334,8 @@
             '<button type="button" class="btn btn-primary sand-create">Create simulation</button>' +
           '</div>' +
           '<div class="form-error"></div>' +
-          '<p class="muted form-note">Prefer hand-editing? This form writes ' +
+          '<p class="muted form-note">Creating is free — no LLM anywhere in ' +
+            'this form. Prefer hand-editing? It writes ' +
             '<code>simulation/state.yaml</code> — you can edit that file directly instead.</p>' +
         '</div>' +
       '</section>'
@@ -265,6 +344,80 @@
     const errBox = panel.querySelector('.form-error');
     const addBtn = panel.querySelector('.sand-add');
     const createBtn = panel.querySelector('.sand-create');
+    const designBtn = panel.querySelector('.design-run');
+    const regenBtn = panel.querySelector('.design-regenerate');
+    const designErr = panel.querySelector('.design-error');
+    const designResult = panel.querySelector('.design-result');
+
+    function setFactionRows(factions) {
+      host.innerHTML = '';
+      (factions || []).slice(0, 5).forEach((f) => {
+        const row = factionRow();
+        row.querySelector('.f-name').value = f.name || '';
+        row.querySelector('.f-kind').value = f.kind || '';
+        row.querySelector('.f-goal').value = f.goal || '';
+        row.querySelector('.f-place').value = f.place || '';
+        const res = (f.resources && typeof f.resources === 'object') ? f.resources : {};
+        row.querySelectorAll('.f-res').forEach((sel) => {
+          const lvl = resLevel(res[sel.getAttribute('data-res')]);
+          sel.value = ['none', 'low', 'medium', 'high'].indexOf(lvl) >= 0 ? lvl : 'low';
+        });
+        row.querySelector('.f-remove').addEventListener('click', () => {
+          if (host.children.length <= 2) {
+            S.toast('Keep at least two factions — the tension needs two sides.', 'info');
+            return;
+          }
+          row.remove();
+        });
+        host.appendChild(row);
+      });
+    }
+
+    function applyDesign(r, namedPlaces) {
+      const d = (r && r.design) || {};
+      if (d.premise) panel.querySelector('.sand-premise').value = d.premise;
+      setFactionRows(d.factions);
+      // the sandbox's own places are the ones the DM named: the first leads
+      // as the city, the rest stay "other places" (factions may live there)
+      if (namedPlaces.length) {
+        panel.querySelector('.sand-city').value = namedPlaces[0];
+        panel.querySelector('.sand-places').value =
+          namedPlaces.slice(1).join(', ');
+      }
+      designResult.innerHTML = '';
+      designResult.appendChild(designExtras(d));
+      ((r && r.notes) || []).forEach((n) => S.toast(n, 'info'));
+      S.toast('Design drafted below — edit anything, then Create simulation.', 'ok');
+    }
+
+    async function runDesign() {
+      if (designBtn.disabled) return;
+      const premise = panel.querySelector('.design-premise').value.trim();
+      if (!premise) {
+        S.toast('Describe the tension first — one paragraph is enough.', 'error');
+        return;
+      }
+      designBtn.disabled = true;
+      regenBtn.disabled = true;
+      designErr.innerHTML = '';
+      const places = panel.querySelector('.design-places').value.split(',')
+        .map((s) => s.trim()).filter(Boolean);
+      try {
+        const r = await S.api(S.campUrl('/simulation/design'), {
+          method: 'POST', body: { premise: premise, places: places }
+        });
+        applyDesign(r, places);
+        regenBtn.classList.remove('hidden');
+      } catch (err) {
+        designErr.innerHTML = '';
+        designErr.appendChild(S.errorPanel(err));
+      } finally {
+        designBtn.disabled = false;
+        regenBtn.disabled = false;
+      }
+    }
+    designBtn.addEventListener('click', runDesign);
+    regenBtn.addEventListener('click', runDesign); // Regenerate re-runs the pass
 
     function addRow() {
       const row = factionRow();
