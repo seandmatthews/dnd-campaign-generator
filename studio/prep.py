@@ -61,17 +61,37 @@ def build(name: str, since_week: int = 0,
     chronicles = {c["week"]: c for c in spine.chronicles(name)}
     current_week = spine.state_clock_week(state)
     meta = spine.load_campaign_yaml(name)
+    unrevealed, knowledge_findings = _unrevealed(name)
+    # the briefing's own read of the same file already carries the finding
+    # when the store is broken — say it once, not once per reader
+    seen = {(f.get("rule"), f.get("source"))
+            for f in b.get("knowledge_findings") or []}
+    knowledge_findings = list(b.get("knowledge_findings") or []) + [
+        f for f in knowledge_findings
+        if (f.get("rule"), f.get("source")) not in seen]
     return {
         "campaign": name,
         "title": str(meta.get("title") or name),
         "date": today.isoformat(),
+        # the covered range never runs backwards (P3-23): since_week at or
+        # above the clock is an over-narrow range, not an error — the
+        # filter honestly shows nothing (no change has happened after a
+        # week that does not exist yet), and the page says the range is
+        # empty instead of printing "covers weeks 11–3". CLAMP, not 422:
+        # the query is answerable, and build() is the one place route and
+        # CLI both pass through
         "covers_weeks": [since_week + 1, current_week]
-                        if isinstance(current_week, int) else [],
+                        if isinstance(current_week, int)
+                        and since_week < current_week else [],
+        "current_week": current_week if isinstance(current_week, int)
+                        else None,
+        "since_week": since_week,
         "events": _events(b, chronicles),
         "events_omitted": b.get("omitted") or 0,
         "rumors": _rumors(state, chronicles),
         "quests": _quests(b),
-        "unrevealed": _unrevealed(name),
+        "unrevealed": unrevealed,
+        "knowledge_findings": knowledge_findings,
         "decisions": _decisions(b),
     }
 
@@ -128,7 +148,11 @@ def _rumors(state: dict, chronicles: dict) -> list:
 def _quests(b: dict) -> dict:
     """Section 3 — ticket 06's briefing section, verbatim (overdue timers
     first, active quests that touched the covered range, the hooked count
-    as one honest line), each quest wiki-linked to its page."""
+    as one honest line), each quest wiki-linked to its page. The findings
+    ride along (R5): when the ONLY quest page is unreadable the section is
+    empty but the error finding says so — the page must never print its
+    'No quest pages yet' advice over a quest that exists but cannot be
+    read."""
     q = b.get("quests") or {}
 
     def rec(r: dict) -> dict:
@@ -141,16 +165,24 @@ def _quests(b: dict) -> dict:
     return {"overdue": [rec(r) for r in q.get("overdue") or []],
             "active": [rec(r) for r in q.get("active") or []],
             "hooks_not_shown": q.get("hooks_not_shown") or 0,
-            "error": q.get("error")}
+            "error": q.get("error"),
+            "findings": q.get("findings") or []}
 
 
-def _unrevealed(name: str) -> list:
+def _unrevealed(name: str) -> tuple[list, list]:
     """Section 4 — current PUBLIC facts the party has not been told. The
     reveal is the discovery; this is the GM's reminder list, not player
     material. Each fact links its source file when it has one (the fact
     source file is the containing doc of record); a fact without a source
-    file carries no link — none is invented."""
-    facts = knowledge.load(name).get("facts", [])
+    file carries no link — none is invented. Returns (rows, findings): a
+    hand-mangled knowledge.yaml costs this section alone — rows degrade to
+    [] and one error finding names the file (P3-17) — instead of failing
+    the whole compile."""
+    try:
+        facts = knowledge.load(name).get("facts", [])
+    except spine.CampaignFileError as e:
+        return [], [{"rule": "knowledge/unreadable", "level": "error",
+                     "message": str(e), "source": knowledge.KNOWLEDGE_FILE}]
     revealed = {r.get("fact_id") for r in
                 briefing.load_disclosure(name).get("revealed", [])}
     out = []
@@ -163,7 +195,7 @@ def _unrevealed(name: str) -> list:
                     "week": f.get("week"),
                     "source_file": f.get("source_file") or "",
                     "source_link": _vault_link(f.get("source_file") or "")})
-    return out
+    return out, []
 
 
 def _decisions(b: dict) -> list:
@@ -258,6 +290,16 @@ def markdown(doc: dict) -> str:
         lines.append(f"_Compiled from the campaign canon — covers weeks "
                      f"{a}–{b}. Disposable by design: a re-run writes a "
                      "new file, it never overwrites this one._")
+    elif isinstance(doc.get("current_week"), int):
+        # P3-23: since_week at or above the clock — an over-narrow range,
+        # clamped to "covers nothing" rather than printed as an inverted
+        # pair ("covers weeks 11–3" on a week-3 clock)
+        lines.append(f"_Compiled from the campaign canon — the range starts "
+                     f"after the world clock (week {doc['current_week']}), "
+                     f"so it covers no weeks: nothing has happened after "
+                     f"week {doc['since_week']}. Disposable by design: a "
+                     "re-run writes a new file, it never overwrites this "
+                     "one._")
     else:
         lines.append("_Compiled from the campaign canon. The world clock "
                      "has not started, so there is no week range to "
@@ -306,7 +348,17 @@ def markdown(doc: dict) -> str:
     if q.get("error"):
         lines.append(f"_Quests could not be read: {q['error']}_")
     else:
-        if not (q["overdue"] or q["active"] or q["hooks_not_shown"]):
+        # error-level findings ride along (R5, ticket 23): when the only
+        # quest page cannot be read, the section is empty but the finding
+        # says so — the "No quest pages yet" advice must never print over
+        # a quest that exists but cannot be read
+        errors = [f for f in q.get("findings") or []
+                  if (f or {}).get("level") == "error"]
+        for f in errors:
+            lines.append(f"- ⚠ Quest finding — {f.get('message')} "
+                         f"(`{f.get('source')}`)")
+        if not (q["overdue"] or q["active"] or q["hooks_not_shown"]
+                or errors):
             lines.append("_No quest pages yet — a `kind: quest` entity "
                          "page starts one (World Building tab, Quests "
                          "card)._")
@@ -327,19 +379,28 @@ def markdown(doc: dict) -> str:
                          "shown._")
 
     lines += ["", "## Waiting to be revealed", ""]
-    lines.append("_Public in the world is not party-known — the reveal is "
-                 "the discovery. The GM's reminder list, not player "
-                 "material._")
-    lines.append("")
-    if doc["unrevealed"]:
-        for f in doc["unrevealed"]:
-            tail = f" (source: {f['source_link']})" if f["source_link"] \
-                else ""
-            lines.append(f"- {f['text']}{tail}")
+    knowledge_error = next(
+        (f for f in doc.get("knowledge_findings") or []
+         if (f or {}).get("level") == "error"), None)
+    if knowledge_error:
+        # P3-17: the fact store is unreadable — the honest section says
+        # so instead of "no public facts waiting" over facts that may exist
+        lines.append(f"_The fact store could not be read: "
+                     f"{knowledge_error['message']}_")
     else:
-        lines.append("_No public facts waiting — everything public has "
-                     "been revealed to the party (or nothing public is "
-                     "recorded yet)._")
+        lines.append("_Public in the world is not party-known — the reveal "
+                     "is the discovery. The GM's reminder list, not player "
+                     "material._")
+        lines.append("")
+        if doc["unrevealed"]:
+            for f in doc["unrevealed"]:
+                tail = f" (source: {f['source_link']})" if f["source_link"] \
+                    else ""
+                lines.append(f"- {f['text']}{tail}")
+        else:
+            lines.append("_No public facts waiting — everything public has "
+                         "been revealed to the party (or nothing public is "
+                         "recorded yet)._")
 
     lines += ["", "## Open decisions", ""]
     if doc["decisions"]:

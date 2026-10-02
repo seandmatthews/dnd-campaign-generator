@@ -110,8 +110,19 @@ def build(name: str, since_week: int = 0, focus=None,
             "detail": "proposed, NOT canon — the world has not advanced",
             "status": "pending", "refs": [],
         })
-    stale = [f for f in knowledge.with_staleness(name, knowledge.load(name))
-             if f.get("stale")]
+    # the knowledge read degrades the way quest pages do (P3-17): a
+    # hand-mangled simulation/knowledge.yaml costs its own section — the
+    # stale-fact items — never the whole briefing; the error rides as a
+    # finding naming the file, rendered below like the quest findings
+    knowledge_findings: list[dict] = []
+    try:
+        facts = knowledge.with_staleness(name, knowledge.load(name))
+    except spine.CampaignFileError as e:
+        knowledge_findings.append(
+            {"rule": "knowledge/unreadable", "level": "error",
+             "message": str(e), "source": knowledge.KNOWLEDGE_FILE})
+        facts = []
+    stale = [f for f in facts if f.get("stale")]
     for f in stale:
         items.append({"kind": "stale_fact", "week": None, "actor": None,
                       "title": f.get("text"),
@@ -145,6 +156,7 @@ def build(name: str, since_week: int = 0, focus=None,
         "omitted": max(0, total - len(shown)),
         "items": shown,
         "decisions": decisions,
+        "knowledge_findings": knowledge_findings,
     }
     # the quests section (tickets/06-quests-first-class.md): overdue
     # timers first, active quests intersecting the covered range, the
@@ -193,8 +205,16 @@ def render_markdown(name: str, doc: dict) -> str:
         for ref in item.get("refs") or []:
             lines.append(f"  - see {ref['type']}: `{ref['file']}` "
                          f"({ref['label']})")
+    # error-level knowledge findings ride along like the quest findings
+    # below: the section is where a GM would notice the read degrading
+    for f in doc.get("knowledge_findings") or []:
+        if (f or {}).get("level") == "error":
+            lines.append(f"- ⚠ Knowledge finding — {f.get('message')} "
+                         f"(`{f.get('source')}`)")
     _quests_markdown(doc, lines)
-    if not doc["items"] and not _quests_present(doc):
+    if not doc["items"] and not _quests_present(doc) \
+            and not any((f or {}).get("level") == "error"
+                        for f in doc.get("knowledge_findings") or []):
         lines.append("_Nothing to report in this range._")
     return "\n".join(lines) + "\n"
 

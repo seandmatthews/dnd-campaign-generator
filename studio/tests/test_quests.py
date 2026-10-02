@@ -484,6 +484,71 @@ def test_abandoned_is_exempt_from_overdue(camp):
     assert "Abandoned Timer" not in {q["page"] for q in section["overdue"]}
 
 
+# ------------------------------------------- ticket 23: degradation honesty
+
+
+def test_broken_state_yaml_degrades_to_unknown_clock(client, camp):
+    """P3-18: quests live in lore pages, not state.yaml — a YAML slip there
+    costs only the clock/faction resolution. The Quests panel renders its
+    rows with an unknown-clock finding instead of a 422 error panel; week
+    timers read unknown (never overdue), date timers still run on the
+    calendar."""
+    (spine.campaign_dir(camp) / "simulation" / "state.yaml").write_text(
+        "meta: {clock: [unclosed\n", encoding="utf-8")
+
+    r = client.get(f"/api/campaign/{camp}/quests")
+    assert r.status_code == 200, r.text
+    doc = r.json()
+    assert len(doc["quests"]) == 10, "every quest row survives"
+    unreadable = [f for f in doc["findings"]
+                  if f["rule"] == "quests/state-unreadable"]
+    assert len(unreadable) == 1
+    assert unreadable[0]["source"] == "simulation/state.yaml"
+    assert "state.yaml" in unreadable[0]["message"]
+    assert not doc["by_page"]["Overdue Timer"]["overdue"], \
+        "no clock -> a week timer cannot be judged"
+    assert doc["by_page"]["Date Timer"]["overdue"], \
+        "a date timer runs on the calendar, not the clock"
+    # faction resolution degraded too — the names stay raw on the record
+    assert doc["by_page"]["Wardens Errand"]["faction_ids"] == []
+
+    # the briefing section degrades the same way when driven directly
+    # (briefing.build itself needs state for events, so its OWN read still
+    # raises there — out of this read model's hands)
+    section = quests.briefing_section(camp, since_week=5)
+    assert [q["page"] for q in section["overdue"]] == ["Date Timer"]
+    assert any(f["rule"] == "quests/state-unreadable"
+               for f in section["findings"])
+
+
+def test_bomd_quest_page_reads_and_is_flagged(client, camp):
+    """P3-19: a UTF-8 BOM before the frontmatter fence used to parse the
+    page as frontmatter-less — the quest silently lost its kind and
+    vanished from the read model with NO finding. The fence tolerates the
+    BOM now, so the page reads, and the finding tells the GM their editor
+    wrote 'UTF-8 with BOM'."""
+    page = spine.campaign_dir(camp) / "lore" / "entities" / "Bombed Quest.md"
+    page.write_bytes(
+        "\ufeff---\nkind: quest\nname: Bombed Quest\nstatus: active\n"
+        "due: 3\n---\n\nCounting the days.\n".encode("utf-8"))
+
+    doc = quests.load(camp)
+    record = doc["by_page"].get("Bombed Quest")
+    assert record is not None, "the BOM'd page must appear in the read model"
+    assert record["status"] == "active"
+    assert record["due_week"] == 3
+    assert record["overdue"]                # clock 8, due week 3
+    bom = [f for f in doc["findings"] if f["rule"] == "quests/page-bom"]
+    assert len(bom) == 1
+    assert bom[0]["source"] == "lore/entities/Bombed Quest.md"
+    assert "BOM" in bom[0]["message"]
+
+    # the panel route serves it too — never a silent absence
+    r = client.get(f"/api/campaign/{camp}/quests")
+    assert r.status_code == 200, r.text
+    assert "Bombed Quest" in {q["page"] for q in r.json()["quests"]}
+
+
 def test_duplicate_names_flagged_and_cli_refuses(tmp_spine_root, capsys):
     root = tmp_spine_root / "dupevale"
     (root / "lore" / "entities").mkdir(parents=True)
