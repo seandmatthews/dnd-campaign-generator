@@ -162,6 +162,33 @@ def test_sites_job_sharp_failure_carries_the_documented_repair(
                 "marsh-camp").exists()
 
 
+def test_sites_job_missing_artifacts_error_names_real_filenames(
+        client, tmp_spine_root, monkeypatch):
+    """P3-38: when wrap exits 0 without writing the UVTT, the error must
+    name the concrete expected filename (marsh-camp.uvtt), not the
+    '<slug>.uvtt' template — scene/svg/png were already concrete."""
+    def fake_wrap_silent(engine_root, script, *args, timeout=600,
+                          on_line=None, env=None):
+        if args and args[0] == "wrap":
+            return 0, ["wrapped (but wrote nothing)"]  # lying engine
+        return fake_battlemap(engine_root, script, *args, **{
+            "timeout": timeout, "on_line": on_line, "env": env})
+
+    install(tmp_spine_root, monkeypatch)
+    monkeypatch.setattr(engines, "run_py", fake_wrap_silent)
+    r = client.post("/api/campaign/testvale/maps/sites",
+                    json={"kind": "camp", "name": SITE})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "error"
+    assert "scene pipeline did not produce" in job["error"]
+    assert "marsh-camp.uvtt" in job["error"], job["error"]
+    assert "<slug>" not in job["error"], job["error"]
+    # nothing copied into the campaign on failure
+    assert not (tmp_spine_root / "testvale" / "maps" / "sites" /
+                "marsh-camp").exists()
+
+
 def test_sites_post_422_bad_name_and_kind(client, spine_root):
     for name in ("", "  ", 'evil"quote', "sl/ash", "wild*card"):
         r = client.post("/api/campaign/testvale/maps/sites",

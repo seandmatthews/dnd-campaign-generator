@@ -688,7 +688,10 @@ def post_site(name: str, body: SiteBody):
             uvtt = next(iter(sorted(engine_dir.glob("*.uvtt"))), None)
             missing = [p.name for p in (scene, svg, png) if not p.is_file()]
             if uvtt is None or not uvtt.is_file():
-                missing.append("<slug>.uvtt")
+                # wrap writes <slug>.uvtt from the scene name (which the
+                # route passed as the site name) — name the concrete file
+                # it failed to produce, like scene/svg/png above
+                missing.append(f"{slug}.uvtt")
             if missing:
                 raise RuntimeError(
                     "scene pipeline did not produce: " + ", ".join(missing))

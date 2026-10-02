@@ -95,6 +95,9 @@ def test_full_import(tmp):
        doc["rivers"] == [{"name": "The Brume", "discharge": 42.5,
                           "length": 12.3, "settlements": []}],
        str(doc["rivers"]))
+    ok(".map import: summary honestly says not computed",
+       s["river_settlements"].startswith("not computed"),
+       s["river_settlements"])
 
 
 def test_missing_sections_are_reported_not_silent(tmp):
@@ -190,6 +193,107 @@ def test_json_export_reports_no_missing(tmp):
        str(doc["rivers"]))
     ok("json export: river counted in summary",
        doc["summary"]["rivers"] == 1, str(doc["summary"]))
+
+
+def test_browser_export_grounds_river_settlements(tmp):
+    """P2-8 regression: browser 'full' JSON exports carry cells as per-cell
+    dicts and vertices as per-object lists — grounding used to recognize
+    only the columnar dict shape, so every river got settlements: [] while
+    the summary (falsely) claimed the export lacks graph arrays."""
+    data = {
+        "info": {"mapName": "Browia", "seed": "888"},
+        "settings": {"seed": "888"},
+        "pack": {
+            "features": [0, {"i": 1, "type": "ocean", "cells": 900}],
+            "cultures": [0, {"i": 1, "name": "C", "base": 1, "expansionism": 1}],
+            "states": [0, {"i": 1, "name": "S", "salesTax": 0, "cells": 10,
+                           "color": "#fff", "neighbors": [], "culture": 1}],
+            "burgs": [0, {"i": 1, "name": "Riverside", "port": False,
+                          "state": 1, "population": 5.0, "x": 1, "y": 2}],
+            "provinces": [0], "religions": [0],
+            # the browser shape: cells/vertices as per-object lists (no
+            # FMG index-0 placeholder — id 0 is a real cell/vertex here)
+            "cells": [{"i": 0, "v": [0, 1, 2]}],
+            "vertices": [{"i": 0, "p": [0, 0]}, {"i": 1, "p": [2, 0]},
+                         {"i": 2, "p": [1, 4]}],
+            "rivers": [{"i": 1, "name": "The Brume", "discharge": 10,
+                        "length": 5, "cells": [0]}],
+        },
+    }
+    p = pathlib.Path(tmp) / "browser.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    out, doc, missing = import_to(tmp, p)
+    ok("browser shape: river grounded to the burg it passes",
+       doc["rivers"] == [{"name": "The Brume", "discharge": 10.0,
+                          "length": 5.0, "settlements": ["Riverside"]}],
+       str(doc["rivers"]))
+    ok("browser shape: summary says settlements were computed",
+       doc["summary"]["river_settlements"].startswith("nearby settlements"),
+       doc["summary"]["river_settlements"])
+
+
+def test_neighbors_cap_is_declared(tmp):
+    """P3-37: a state with 7+ neighbors either lists them all or declares
+    the cap — the silent [:6] was the house-rule violation."""
+    states = [0] + [
+        {"i": i, "name": f"N{i}", "salesTax": 0, "cells": 20 - i,
+         "color": "#fff", "culture": 1,
+         "neighbors": [2, 3, 4, 5, 6, 7, 8] if i == 1 else [1]}
+        for i in range(1, 9)
+    ]
+    data = {
+        "info": {"mapName": "Neighbia", "seed": "99"},
+        "settings": {"seed": "99"},
+        "pack": {
+            "features": [0, {"i": 1, "type": "ocean", "cells": 900}],
+            "cultures": [0, {"i": 1, "name": "C", "base": 1, "expansionism": 1}],
+            "states": states,
+            "burgs": [0, {"i": 1, "name": "B", "port": False, "state": 1,
+                          "population": 1.0, "x": 1, "y": 2}],
+            "provinces": [0], "religions": [0], "rivers": [],
+        },
+    }
+    p = pathlib.Path(tmp) / "neighbors.json"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    _, doc, _ = import_to(tmp, p)
+    nation = doc["nations"][0]
+    listed = nation["neighbors"]
+    declared = "neighbors_note" in nation
+    ok("7-neighbor state lists all or declares the cap",
+       len(listed) == 7 or declared, str(nation))
+    if declared:
+        ok("the note names what was kept out of how many",
+           f"top {len(listed)} of 7" in nation["neighbors_note"],
+           nation["neighbors_note"])
+    ok("a 1-neighbor state carries no note",
+       "neighbors_note" not in doc["nations"][1], str(doc["nations"][1]))
+
+
+RAW = pathlib.Path(__file__).resolve().parent.parent / "worlds" / "raw"
+
+
+def test_tracked_full_export_grounds_settlements(tmp):
+    """The ticket's own repro, pinned: the tracked browser full-JSON dump
+    (candidate-5-full.json) used to import 40 rivers with zero
+    settlements. It is tracked, so the fixture is the real 8 MB export —
+    this is the end-to-end proof the grounding handles the list shape."""
+    p = RAW / "candidate-5-full.json"
+    if not p.is_file():
+        ok("tracked dump present in this checkout", False, str(p))
+        return
+    _, doc, missing = import_to(tmp, p)
+    ok("tracked dump: every section found", missing == [], str(missing))
+    grounded = [r for r in doc["rivers"] if r["settlements"]]
+    ok("tracked dump: 40 rivers kept (the discharge cap)", len(doc["rivers"]) == 40,
+       str(len(doc["rivers"])))
+    ok("tracked dump: river settlements computed (was zero)",
+       len(grounded) >= 30, f"{len(grounded)}/40")
+    ok("tracked dump: summary no longer claims missing graph arrays",
+       doc["summary"]["river_settlements"].startswith("nearby settlements"),
+       doc["summary"]["river_settlements"])
+    ok("tracked dump: the cap note appears on real neighbor-heavy states",
+       any("neighbors_note" in n for n in doc["nations"]),
+       str([n["name"] for n in doc["nations"]]))
 
 
 # --------------------------------------------------------------- climate
@@ -330,6 +434,9 @@ if __name__ == "__main__":
                test_output_is_mtime_and_clock_free,
                test_cli_batch_survives_one_bad_file,
                test_json_export_reports_no_missing,
+               test_browser_export_grounds_river_settlements,
+               test_neighbors_cap_is_declared,
+               test_tracked_full_export_grounds_settlements,
                test_climate_fields_headless_shape,
                test_climate_fields_browser_shape,
                test_climate_fields_degrade_to_absent]:

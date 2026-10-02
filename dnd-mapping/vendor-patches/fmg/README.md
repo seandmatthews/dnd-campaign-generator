@@ -18,8 +18,10 @@ copy of those files. If the working tree is lost, these restore Tier 1.
 Installs are plain `npm install` (npm ships with Node; upstream keeps a
 package-lock.json, and npm's flat node_modules is what FMG's imports
 expect). No pnpm: its symlinked store was the source of the
-junction-breaks-when-moved fragility. The `package-lock.json` inside the
-clone is generated — do not vendor it.
+junction-breaks-when-moved fragility. `python setup-tools.py --check`
+detects a pnpm-shaped tree (a `.pnpm` store) even when every marker file
+is present, and setup removes it for a clean npm reinstall. The
+`package-lock.json` inside the clone is generated — do not vendor it.
 
 ## Re-applying after a fresh clone of FMG at tag 1.153.1
 
