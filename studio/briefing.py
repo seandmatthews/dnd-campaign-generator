@@ -190,7 +190,12 @@ def render_markdown(name: str, doc: dict) -> str:
 def _quests_present(doc: dict) -> bool:
     q = doc.get("quests") or {}
     return bool(q.get("overdue") or q.get("active")
-                or q.get("hooks_not_shown") or q.get("error"))
+                or q.get("hooks_not_shown") or q.get("error")
+                # error findings alone must still surface the section: a
+                # bad page in a questless campaign is exactly when the
+                # "your quests vanished" bug was invisible (ticket 09)
+                or any((f or {}).get("level") == "error"
+                       for f in q.get("findings") or []))
 
 
 def _quests_markdown(doc: dict, lines: list) -> None:
@@ -208,6 +213,13 @@ def _quests_markdown(doc: dict, lines: list) -> None:
     if q.get("error"):
         lines.append(f"- _Quests could not be read: {q['error']}_")
         return
+    # error-level findings ride along (a page that does not parse, an
+    # unreadable quest page): the section is where a GM would notice the
+    # read model degrading — warnings stay in the panel/CLI only
+    for f in q.get("findings") or []:
+        if (f or {}).get("level") == "error":
+            lines.append(f"- ⚠ Quest finding — {f.get('message')} "
+                         f"(`{f.get('source')}`)")
     for rec in q.get("overdue") or []:
         lines.append(f"- **OVERDUE** {rec['name']} (status {rec['status']},"
                      f" due {quest_store.due_label(rec)}) — "

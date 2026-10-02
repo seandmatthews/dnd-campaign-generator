@@ -747,6 +747,13 @@
     S.api(S.campUrl('/quests')).then((doc) => {
       body.innerHTML = '';
       const quests = (doc && Array.isArray(doc.quests)) ? doc.quests : [];
+      // findings render FIRST, empty campaign or not: the panel must never
+      // answer "you have no quests" while an error finding explains that a
+      // bad page hid them (ticket 09)
+      (Array.isArray(doc.findings) ? doc.findings : []).forEach((f) => {
+        body.appendChild(S.el(
+          '<p class="muted form-note">&#9888; ' + S.esc(f.message) + '</p>'));
+      });
       if (!quests.length) {
         // empty state: the frontmatter contract in three lines, and the
         // way back to ticket 04's Obsidian (authoring lore) card
@@ -798,10 +805,6 @@
       });
       body.appendChild(groups);
       body.appendChild(S.el('<div class="entity-page-host"></div>'));
-      (Array.isArray(doc.findings) ? doc.findings : []).forEach((f) => {
-        body.appendChild(S.el(
-          '<p class="muted form-note">&#9888; ' + S.esc(f.message) + '</p>'));
-      });
     }).catch((err) => {
       body.innerHTML = '';
       body.appendChild(S.errorPanel(err, 'The quest list could not be loaded.'));

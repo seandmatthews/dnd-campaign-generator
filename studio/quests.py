@@ -43,7 +43,8 @@ import canon
 import links
 import publication
 import spine
-from places import _frontmatter_of, _page_snapshot, _page_text, _id_list
+from places import (PlaceError, _frontmatter_of, _page_snapshot,
+                    _page_text, _id_list)
 
 STATUSES = ("hooked", "active", "resolved", "abandoned")
 DEFAULT_STATUS = "hooked"
@@ -120,11 +121,13 @@ def _parse_due(meta: dict) -> dict:
 
 def _is_overdue(record: dict, current_week, today: datetime.date) -> bool:
     """A timer the GM forgot is the one that kills the campaign: `due` in
-    the past (week or date) while the status is not `resolved`. A week due
-    is overdue strictly BEFORE the current week (due week 6 of week 6 is
-    the timer running out, not missed); a date due is overdue before
-    today. No clock (week form) or an unparsable due -> never overdue."""
-    if record["status"] == "resolved":
+    the past (week or date) while the quest is still open. resolved ended
+    the story; abandoned walked away from it — neither owes a timer. A
+    week due is overdue strictly BEFORE the current week (due week 6 of
+    week 6 is the timer running out, not missed); a date due is overdue
+    before today. No clock (week form) or an unparsable due -> never
+    overdue."""
+    if record["status"] in ("resolved", "abandoned"):
         return False
     if record["due_week"] is not None:
         return isinstance(current_week, int) \
@@ -183,6 +186,27 @@ def _resolve_faction_ids(names: list[str],
 # ---------------------------------------------------------------- read model
 
 
+def _entity_pages_degraded(name: str, finding) -> list[dict]:
+    """Every entity page, with one unparsable page costing only itself —
+    the module's contract is that a hand-edit must never make quests
+    vanish, and spine.entity_pages raises on the FIRST bad page (an NPC's
+    stray tab would otherwise empty the whole read model, panel and
+    briefing included). Mirrors entity_pages' FileNotFoundError skip."""
+    root = spine.campaign_dir(name) / "lore" / "entities"
+    if not root.is_dir():
+        return []
+    out = []
+    for p in sorted(root.glob("*.md")):
+        try:
+            out.append(spine.parse_entity_page(p))
+        except FileNotFoundError:
+            continue  # unlinked mid-glob (migration/race) — never a 500
+        except (spine.CampaignError, OSError) as e:
+            finding("quests/lore-unreadable", "error", str(e),
+                    f"lore/entities/{p.name}")
+    return out
+
+
 def load(name: str) -> dict:
     """Every `kind: quest` entity page, normalized. Read fresh from disk on
     every call (hand-edits in Obsidian are equally valid; no cache).
@@ -218,13 +242,10 @@ def load(name: str) -> dict:
         idx = None
         finding("quests/links-unreadable", "error", str(e), "lore/entities/")
 
-    try:
-        pages = spine.entity_pages(name)
-    except spine.CampaignFileError as e:
-        pages = []
-        finding("quests/lore-unreadable", "error", str(e), "lore/entities/")
+    pages = _entity_pages_degraded(name, finding)
 
     today = datetime.date.today()
+    seen_names: dict[str, str] = {}   # normalized display name -> file
     quests = []
     for p in pages:
         if p["kind"] != "quest":
@@ -235,7 +256,10 @@ def load(name: str) -> dict:
             # back as expected_page_revision (see places._page_snapshot)
             raw, revision = _page_snapshot(path, None)
             meta, body = _frontmatter_of(raw)
-        except (OSError, QuestError) as e:
+        except (OSError, ValueError, PlaceError) as e:
+            # OSError: vanished mid-read; ValueError: not UTF-8; PlaceError:
+            # frontmatter that does not parse — one bad page costs only
+            # itself, never the model
             finding("quests/page-unreadable", "error",
                     f"quest page {p['file']} could not be read ({e})",
                     p["file"])
@@ -281,6 +305,14 @@ def load(name: str) -> dict:
         if status_raw != status:
             record["status_raw"] = str(meta.get("status") or "")
         record["overdue"] = _is_overdue(record, current_week, today)
+        nk = links.normalize_key(record["name"])
+        if nk in seen_names:
+            finding("quests/duplicate-name", "warning",
+                    f"two quests are named '{record['name']}' "
+                    f"({seen_names[nk]} and {record['file']}) — the name "
+                    "is ambiguous; address them by page stem", record["file"])
+        else:
+            seen_names[nk] = record["file"]
         quests.append(record)
 
     quests.sort(key=lambda q: q["name"].lower())
@@ -361,8 +393,9 @@ def briefing_section(name: str, *, since_week: int = 0,
                      today: datetime.date | None = None) -> dict:
     """The quests section briefing.build composes in:
 
-    overdue   `due` in the past (week or date) while status is not
-              `resolved` — listed FIRST, always, whatever else qualifies
+    overdue   `due` in the past (week or date) while the quest is still
+              open (resolved and abandoned both owe no timer) — listed
+              FIRST, always, whatever else qualifies
     active    status `active` quests whose place_ids/faction_ids intersect
               the places/factions changed in the covered week range (the
               events' place_ids and actors after since_week)
@@ -445,15 +478,29 @@ def _cli(argv) -> int:
 
     args = ap.parse_args(argv)
 
-    def resolve(doc: dict, key: str) -> dict | None:
+    def resolve(doc: dict, key: str) -> list[dict]:
         """The page stem is the key; a display-name fallback keeps
-        `show 'The Troll's Tithe'` working like the panel's row."""
+        `show 'The Troll's Tithe'` working like the panel's row — but a
+        name shared by two quests (load() flagged it) is REFUSED, never
+        guessed: `set` flipping the wrong quest is the one mistake this
+        CLI must not make."""
         hit = doc["by_page"].get(key)
         if hit is not None:
-            return hit
+            return [hit]
         nk = links.normalize_key(key)
-        return next((q for q in doc["quests"]
-                     if links.normalize_key(q["name"]) == nk), None)
+        return [q for q in doc["quests"]
+                if links.normalize_key(q["name"]) == nk]
+
+    def pick(doc: dict, key: str):
+        """resolve() -> one record, or (exit code, message) for 0/2+n."""
+        matches = resolve(doc, key)
+        if len(matches) > 1:
+            return 2, ("'" + key + f"' names {len(matches)} quests — use a"
+                       " page stem: "
+                       + ", ".join(m["page"] for m in matches))
+        if not matches:
+            return 1, f"no such quest: {key}"
+        return 0, matches[0]
 
     if args.cmd == "list":
         doc = load(args.campaign)
@@ -484,10 +531,10 @@ def _cli(argv) -> int:
 
     if args.cmd == "show":
         doc = load(args.campaign)
-        record = resolve(doc, args.page)
-        if record is None:
-            print(f"no such quest: {args.page}", file=sys.stderr)
-            return 1
+        code, record = pick(doc, args.page)
+        if code:
+            print(record, file=sys.stderr)
+            return code
         view = quest_view(args.campaign, record["page"])
         if args.json:
             print(json.dumps(view, indent=2, ensure_ascii=False))
@@ -515,17 +562,23 @@ def _cli(argv) -> int:
 
     # set
     doc = load(args.campaign)
-    record = resolve(doc, args.page)
-    if record is None:
-        print(f"no such quest: {args.page}", file=sys.stderr)
-        return 1
+    code, record = pick(doc, args.page)
+    if code:
+        print(record, file=sys.stderr)
+        return code
     with spine.campaign_lock(args.campaign):
         out = set_status(args.campaign, record["page"], args.status)
         if out.get("transaction"):
-            canon.snapshot(
+            # the same finalize the route performs (finalize_publication):
+            # snapshot_result + after_snapshot, so the transaction's
+            # staging is pruned and the manifest records its snapshot —
+            # canon.snapshot alone leaves both behind (ticket 09)
+            snap = canon.snapshot_result(
                 args.campaign,
                 f"campaign/{args.campaign}: quest {out.get('name')} -> "
                 f"{out.get('status')}")
+            publication.after_snapshot(args.campaign, out["transaction"],
+                                       snap)
     print(f"{out.get('name')}: status -> {out.get('status')} "
           f"({out.get('state')})")
     return 0

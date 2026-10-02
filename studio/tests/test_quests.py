@@ -10,7 +10,13 @@ ISO dates with the resolved-status exemption; the PATCH route is a
 reviewed short write (409 on lock, 409 on stale revision, snapshot
 committed, body + unknown keys preserved); the briefing section lists
 overdue first and filters active quests by intersection; the CLI
-list/show/set round-trips."""
+list/show/set round-trips.
+
+Ticket 09 adds: one unparsable entity page costs only itself (panel
+contract AND briefing both carry the error finding); abandoned exempts
+from overdue; duplicate names are flagged and the CLI refuses them;
+revision-omitted PATCH is a documented merge; CLI `set` finalizes like
+the route (manifest records the snapshot)."""
 
 import json
 
@@ -382,3 +388,155 @@ def test_cli_list_show_set(camp, capsys):
     # an unknown status is refused by the same gate the route uses
     with pytest.raises(quests.QuestError):
         quests._cli([camp, "set", "The Trolls Tithe", "cancelled"])
+
+
+# ------------------------------------------------------- ticket 09: hand-edits
+
+
+def test_one_bad_entity_page_costs_only_itself(client, camp):
+    """The read model's contract: a hand-edit must never make quests
+    vanish. A broken NPC page (not even a quest) degrades to one error
+    finding while every quest stays listed."""
+    _write(
+        spine.campaign_dir(camp) / "lore" / "entities" / "Broken NPC.md",
+        "---\nname: [unclosed\n  bad: yaml: here\n---\n\nProse.\n")
+    doc = quests.load(camp)
+    assert doc["counts"]["active"] == 7          # every quest survived
+    bad = [f for f in doc["findings"]
+           if f["rule"] == "quests/lore-unreadable"]
+    assert len(bad) == 1 and "Broken NPC.md" in bad[0]["message"]
+    assert "Broken NPC" not in doc["by_page"]
+    # the view route answers too — no 422/500 over one bad page
+    r = client.get(f"/api/campaign/{camp}/quests")
+    assert r.status_code == 200
+    assert r.json()["counts"]["active"] == 7
+
+    # a quest page whose frontmatter does not parse is caught at the entity
+    # parse — the same lore-unreadable rule, still only one finding
+    _write(spine.campaign_dir(camp) / "lore" / "entities" / "Broken Quest.md",
+           "---\nkind: quest\nstatus: [oops\n---\n\nProse.\n")
+    doc = quests.load(camp)
+    assert doc["counts"]["active"] == 7
+    assert any(f["rule"] == "quests/lore-unreadable"
+               and "Broken Quest.md" in f["message"]
+               for f in doc["findings"])
+    assert "Broken Quest" not in doc["by_page"]
+
+
+def test_page_vanishing_mid_read_costs_only_itself(camp, monkeypatch):
+    """The race guard: a quest page that fails its OWN read (deleted or
+    locked between the entity index and the per-page snapshot) degrades to
+    quests/page-unreadable — the finding the (OSError, ValueError,
+    PlaceError) tuple exists to catch."""
+    _page(spine.campaign_dir(camp).parent / camp, "Vanishing Quest",
+          {"kind": "quest", "name": "Vanishing Quest", "status": "active"})
+    real = quests._page_snapshot
+
+    def flaky(path, expected):
+        if path.name == "Vanishing Quest.md":
+            raise OSError("vanished mid-read")
+        return real(path, expected)
+
+    monkeypatch.setattr(quests, "_page_snapshot", flaky)
+    doc = quests.load(camp)
+    assert doc["counts"]["active"] == 7        # only the vanisher is gone
+    gone = [f for f in doc["findings"]
+            if f["rule"] == "quests/page-unreadable"]
+    assert len(gone) == 1 and "Vanishing Quest.md" in gone[0]["message"]
+
+
+def test_findings_surface_even_with_zero_quests(client, tmp_spine_root):
+    """The empty campaign with one bad page: quests == [] but findings
+    carry the reason — the route contract the panel's empty state now
+    renders instead of 'create a quest' advice."""
+    root = tmp_spine_root / "brokenvale"
+    (root / "lore" / "entities").mkdir(parents=True)
+    _write(root / "campaign.yaml",
+           yaml.safe_dump({"name": "brokenvale", "title": "brokenvale"}))
+    _write(root / "simulation" / "state.yaml",
+           yaml.safe_dump(_sim_state(), sort_keys=False))
+    _write(root / "lore" / "entities" / "Broken NPC.md",
+           "---\nname: {nope\n---\n\nProse.\n")
+    r = client.get("/api/campaign/brokenvale/quests")
+    assert r.status_code == 200
+    doc = r.json()
+    assert doc["quests"] == []
+    assert any(f["rule"] == "quests/lore-unreadable"
+               for f in doc["findings"])
+
+    # and the briefing renders the error finding — the section must not
+    # vanish just because there are no quests to list
+    md = briefing.build("brokenvale", since_week=0)["markdown"]
+    assert "## Quests (open story)" in md
+    assert "Quest finding" in md and "Broken NPC.md" in md
+
+
+def test_abandoned_is_exempt_from_overdue(camp):
+    """resolved ended the story; abandoned walked away — neither owes a
+    timer, or an abandoned quest pollutes the overdue block forever."""
+    _page(spine.campaign_dir(camp).parent / camp, "Abandoned Timer",
+          {"kind": "quest", "name": "Abandoned Timer", "status": "abandoned",
+           "due": 3})
+    by_page = quests.load(camp)["by_page"]
+    assert not by_page["Abandoned Timer"]["overdue"]
+    assert by_page["Overdue Timer"]["overdue"]      # active still is
+    section = quests.briefing_section(camp, since_week=5)
+    assert "Abandoned Timer" not in {q["page"] for q in section["overdue"]}
+
+
+def test_duplicate_names_flagged_and_cli_refuses(tmp_spine_root, capsys):
+    root = tmp_spine_root / "dupevale"
+    (root / "lore" / "entities").mkdir(parents=True)
+    _write(root / "campaign.yaml",
+           yaml.safe_dump({"name": "dupevale", "title": "dupevale"}))
+    _write(root / "simulation" / "state.yaml",
+           yaml.safe_dump(_sim_state(), sort_keys=False))
+    _page(root, "Tithe A", {"kind": "quest", "name": "The Same Tithe"})
+    _page(root, "Tithe B", {"kind": "quest", "name": "The Same Tithe"})
+
+    doc = quests.load("dupevale")
+    assert len(doc["quests"]) == 2
+    dup = [f for f in doc["findings"]
+           if f["rule"] == "quests/duplicate-name"]
+    assert len(dup) == 1 and "Tithe A.md" in dup[0]["message"] \
+        and "Tithe B.md" in dup[0]["message"]
+
+    # the display name is refused — guessing would flip the wrong quest
+    assert quests._cli(["dupevale", "show", "The Same Tithe"]) == 2
+    err = capsys.readouterr().err
+    assert "names 2 quests" in err and "Tithe A" in err and "Tithe B" in err
+    assert quests._cli(["dupevale", "set", "The Same Tithe", "active"]) == 2
+    # the page stem stays unambiguous and works
+    assert quests._cli(["dupevale", "set", "Tithe B", "active"]) == 0
+    assert "status -> active" in capsys.readouterr().out
+
+
+def test_patch_revision_omitted_is_a_documented_merge(client, camp):
+    """No expected_page_revision = merge semantics against the current
+    bytes (the places PATCH contract) — pinned here so the behavior is a
+    decision, not an accident."""
+    url = f"/api/campaign/{camp}/quests/The%20Silence%20at%20Deephold"
+    r = client.patch(url, json={"status": "active"})
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] == "published"
+    assert quests.load(camp)["by_page"]["The Silence at Deephold"] \
+        ["status"] == "active"
+
+
+def test_cli_set_finalizes_like_the_route(camp):
+    """CLI `set` runs snapshot_result + after_snapshot: on a committed
+    snapshot the staging is pruned and the manifest's snapshot bookkeeping
+    ran — canon.snapshot alone left the staged transaction dir behind
+    forever (ticket 09)."""
+    assert quests._cli([camp, "set", "Word from the Bramblewood",
+                        "active"]) == 0
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "Word from the Bramblewood.md"
+    assert "status: active" in page.read_text(encoding="utf-8")
+    tx_root = spine.campaign_dir(camp) / ".studio-transactions"
+    leftovers = sorted(
+        p.name for p in tx_root.iterdir()
+        if p.is_dir() and p.name != "receipts") \
+        if tx_root.is_dir() else []
+    assert leftovers == [], \
+        f"CLI set must prune committed staging like the route: {leftovers}"

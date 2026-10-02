@@ -71,6 +71,9 @@ def patch_quest(name: str, page: str, body: QuestPatchBody):
     preserved; the write is transactional and lands as a history
     snapshot."""
     require_campaign(name)
+    if not spine.valid_page_name(page or ""):
+        raise HTTPException(status_code=422,
+                            detail=f"invalid page name: {page!r}")
     with store_errors(*_QUEST_422, conflict=_QUEST_CONFLICT,
                       not_found=_QUEST_NOT_FOUND), \
             campaign_lock_nowait(name, "updating the quest"):
