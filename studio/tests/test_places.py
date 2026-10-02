@@ -17,6 +17,7 @@ import json
 import forecasts as forecast_store
 import places
 import proposals as proposal_store
+import publication
 import pytest
 import spine
 import yaml
@@ -562,6 +563,60 @@ def test_scalar_place_patches_are_line_surgery(client, camp, tmp_spine_root):
     assert "The city proper." in after
 
 
+# -------------------------------------- ticket 22: page surgery completion
+
+# P3-20: "dominant newline" used to be ANY-CRLF — one pasted CRLF line in
+# an otherwise-LF page wholesale converted the file on the next write.
+def test_mixed_endings_page_keeps_its_majority_style(client, camp,
+                                                     tmp_spine_root):
+    root = tmp_spine_root
+    _page(root / camp, "Ferry Crossing",
+          {"kind": "place", "name": "Ferry Crossing",
+           "place_id": "ferry-crossing"})
+    page = root / camp / "lore" / "entities" / "Threepaths.md"
+    original = ("---\n"
+                "kind: place\r\n"
+                "name: Threepaths\n"
+                "place_id: threepaths\n"
+                "---\n"
+                "\n"
+                "A crossroads.  \n")
+    page.write_bytes(original.encode("utf-8"))
+
+    r = client.patch(f"/api/campaign/{camp}/places/threepaths",
+                     json={"parent_place_id": "ferry-crossing"})
+    assert r.status_code == 200, r.text
+    after = page.read_bytes().decode("utf-8")
+    # majority by COUNT (four LF endings beat the one CRLF): the page
+    # stays LF — the lone pasted CRLF line folds to the majority style,
+    # and the surgical insert lands before the closing fence
+    expected = original.replace("kind: place\r\n", "kind: place\n") \
+                       .replace("---\n\n",
+                                "parent_place_id: ferry-crossing\n---\n\n")
+    assert after == expected
+    assert "\r\n" not in after
+
+
+# P3-21: a ` #` inside the value's own quotes ("Shop #5") is not a
+# comment; re-appending it after the new value left the bogus tail
+# 'New Name #5"' in the file (it parses as a comment, so the corruption
+# is invisible to the read model — the BYTES are wrong).
+def test_a_hash_inside_a_quoted_value_is_not_an_inline_comment():
+    text = "---\nname: \"Shop #5\"\nkind: place\n---\n\nBody.\n"
+    out = places._set_frontmatter_scalars(text, {"name": "The New Shop"})
+    assert out is not None
+    assert "\nname: The New Shop\n" in out  # no '#5"' tail re-appended
+    meta, _body = places._frontmatter_of(out)
+    assert meta["name"] == "The New Shop"
+
+    # a REAL comment after the closing quote still rides along
+    text = "---\nname: \"Shop\" # the shop\nkind: place\n---\n\nBody.\n"
+    out = places._set_frontmatter_scalars(text, {"name": "The New Shop"})
+    assert " # the shop" in out
+    meta, _body = places._frontmatter_of(out)
+    assert meta["name"] == "The New Shop"
+
+
 # ---------------------------------------------------------------- maps
 
 
@@ -623,6 +678,56 @@ def test_map_association_writes_note_and_params_in_one_publish(
     params = yaml.safe_load(
         (slug_dir / "params.yaml").read_text(encoding="utf-8"))
     assert "place_id" not in params
+
+
+# P3-31: expected_revision is the companion NOTE's revision; applying it
+# to params.yaml as well (whose hash can never equal the note's) made
+# every caller-supplied revision a guaranteed false 409.
+def test_map_association_revisions_are_per_file(client, camp,
+                                                tmp_spine_root,
+                                                monkeypatch):
+    root = tmp_spine_root
+    slug_dir = root / camp / "maps" / "sites" / "old-mill"
+    slug_dir.mkdir(parents=True)
+    (slug_dir / "old-mill.png").write_bytes(b"png")
+    note = _write(slug_dir / "old-mill.md",
+                  "---\nkind: battlemap\n---\n\nmap\n")
+    params = _write(slug_dir / "params.yaml",
+                    yaml.safe_dump({"name": "The Old Mill", "seed": "1"}))
+    note_rev = publication.file_revision(note)
+
+    # the note's own revision passes — params.yaml no longer conflicts on
+    # a hash it can never match
+    r = client.post(
+        f"/api/campaign/{camp}/places/ferry-crossing/associations",
+        json={"source_kind": "map", "source_id": "old-mill",
+              "relationship": "depicts", "expected_revision": note_rev})
+    assert r.status_code == 200, r.text
+
+    # a stale NOTE revision is still a real 409 — that check is intact
+    r = client.post(
+        f"/api/campaign/{camp}/places/ferry-crossing/associations",
+        json={"source_kind": "map", "source_id": "old-mill",
+              "relationship": "depicts", "expected_revision": "0" * 64})
+    assert r.status_code == 409
+
+    # params.yaml's baseline is its OWN freshly-read hash: an external
+    # edit between associate's read and the publish is still refused —
+    # simulated by touching params.yaml inside the dump the write stages
+    real_dump = spine.dump_yaml
+
+    def dump_then_edit_params(doc):
+        params.write_text("name: externally edited\n", encoding="utf-8")
+        return real_dump(doc)
+
+    monkeypatch.setattr(spine, "dump_yaml", dump_then_edit_params)
+    with spine.campaign_lock(camp):
+        with pytest.raises(places.PlaceConflict):
+            places.associate(camp, "ferry-crossing", source_kind="map",
+                             source_id="old-mill",
+                             relationship="depicts")
+    assert "place_id" not in yaml.safe_load(
+        params.read_text(encoding="utf-8"))
 
 
 def test_page_scoped_groups_refuse_associations_and_parenting(

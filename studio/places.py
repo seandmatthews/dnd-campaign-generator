@@ -125,6 +125,54 @@ def _scalar_yaml(value) -> str:
     return line[len("k:"):].strip()
 
 
+def _scalar_closes_on_line(v: str) -> bool:
+    """Whether a value that OPENS with a quote also closes it on the same
+    line. 'status: "hooked' with the closing quote two lines down is one
+    YAML scalar spanning lines (it parses, to 'hooked '): rewriting only
+    the first line would leave the dangling continuation folding into the
+    NEW value ('active "' — a silent wrong-write, ticket 22 R3). Values
+    that do not open with a quote close on the line by construction."""
+    if v[:1] not in ('"', "'"):
+        return True
+    q, j = v[0], 1
+    while j < len(v):
+        if q == '"' and v[j] == "\\":
+            j += 2              # \" — an escaped quote inside the value
+            continue
+        if v[j] == q:
+            if q == "'" and v[j + 1:j + 2] == q:
+                j += 2          # '' — the single-quote escape
+                continue
+            return True
+        j += 1
+    return False
+
+
+def _inline_comment(rest: str) -> str:
+    """The ` # comment` tail of a frontmatter value line, or ''. A `#`
+    inside the value's own quotes is NOT a comment ('name: "Shop #5"' —
+    ticket 22 P3-21): the scan steps over the closed quoted scalar first
+    and only then looks for the space-hash. In a plain scalar a space-hash
+    can only BE the comment (YAML ends the value there), so the first
+    find is correct."""
+    v = rest.strip()
+    if v[:1] in ('"', "'"):
+        q, j = v[0], 1
+        while j < len(v):
+            if q == '"' and v[j] == "\\":
+                j += 2
+                continue
+            if v[j] == q:
+                if q == "'" and v[j + 1:j + 2] == q:
+                    j += 2
+                    continue
+                break               # the closing quote
+            j += 1
+        v = v[j + 1:] if j < len(v) else ""
+    at = v.find(" #")
+    return v[at:] if at != -1 else ""
+
+
 def _set_frontmatter_scalars(text: str, changes: dict,
                              newline: str = "\n") -> str | None:
     """Frontmatter LINE SURGERY (ticket 10): set non-empty scalar keys by
@@ -134,9 +182,12 @@ def _set_frontmatter_scalars(text: str, changes: dict,
 
     None when the change is not line-local surgery's to make, and the
     caller re-serializes with _page_text: a non-scalar/blank value, a key
-    whose current value is a list or mapping (block or flow), or a page
-    with no frontmatter block. Mixed line endings fold to the page's
-    dominant style, which _page_snapshot captured at the read."""
+    whose current value is a list or mapping (block or flow) or otherwise
+    SPANS lines (a quote that closes further down — ticket 22 R3), or a
+    page with no frontmatter block. A `#`-prefixed comment line is safe
+    unchanged bytes and passes the pre-scan like a blank line (R4); mixed
+    line endings fold to the page's dominant style, which _page_snapshot
+    captured at the read."""
     for v in changes.values():
         if isinstance(v, str):
             if not v.strip():
@@ -157,6 +208,8 @@ def _set_frontmatter_scalars(text: str, changes: dict,
         line = lines[i]
         if not line.strip() or line[:1] in (" ", "\t"):
             continue  # blank, or a continuation of the key above it
+        if line[:1] == "#":
+            continue  # a comment line — safe unchanged bytes, keep it (R4)
         if not _FM_KEY_RE.match(line):
             # top-level content that is not a key line (e.g. a stray '{}'
             # an old generator once wrote): editing around it can produce
@@ -172,13 +225,15 @@ def _set_frontmatter_scalars(text: str, changes: dict,
             continue
         rest = lines[i][len(m.group(0)):]
         v = rest.strip()
-        block_follows = i + 1 < fm_end and lines[i + 1][:1] in (" ", "\t")
-        if v[:1] in ("[", "{", "|", ">") or (not v and block_follows):
-            return None  # current value is a collection — rebuild instead
-        comment = ""
-        at = rest.find(" #")
-        if at != -1:
-            comment = rest[at:]
+        nxt = lines[i + 1] if i + 1 < fm_end else ""
+        # an indented non-comment line below the key continues its value
+        # (a block collection, or a plain/quoted scalar folding across
+        # lines) — the value is not line-local
+        block_follows = nxt[:1] in (" ", "\t") and nxt.lstrip()[:1] != "#"
+        if v[:1] in ("[", "{", "|", ">") or block_follows \
+                or not _scalar_closes_on_line(v):
+            return None  # current value spans beyond its line — rebuild
+        comment = _inline_comment(rest)
         lines[i] = f"{key}: {_scalar_yaml(changes[key])}{comment}"
         done.add(key)
     insert_at = fm_end
@@ -221,12 +276,16 @@ def _page_snapshot(path: Path, expected: str | None) -> tuple[str, str, str]:
     newer revision and let publication accept a stale write over an
     external edit. The decode applies universal-newline translation like
     read_text, so a CRLF hand-edit still parses its frontmatter; the
-    file's dominant newline rides along so a byte-preserving write
-    (ticket 10) can restore the endings the GM's editor wrote."""
+    file's dominant newline (by COUNT, not mere presence — one pasted
+    CRLF line in an LF page must not flip the whole file) rides along so
+    a byte-preserving write (ticket 10) can restore the endings the GM's
+    editor wrote."""
     data = path.read_bytes()
     revision = expected or hashlib.sha256(data).hexdigest()
     text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    return text, revision, ("\r\n" if b"\r\n" in data else "\n")
+    crlf = data.count(b"\r\n")
+    return text, revision, ("\r\n" if crlf > data.count(b"\n") - crlf
+                            else "\n")
 
 
 # --------------------------------------------------------------- attachments
@@ -1239,7 +1298,9 @@ def associate(name: str, place_id: str, *, source_kind: str,
     silently point it at a different event. For the other sources it is
     optional: the record is re-read under the campaign lock and merged, and
     the current revision is captured as the publish baseline anyway, so a
-    mid-flight external edit is still a 409, never a silent overwrite."""
+    mid-flight external edit is still a 409, never a silent overwrite.
+    Map sources: expected_revision gates the companion NOTE; params.yaml
+    always baselines its own freshly-read hash (never the note's)."""
     group = _require_group(name, place_id)
     pid = group["id"]
     if pid.startswith("page:"):
@@ -1399,8 +1460,12 @@ def associate(name: str, place_id: str, *, source_kind: str,
     params_path = d / Path(*params_rel.split("/"))
     if params_path.is_file():
         params_data = params_path.read_bytes()
-        base[params_rel] = expected_revision or \
-            hashlib.sha256(params_data).hexdigest()
+        # params.yaml's baseline is its OWN hash — expected_revision is the
+        # companion NOTE's revision and can never equal params' hash, so
+        # applying it here made every caller-supplied revision a false 409
+        # (ticket 22 P3-31). An absent params.yaml writes nothing, so it
+        # carries no baseline at all.
+        base[params_rel] = hashlib.sha256(params_data).hexdigest()
         try:
             params = yaml.safe_load(params_data.decode("utf-8"))
         except (yaml.YAMLError, UnicodeDecodeError):
