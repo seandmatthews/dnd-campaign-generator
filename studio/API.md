@@ -56,7 +56,9 @@ change — never let them drift.
   `<campaign>/.studio-jobs/history.json` (git-ignored, beside the
   transactions dir; median of the last ~6 runs, roster-scaled for
   weeks/forecasts, clamped). A 409 that cannot be queued — the shared
-  engine home busy, or a short interactive writer racing a job — appends
+  engine home busy with ANOTHER campaign's run (a same-campaign
+  week/forecast joins the campaign queue instead, ticket 24), or a short
+  interactive writer racing a job — appends
   `" Blocked by: <what is running> — typically <low>-<high> (an estimate
   from past runs; the job log is the source of truth)"` to its error, or
   admits "no duration history yet" when nothing has finished. Estimates
@@ -95,7 +97,11 @@ change — never let them drift.
   A second, process-wide lock (`engines.ENGINE_LOCK`) serializes every
   copy-in → engine-run → copy-out sequence: the week job holds it for its
   whole run; views and why read the campaign's own canon via `--state` and
-  take no lock. Lock order: campaign lock outside, engine lock inside. The
+  take no lock. The lock records its HOLDER campaign (ticket 24): the
+  submit-time probes in week/forecast 409 only when the holder is a
+  DIFFERENT campaign (or an unnamed one) — a same-campaign holder means the
+  request queues behind its own run, which is what the per-campaign queue
+  is for. Lock order: campaign lock outside, engine lock inside. The
   doctor's simulator probe is skipped while a week is in flight (run flag OR
   engine lock held).
 - Canon snapshots (hardening): after every successful canon mutation the
@@ -181,7 +187,11 @@ shapes in this document true.
 
 ### World generation (G, M1)
 - `POST /api/campaign/{name}/world` `{"seed": str, "force"?: bool}` → job.
-  **409 if `world/geography.yaml` already exists and `force` is not true.**
+  **409 if `world/geography.yaml` already exists and `force` is not true** —
+  and the gate is RE-CHECKED inside the queued job under the campaign lock
+  (ticket 24): a create-only job that finds a world on disk (one landed
+  while it sat in the queue) refuses as a job error with the same message,
+  nothing run or spent; a forced job still replaces.
   Takes the campaign lock (**409 busy**, distinct from the force gate).
   On success commits snapshot `campaign/<name>: generate world (seed <seed>)`.
   422 unless seed matches `[A-Za-z0-9_-]{1,64}` (it becomes `FMG_SEED` and a
@@ -423,7 +433,9 @@ shapes in this document true.
   the pending-proposal slot — a real week can be generated while a
   forecast is on the table, and there is no accept. 409 while a pending
   proposal exists (the forecast reads the canon that proposal would
-  change), while another forecast is active, or the engine home is busy.
+  change), while another forecast is active, or the engine home is busy
+  with ANOTHER campaign's run (this campaign's own week/forecast holding
+  it means the forecast queues behind it, ticket 24).
   Result `{"forecast_id","status":"active","base_week","weeks":[{week,
   title,markdown,diff}]}`. `GET .../forecast` answers 422 naming a damaged
   bundle (discard still works) instead of a raw 500. Two queued engine

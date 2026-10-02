@@ -470,21 +470,28 @@ def post_week(name: str, body: WeekBody):
                    f"or discard it before generating another")
     ensure_publishable_409(name)  # a parked conflict blocks campaign writes
     auto_accept = bool(body.auto_accept)
-    # fast-fail courtesy: the engine home is shared across campaigns, and
-    # the job's blocking acquire would otherwise queue a second week behind
-    # a half-hour run from a different campaign with no signal at all.
-    # This contention CANNOT join the queue (the queue is per-campaign; the
-    # engine home is global), so the 409 carries the honest wait estimate
-    # from the rolling history instead.
+    # fast-fail courtesy for CROSS-campaign contention: the engine home is
+    # shared across campaigns, and the job's blocking acquire would queue a
+    # this-campaign week behind another campaign's half-hour run with no
+    # signal at all. That contention cannot join the queue (the queue is
+    # per-campaign; the engine home is global), so the 409 carries the
+    # honest wait estimate from the rolling history. SAME-campaign
+    # contention is the queue's whole reason to exist (GM ruling, ticket
+    # 24: weeks chain back-to-back behind the running one; the in-job
+    # re-checks below guard correctness) — the lock records its holder
+    # precisely so this probe can tell the two apart.
     if not engines.ENGINE_LOCK.acquire(timeout=1.0):
-        line = blocked_by_line(
-            jobs.running_jobs(kinds=("sim-week", "forecast")))
-        raise HTTPException(
-            status_code=409,
-            detail="the engine home is busy — a week run is already in "
-                   "flight (one engine home, one week at a time)"
-                   + (line + "." if line else ""))
-    engines.ENGINE_LOCK.release()  # probe only — the job takes it for real
+        if engines.ENGINE_LOCK.holder != name:
+            line = blocked_by_line(
+                jobs.running_jobs(kinds=("sim-week", "forecast")))
+            raise HTTPException(
+                status_code=409,
+                detail="the engine home is busy — a week run is already in "
+                       "flight (one engine home, one week at a time)"
+                       + (line + "." if line else ""))
+        # the holder is this campaign's own week/forecast: queue behind it
+    else:
+        engines.ENGINE_LOCK.release()  # probe only — the job takes it for real
 
     def job(log):
         # the pre-route check raced: re-check under the campaign lock this
@@ -502,7 +509,8 @@ def post_week(name: str, body: WeekBody):
             "crash restores the engine home from its backup")
         # Lock order: campaign lock (held by this job) outside, engine
         # lock inside — views/why take only the engine lock.
-        with engines.engine_lock_logged(log, "a week run or forecast"):
+        with engines.engine_lock_logged(log, "a week run or forecast",
+                                        holder=name):
             result = engines.run_week_proposal(name, d, log)
         if auto_accept:
             # loud, and only behind the explicit checkbox: publish the
@@ -1082,16 +1090,22 @@ def post_forecast(name: str, body: ForecastBody):
                    f"or wait to re-forecast from a new canon week")
     ensure_publishable_409(name)
     # same cross-campaign contention as the week: cannot join a per-
-    # campaign queue, so the 409 says what is running and how long it takes
+    # campaign queue, so the 409 says what is running and how long it takes.
+    # A SAME-campaign holder queues (GM ruling, ticket 24 — a forecast
+    # chains behind this campaign's running week); the in-job re-checks
+    # below guard correctness.
     if not engines.ENGINE_LOCK.acquire(timeout=1.0):
-        line = blocked_by_line(
-            jobs.running_jobs(kinds=("sim-week", "forecast")))
-        raise HTTPException(
-            status_code=409,
-            detail="the engine home is busy — a week run is already in "
-                   "flight (one engine home, one scratch state at a time)"
-                   + (line + "." if line else ""))
-    engines.ENGINE_LOCK.release()
+        if engines.ENGINE_LOCK.holder != name:
+            line = blocked_by_line(
+                jobs.running_jobs(kinds=("sim-week", "forecast")))
+            raise HTTPException(
+                status_code=409,
+                detail="the engine home is busy — a week run is already in "
+                       "flight (one engine home, one scratch state at a time)"
+                       + (line + "." if line else ""))
+        # the holder is this campaign's own week/forecast: queue behind it
+    else:
+        engines.ENGINE_LOCK.release()
 
     def job(log):
         # same race re-checks as every staging job (the campaign lock this
@@ -1109,7 +1123,8 @@ def post_forecast(name: str, body: ForecastBody):
         engines.write_week_flag(name)
         log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
-        with engines.engine_lock_logged(log, "a week run or forecast"):
+        with engines.engine_lock_logged(log, "a week run or forecast",
+                                        holder=name):
             return engines.run_forecast(name, d, body.weeks, log)
 
     return submit_campaign_job("forecast", name, job)
