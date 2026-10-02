@@ -51,11 +51,11 @@
 
 ## Acceptance criteria
 
-- [ ] `--replay` on a doc with `outcomes: ['bogus']` and on a replay whose
+- [x] `--replay` on a doc with `outcomes: ['bogus']` and on a replay whose
       base_state lacks the actor: both exit with a readable message, never
       a traceback.
-- [ ] A replay with a mismatched `project_rule_version` reports
+- [x] A replay with a mismatched `project_rule_version` reports
       "not comparable" instead of divergence (test with a doctored version).
-- [ ] The overextension ruling is decided, implemented or documented, and
+- [x] The overextension ruling is decided, implemented or documented, and
       pinned by a test that exercises an acting defender attacked by two
       rivals.

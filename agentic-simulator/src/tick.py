@@ -137,7 +137,14 @@ def apply_mechanical(state, faction_id, outcome):
     """Consequences of ONE resolved proposal, applied once: the strongest
     committed resource steps one grade on a decisive result (module
     docstring), and the event lands in state["events"]."""
-    faction = next(f for f in state["factions"] if f["id"] == faction_id)
+    faction = next((f for f in state["factions"] if f["id"] == faction_id),
+                   None)
+    if faction is None:
+        # contract, not exception roulette: a replay whose embedded
+        # base_state lacks the actor used to escape as a bare StopIteration
+        raise ValueError(
+            f"actor {faction_id!r} is not among the state's factions — "
+            "the outcome cannot be applied")
     committed = outcome.get("committed", {})
     if outcome["success"] and outcome["margin"] >= 5:
         step_resource(faction["resources"], committed, +1)
@@ -330,7 +337,8 @@ def save_replay(week, seed, proposals, outcomes, base_state_sha,
     a replay is self-consistency — the file attests to itself, there is no
     external hash to check. Schema 3 adds the project report (input
     counters, resulting deltas, completions, project-rule version) so
-    verification recomputes the project mechanics too."""
+    verification recomputes the project mechanics too — when the recorded
+    project rule version still matches the engine's (replay_verify)."""
     replay_dir = ROOT / "world" / "replay"
     replay_dir.mkdir(parents=True, exist_ok=True)
     doc = {
@@ -373,9 +381,12 @@ def replay_verify(path):
     outcomes against data the week never saw — 'verified' would be a lie.
 
     Schema 3 replays also carry the week's project report; when present,
-    the project mechanics are recomputed from the same inputs and compared.
-    An old replay without the section still verifies its dice — and says
-    so, never claiming mechanics it never stored."""
+    the project mechanics are recomputed from the same inputs and compared
+    — unless the replay's project_rule_version differs from the engine's,
+    which refuses the mechanics comparison for the same reason a
+    rule_version mismatch refuses the dice: the rules changed, so sameness
+    would be meaningless. An old replay without the section still verifies
+    its dice — and says so, never claiming mechanics it never stored."""
     try:
         with open(path, encoding="utf-8") as f:
             doc = yaml.safe_load(f)
@@ -385,6 +396,19 @@ def replay_verify(path):
                    if k not in doc]
         if missing:
             raise ValueError(f"missing {', '.join(missing)}")
+        # catch by contract, not by exception list: the comparison loop and
+        # the project recompute index into these lists, so anything that is
+        # not a list of mappings is a malformed file refused HERE (a
+        # non-dict outcome entry used to escape as an AttributeError from
+        # _divergence_message, outside every guard)
+        for key in ("proposals", "outcomes"):
+            if not isinstance(doc[key], list):
+                raise ValueError(f"{key} is not a list")
+            bad = [str(i + 1) for i, e in enumerate(doc[key])
+                   if not isinstance(e, dict)]
+            if bad:
+                raise ValueError(
+                    f"{key} entries {', '.join(bad)} are not mappings")
         if doc.get("rule_version") != resolve.RULE_VERSION:
             return False, (
                 f"replay file is rule version {doc.get('rule_version')}, "
@@ -414,6 +438,15 @@ def replay_verify(path):
     if not isinstance(project_doc, dict):
         return True, (f"week {doc.get('week')} replays identically (dice; "
                       "recorded before project mechanics)")
+    if doc.get("project_rule_version") != projects.RULE_VERSION:
+        # exactly the dice path's rule_version gate: after a project
+        # mechanics bump, an old replay must report the rules changed, not
+        # "diverged" — which would imply corruption
+        return False, (
+            f"week {doc.get('week')} dice verified, but the replay file is "
+            f"project rule version {doc.get('project_rule_version')}, "
+            f"engine is {projects.RULE_VERSION} — project mechanics are "
+            "not comparable")
     if not isinstance(doc.get("base_state"), dict):
         return False, ("week "
                        f"{doc.get('week')} carries a project report but no "
@@ -425,7 +458,7 @@ def replay_verify(path):
         poutcomes = resolve.resolve_tick(doc["proposals"], pstate)
         apply_outcomes(pstate, poutcomes, doc["proposals"])
         reproject = projects.apply_week(pstate, doc["proposals"], poutcomes)
-    except (KeyError, ValueError, TypeError) as e:
+    except (KeyError, ValueError, TypeError, StopIteration) as e:
         return False, (f"week {doc.get('week')} project mechanics could not "
                        f"be recomputed: {e}")
     if reproject == project_doc:

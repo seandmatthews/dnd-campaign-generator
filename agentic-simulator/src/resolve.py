@@ -22,6 +22,20 @@ Rule version 2 (resolver correctness):
 - Every outcome records rule_version; tick saves normalized proposals,
   base-state identity, and the seed per week so a week can be replayed
   through --replay with no network calls.
+
+Rule version 3 (attacks degrade, never delete — GM ruling 2026-10-02):
+- An acting faction whose own proposal was not an attack, dragged into
+  contests by rivals, still resolves that proposal as a normal
+  uncontested action. It used to be resolved only through its defensive
+  rolls (or not at all), so the chronicle labeled a district action
+  "succeeded/failed (contested vs X)" when it was never rolled against
+  the district — a committed action always produces an outcome.
+- Defending DOES overextend an acting defender: every contest it stands
+  in is a front, and the -2-per-extra-front penalty applies to ALL of its
+  rolls that week, its defenses and its own action alike — one beleaguered
+  faction, one penalty. An inactive defender still rolls clean (it
+  proposed nothing). Suppression-by-dogpile is the sabotage system's
+  job, never the dice's.
 """
 
 import pathlib
@@ -31,7 +45,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 from store import places_of
 
-RULE_VERSION = 2
+RULE_VERSION = 3
 
 # The RNG source: the `random` module itself by default, so random.seed()
 # keeps driving it. tick sets a per-week seeded Random via set_rng() and
@@ -84,21 +98,25 @@ def _muscle_bonus(faction):
         "muscle", "none"), 0)
 
 
-def resolve_action(action, rules=None):
+def resolve_action(action, rules=None, penalty=0):
     """Resolve one proposed action. Returns an outcome record; does not
     mutate state — the caller (tick) applies it and logs it. `rules` is
-    trusted input (DM/rules layer) and may override default_dc."""
+    trusted input (DM/rules layer) and may override default_dc. `penalty`
+    carries the beleaguered overextension malus (rule version 3): an
+    acting defender's own non-attack action rolls at the same penalty its
+    defenses do."""
     bonus = _bonus(action.get("resources_committed"))
     dc = DEFAULT_DC
     if rules and rules.get("default_dc") is not None:
         dc = int(rules["default_dc"])
     roll = d20()
-    total = roll + bonus
+    total = roll + bonus + penalty
     return {
         "actor": action["actor"],
         "action": action["action"],
         "roll": roll,
         "bonus": bonus,
+        "penalty": penalty,
         "total": total,
         "dc": dc,
         "contested": False,
@@ -159,11 +177,15 @@ def resolve_tick(proposals, state=None):
     the higher total wins — the loser's action fails, and margin is the gap
     between totals. Ties go to the defender.
 
-    Overextension rule (one sentence): a faction in more than one contest
-    rolls −2 per additional contest, in all of them — besieged on all
-    fronts, beleaguered on all fronts. Two factions targeting each other
-    fight ONE contest, not two. Attacking an inactive faction counts as a
-    front; defending does not overextend the defender.
+    Overextension rule (one sentence): a faction standing in more than one
+    contest rolls −2 per additional contest, in all of them — besieged on
+    all fronts, beleaguered on all fronts. Two factions targeting each
+    other fight ONE contest, not two. Every contest an ACTING faction
+    stands in is a front, defending included — only an inactive defender
+    (it proposed nothing) is never overextended. A beleaguered faction's
+    own non-attack proposal still resolves as a normal uncontested action,
+    at the same penalty: attacks degrade a committed action, they never
+    delete it (rule version 3).
 
     Inactive defense (rule version 2): a target that exists in the state
     but did not propose this week still contests — d20 + current muscle
@@ -220,7 +242,10 @@ def resolve_tick(proposals, state=None):
     contest_count = {}
     for attacker, defender, _ in contests:
         contest_count[attacker] = contest_count.get(attacker, 0) + 1
-        if defender in by_actor:  # defenses do not overextend the defender
+        # an ACTING defender's fronts count too (rule version 3): one
+        # beleaguered faction, one penalty across all its rolls. An
+        # inactive defender never enters contest_count and rolls clean.
+        if defender in by_actor:
             contest_count[defender] = contest_count.get(defender, 0) + 1
 
     def roll_for(actor):
@@ -270,12 +295,23 @@ def resolve_tick(proposals, state=None):
                 "margin": own["total"] - other["total"],
                 "rule_version": RULE_VERSION,
             })
-    contested_actors = {actor for attacker, defender, _ in contests
-                        for actor in (attacker, defender)}
+    # Rule version 3 (attacks degrade, never delete): only an ATTACK
+    # proposal is settled inside its contest(s). A proposal that never
+    # targeted another faction resolves here even when rivals dragged its
+    # author into contests — a committed action always produces an
+    # outcome — at the beleaguered penalty its defenses roll at (no
+    # fronts, no penalty). The membership test mirrors the contest builder
+    # above: a mutual pair's second edge collapses into the first contest,
+    # but that proposal is still an attack, settled there — never twice.
+    def _is_attack(p):
+        target = p.get("target")
+        return target in faction_map and target != p["actor"]
+
     for p in proposals:
-        if p["actor"] not in contested_actors:
-            o = resolve_action(p, state.get("meta", {}).get("rules")
-                               if state else None)
-            o["penalty"] = 0
-            outcomes_list.append(o)
+        if _is_attack(p):
+            continue
+        penalty = -2 * (contest_count.get(p["actor"], 1) - 1)
+        outcomes_list.append(
+            resolve_action(p, state.get("meta", {}).get("rules")
+                           if state else None, penalty=penalty))
     return outcomes_list

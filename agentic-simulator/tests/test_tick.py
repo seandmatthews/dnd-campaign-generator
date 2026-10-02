@@ -679,6 +679,151 @@ def test_replay_verify_reports_malformed_files_not_tracebacks():
     print("  replay trail: broken files refuse with a message  OK")
 
 
+def test_replay_verify_refuses_non_mapping_outcomes():
+    """The regression (ticket 20, P3-1): `outcomes: ['bogus']` with a
+    length that matches the recomputation used to escape as an
+    AttributeError from _divergence_message's r.get — outside every guard.
+    Shapes are validated by contract now: both the function and the
+    --replay CLI refuse with a readable message, never a traceback."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-shape-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import contextlib as _cl
+        import io as _io
+        import yaml as _yaml
+        state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
+                 "factions": [{"id": "a", "resources": {}},
+                              {"id": "b", "resources": {}}], "events": []}
+        tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+        # one proposal -> one recomputed outcome, so the lengths match and
+        # the old code fell into the pairwise diff loop with a string entry
+        doc = {"rule_version": resolve.RULE_VERSION, "week": 4, "seed": 7,
+               "proposals": [{"actor": "a", "action": "a acts",
+                              "target": "world",
+                              "resources_committed": {},
+                              "risk_acceptance": "medium"}],
+               "outcomes": ["bogus"]}
+        path = root / "week-4.yaml"
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, msg = tick.replay_verify(path)
+        assert not ok and "unreadable or malformed" in msg, msg
+        assert "outcomes" in msg, f"the refusal names the broken part: {msg}"
+        # and the CLI path: readable message, clean exit 1, no traceback
+        buf = _io.StringIO()
+        with _cl.redirect_stdout(buf):
+            rc = tick.main(["--replay", str(path)])
+        assert rc == 1 and "unreadable or malformed" in buf.getvalue(), \
+            buf.getvalue()
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: non-mapping outcomes refuse with a message  OK")
+
+
+def _schema3_replay(root, week, seed):
+    """A verifying schema-3 replay (dice + project mechanics) in `root`,
+    built the way run_live builds one — the base for the doctoring tests."""
+    import copy as _copy
+    import hashlib as _hashlib
+    import yaml as _yaml
+    import projects
+    # the clock already bumped to the simulated week, exactly the state
+    # run_live freezes as the resolver's input
+    state = {"meta": {"clock": {"week": week}}, "city": {"name": "T"},
+             "factions": [{"id": "a", "resources": {"muscle": "low"}},
+                          {"id": "b", "resources": {}}],
+             "events": []}
+    tick.STATE_FILE.write_text(_yaml.safe_dump(state), encoding="utf-8")
+    proposals = [{"actor": "a", "action": "a acts", "target": "self",
+                  "resources_committed": {"coin": "low"},
+                  "risk_acceptance": "medium", "action_id": f"act-{week:04d}-a"}]
+    base_state = _copy.deepcopy(state)      # the resolver's pre-week input
+    resolve.set_rng(seed)
+    outcomes = resolve.resolve_tick(proposals, state)
+    worked = _copy.deepcopy(state)          # the week's consequences land
+    tick.apply_outcomes(worked, _copy.deepcopy(outcomes), proposals)
+    report = projects.apply_week(worked, proposals, outcomes)
+    sha = _hashlib.sha256(tick.STATE_FILE.read_bytes()).hexdigest()
+    path = tick.save_replay(week, seed, proposals, outcomes, sha, base_state,
+                            projects_report=report)
+    ok, msg = tick.replay_verify(path)
+    assert ok and "dice and projects" in msg, \
+        f"the fixture replay must verify before doctoring: {msg}"
+    return path
+
+
+def test_replay_verify_names_a_base_state_missing_the_actor():
+    """The regression (ticket 20, P3-1): a schema-3 replay whose embedded
+    base_state lacks a proposal's actor used to die as a bare
+    StopIteration (apply_mechanical's next()), escaping the recompute
+    guard's exception list. The actor lookup is a contract now: the
+    refusal names the actor, in both the function and the CLI."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-actor-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import contextlib as _cl
+        import io as _io
+        import yaml as _yaml
+        path = _schema3_replay(root, 5, 777)
+        # doctor: the embedded base state loses the actor — a hand edit or
+        # a truncated file, exactly the shape the old next() choked on
+        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        doc["base_state"]["factions"] = [
+            f for f in doc["base_state"]["factions"] if f["id"] != "a"]
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, msg = tick.replay_verify(path)
+        assert not ok and "could not be recomputed" in msg, msg
+        assert "'a'" in msg and "factions" in msg, \
+            f"the refusal names the missing actor: {msg}"
+        buf = _io.StringIO()
+        with _cl.redirect_stdout(buf):
+            rc = tick.main(["--replay", str(path)])
+        assert rc == 1 and "could not be recomputed" in buf.getvalue(), \
+            buf.getvalue()
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: a base state missing the actor refuses by name  OK")
+
+
+def test_replay_verify_project_rule_version_mismatch_is_not_comparable():
+    """Ticket 20, P3-9: schema 3 records project_rule_version but the
+    recompute used to diff project mechanics against the CURRENT projects
+    module regardless — after a mechanics bump an old replay would report
+    'diverged in project mechanics' (implying corruption). The gate now
+    mirrors the dice path's rule_version check: 'not comparable'."""
+    root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-prv-"))
+    saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    tick.ROOT = root
+    tick.STATE_FILE = root / "state.yaml"
+    try:
+        import yaml as _yaml
+        import projects
+        path = _schema3_replay(root, 6, 777)
+        doc = _yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert doc["project_rule_version"] == projects.RULE_VERSION
+        doc["project_rule_version"] = projects.RULE_VERSION + 1  # doctored
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, msg = tick.replay_verify(path)
+        assert not ok and "not comparable" in msg, msg
+        assert "diverged" not in msg, \
+            f"a version mismatch is not corruption: {msg}"
+        # a projects section with no recorded version at all (a hand-built
+        # doc) is the same refusal, never a mechanics diff
+        doc["project_rule_version"] = None
+        path.write_text(_yaml.safe_dump(doc), encoding="utf-8")
+        ok, msg = tick.replay_verify(path)
+        assert not ok and "not comparable" in msg, msg
+    finally:
+        tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        shutil.rmtree(root, ignore_errors=True)
+    print("  replay trail: project rule version mismatch says not comparable  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_step_resource_moves_the_strongest_committed,
@@ -703,6 +848,9 @@ if __name__ == "__main__":
         test_replay_verify_refuses_a_changed_base_state,
         test_save_replay_rerun_versions_like_chronicles,
         test_replay_verify_reports_malformed_files_not_tracebacks,
+        test_replay_verify_refuses_non_mapping_outcomes,
+        test_replay_verify_names_a_base_state_missing_the_actor,
+        test_replay_verify_project_rule_version_mismatch_is_not_comparable,
     ]:
         fn()
     print("all tick tests passed")
