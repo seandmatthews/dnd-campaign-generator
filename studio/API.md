@@ -576,6 +576,23 @@ shapes in this document true.
   week range itself is empty.
 - `GET /api/campaign/{name}/briefing/markdown` → the same briefing as
   durable Markdown (PlainTextResponse) for save/print.
+- `POST /api/campaign/{name}/prep?since_week=N` → next session prep
+  (tickets/07): compiles the briefing's events (top of the cap), the
+  freshest week's rumors (top 3), the quests briefing section (overdue
+  first), the public facts not yet revealed, and the open decisions into
+  ONE vault page, `lore/prep/<YYYY-MM-DD>-next-session.md`, frontmatter
+  `kind: prep` / `date` / `covers_weeks`. Every item links back to its
+  source of record (chronicles as relative links, entity pages as
+  wiki-links, fact source files as relative links). A compile, not a
+  generation — deterministic, no LLM pass, no budget; the only gate is the
+  campaign lock (409 while a job holds it), and the write lands as a
+  history snapshot like every canon change. Regeneration NEVER overwrites:
+  the same date's re-runs take the next free `-2`, `-3` … name (the
+  pending-lore-files pattern). Returns `{file, snapshot}`.
+- `GET /api/campaign/{name}/prep/markdown?since_week=N` → the same compile
+  as text (PlainTextResponse), for printing without Obsidian. Reads only.
+  CLI equivalent: `python studio/prep.py <campaign> [--since-week N]
+  [--date YYYY-MM-DD] [--stdout]`.
 - `POST /api/campaign/{name}/knowledge/{id}/reveal` `{"week"?:int}` → moves
   one CURRENT PUBLIC fact into the party-disclosure record
   (`simulation/party-knowledge.yaml`). Only public facts reveal: 422

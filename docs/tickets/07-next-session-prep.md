@@ -49,11 +49,11 @@ Rules that keep it cheap and safe:
 
 ## Acceptance criteria
 
-- [ ] Button writes `lore/prep/<date>-next-session.md`, never overwriting.
-- [ ] Every event/quest/rumor item carries a working link back to its
+- [x] Button writes `lore/prep/<date>-next-session.md`, never overwriting.
+- [x] Every event/quest/rumor item carries a working link back to its
       containing doc (chronicle path, entity page, fact source file).
-- [ ] Deterministic: same canon → byte-identical content (test).
-- [ ] Empty campaigns produce a valid, honest skeleton (no fabricated
+- [x] Deterministic: same canon → byte-identical content (test).
+- [x] Empty campaigns produce a valid, honest skeleton (no fabricated
       sections).
-- [ ] Snapshot committed on write; CLI equivalent
+- [x] Snapshot committed on write; CLI equivalent
       (`python studio/prep.py <campaign>`).

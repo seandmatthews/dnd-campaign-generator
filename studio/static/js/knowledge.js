@@ -428,6 +428,7 @@
             '<input type="text" class="input briefing-focus" autocomplete="off" spellcheck="false"></label>' +
           '<button type="button" class="btn briefing-refresh">Refresh</button>' +
           '<a class="btn briefing-markdown" target="_blank" rel="noopener">Markdown</a>' +
+          '<button type="button" class="btn btn-primary briefing-prep">Next session prep</button>' +
         '</div>' +
         '<div class="briefing-body"><p class="loading">Building&hellip;</p></div>' +
       '</section>');
@@ -460,6 +461,32 @@
       body.appendChild(ul);
     }
     panel.querySelector('.briefing-refresh').addEventListener('click', load);
+
+    /* Next session prep (tickets/07): one click compiles the briefing's
+       events, the freshest rumors, the open quests, the unrevealed public
+       facts, and the open decisions into ONE vault page —
+       lore/prep/<date>-next-session.md. A compile, not a generation: the
+       same canon gives the same bytes, and a re-run takes the next free
+       -N name instead of overwriting. */
+    panel.querySelector('.briefing-prep').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      try {
+        const out = await S.api(S.campUrl('/prep?since_week=' +
+          encodeURIComponent(since.value || '0')), { method: 'POST', body: {} });
+        const snap = out.snapshot || {};
+        const committed = snap.state === 'committed';
+        S.toast('Wrote ' + out.file + ' into the vault' +
+          (committed ? ' — snapshot ' + snap.commit + ' committed.' : '.') +
+          ' A re-run never overwrites it.', 'ok');
+      } catch (err) {
+        S.toast('Prep could not be written' +
+          (err && err.error ? ': ' + err.error : '') + '.', 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
     await load();
     return panel;
   }

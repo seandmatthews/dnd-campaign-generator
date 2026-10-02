@@ -206,6 +206,15 @@ timer is the one that kills a campaign), then active quests touching the
 places/factions that changed in the range, then the hooked count as one
 line. `GET /api/campaign/{name}/briefing/markdown` is the durable copy.
 
+**Next session prep** is one click beside the briefing card: it compiles
+the briefing's events, the freshest week's rumors, the open quests, the
+public facts still waiting to be revealed, and the open decisions into ONE
+disposable vault page — `lore/prep/<date>-next-session.md`, every item
+linked back to its source of record (chronicle, entity page, fact source
+file). A compile, not a generation: same canon, same bytes, no LLM pass —
+and a re-run takes the next free `-2` name instead of overwriting; the GM
+deletes what they don't want, in Obsidian.
+
 The **player handout** is a separate, deliberate step: revealing a fact
 (only current `public` facts can be revealed) copies its approved text into
 the party-disclosure record, and the handout contains only what was
