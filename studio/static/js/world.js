@@ -669,6 +669,91 @@
     return card;
   }
 
+  /* ----- quests: first-class entities on lore pages (ticket 06) -----
+     A quest IS a lore page (kind: quest frontmatter); this card only
+     reads it — grouping, due flags, overdue rows — and opens the same
+     lore-page view the entities table uses. No new tab, no editor. */
+
+  const QUEST_STATUSES = ['hooked', 'active', 'resolved', 'abandoned'];
+
+  function questDueLabel(q) {
+    if (q.due_week != null) return 'due week ' + q.due_week;
+    if (q.due_date) return 'due ' + q.due_date;
+    return '';
+  }
+
+  function questsCard(host) {
+    const panel = S.el(
+      '<section class="panel"><h3 class="panel-title">Quests</h3>' +
+        '<div class="panel-body"><div class="loading">Loading quests…</div></div>' +
+      '</section>'
+    );
+    const body = panel.querySelector('.panel-body');
+    S.api(S.campUrl('/quests')).then((doc) => {
+      body.innerHTML = '';
+      const quests = (doc && Array.isArray(doc.quests)) ? doc.quests : [];
+      if (!quests.length) {
+        // empty state: the frontmatter contract in three lines, and the
+        // way back to ticket 04's Obsidian (authoring lore) card
+        const empty = S.el(
+          '<div class="empty-state quests-empty">' +
+            '<p>A quest is a lore page: create <code>lore/entities/&lt;name&gt;.md</code> in Obsidian with <code>kind: quest</code> in the frontmatter.</p>' +
+            '<p><code>status:</code> is hooked | active | resolved | abandoned (default hooked); optional <code>given_by:</code>, <code>places:</code>, <code>factions:</code>, and a <code>due:</code> timer (a week number or an ISO date).</p>' +
+            '<p>Everything except the kind is optional, extra keys are ignored, and an unknown status reads as hooked.</p>' +
+          '</div>'
+        );
+        const obs = S.el('<button type="button" class="btn quests-obsidian">Show the Obsidian card</button>');
+        obs.addEventListener('click', () => {
+          try {
+            localStorage.removeItem('campaign-studio.authoring-dismissed.' + S.state.campaign);
+          } catch (_) {}
+          S.showTab('world'); // re-render: the authoring card reflects the cleared flag
+        });
+        empty.appendChild(obs);
+        body.appendChild(empty);
+        return;
+      }
+      const groups = S.el('<div></div>');
+      QUEST_STATUSES.forEach((status) => {
+        const group = quests.filter((q) => q.status === status);
+        if (!group.length) return;
+        groups.appendChild(S.el(
+          '<h4 class="sub-title">' + S.esc(status) +
+            ' <span class="muted">(' + group.length + ')</span></h4>'));
+        const list = S.el('<ul class="quest-list"></ul>');
+        group.forEach((q) => {
+          const due = questDueLabel(q);
+          const li = S.el(
+            '<li class="quest-row' + (q.overdue ? ' quest-overdue' : '') +
+              '" title="Open page">' +
+              '<strong class="quest-name">' + S.esc(q.name || q.page) + '</strong>' +
+              (q.given_by ? '<span class="pill">by ' + S.esc(q.given_by) + '</span>' : '') +
+              (due ? '<span class="pill pill-when">' + S.esc(due) + '</span>' : '') +
+              (q.overdue ? '<span class="pill pill-overdue">OVERDUE</span>' : '') +
+              ((q.places && q.places.length)
+                ? '<span class="muted quest-where">' + S.esc(q.places.join(', ')) + '</span>'
+                : '') +
+            '</li>'
+          );
+          // the existing lore-page view: the stem is the URL piece
+          li.addEventListener('click', () => openEntityPage(q.page, body));
+          list.appendChild(li);
+        });
+        groups.appendChild(list);
+      });
+      body.appendChild(groups);
+      body.appendChild(S.el('<div class="entity-page-host"></div>'));
+      (Array.isArray(doc.findings) ? doc.findings : []).forEach((f) => {
+        body.appendChild(S.el(
+          '<p class="muted form-note">&#9888; ' + S.esc(f.message) + '</p>'));
+      });
+    }).catch((err) => {
+      body.innerHTML = '';
+      body.appendChild(S.errorPanel(err, 'The quest list could not be loaded.'));
+    });
+    host.appendChild(panel);
+  }
+
   /* ----- tab renderer ----- */
 
   S.tabs.world = async function (container) {
@@ -720,6 +805,9 @@
     );
     const entitiesBody = entitiesPanel.querySelector('.panel-body');
     root.appendChild(entitiesPanel);
+
+    // Quests (kind: quest lore pages — grouped by status, overdue loud).
+    questsCard(root);
 
     // Style panel.
     const styleHost = S.el(

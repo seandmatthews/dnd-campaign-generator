@@ -95,12 +95,22 @@ The next-session prep file (ticket 07) consumes this section directly.
 
 ## Acceptance criteria
 
-- [ ] Frontmatter contract above parses; unknown statuses degrade to
+- [x] Frontmatter contract above parses; unknown statuses degrade to
       `hooked` + finding; non-quest pages are invisible to the read model.
-- [ ] PATCH route is a reviewed short write (409 on lock, 409 on stale
+      (`studio/tests/test_quests.py::test_frontmatter_contract_defaults_and_degradation`)
+- [x] PATCH route is a reviewed short write (409 on lock, 409 on stale
       revision, snapshot committed).
-- [ ] Panel groups by status; overdue detection works for both week
-      numbers and ISO dates.
-- [ ] Briefing includes the quests section with intersection filtering.
-- [ ] CLI list/show/set implemented; fast-tier tests for loader, PATCH,
-      briefing section, overdue logic.
+      (`test_patch_route_is_a_reviewed_short_write`)
+- [x] Panel groups by status; overdue detection works for both week
+      numbers and ISO dates. (overdue:
+      `test_overdue_weeks_dates_boundary_and_resolved_exemption`; panel:
+      the Quests card in `static/js/world.js` groups by status and counts,
+      against the route contract pinned by
+      `test_quest_routes_surface_findings_and_view` — the repo has no
+      browser/JS-DOM harness to render the panel itself)
+- [x] Briefing includes the quests section with intersection filtering.
+      (`test_briefing_quests_section_intersection_and_overdue_first`)
+- [x] CLI list/show/set implemented; fast-tier tests for loader, PATCH,
+      briefing section, overdue logic. (`test_cli_list_show_set` and the
+      suite above; `python -m pytest studio/tests -q` 456 passed,
+      `python -m pytest agentic-simulator/tests -q` 219 passed)

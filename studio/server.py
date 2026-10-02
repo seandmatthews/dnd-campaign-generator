@@ -44,6 +44,7 @@ from routers import (
     lore,
     maps,
     places,
+    quests,
     review,
     simulation,
     system,
@@ -120,7 +121,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Campaign Studio", version="0.1.0", lifespan=lifespan)
 
-for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, sessions_router):
+for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, quests, sessions_router):
     app.include_router(r.router)
 
 
