@@ -11,18 +11,22 @@ dm_only and never reach the engine. There is no automatic mass publication
 of existing lore — ever.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import briefing
 import canon
 import knowledge
 import prep
 import publication
-from routers.common import (campaign_lock_nowait, ensure_publishable_409,
-                            finalize_publication, require_campaign,
-                            store_errors)
+from routers.common import (
+    campaign_lock_nowait,
+    ensure_publishable_409,
+    finalize_publication,
+    require_campaign,
+    store_errors,
+)
 
 router = APIRouter()
 
@@ -32,11 +36,22 @@ class FactBody(BaseModel):
     visibility: str | list[str]  # "dm_only" | "public" | [faction ids]
     source_file: str = ""
     subjects: list[str] | None = None
-    # provenance week (e.g. the week whose chronicle a rumor-fact came from)
+    # provenance week (e.g. the week whose chronicle a rumor-fact came
+    # from). A real campaign week is >= 1 — the form's min is advisory,
+    # the route is the gate (ticket 14)
     week: int | None = None
     # place ids this fact is about (place-centered-campaign-view.md)
     place_ids: list[str] | None = None
     id: str | None = None        # present = update the existing fact
+
+    @field_validator("week")
+    @classmethod
+    def _week_is_a_campaign_week(cls, v):
+        if v is not None and v < 1:
+            raise ValueError(
+                "week must be a campaign week (>= 1) or omitted — the "
+                f"engine clock has no week {v!r}")
+        return v
 
 
 class SupersedeBody(BaseModel):
@@ -153,7 +168,7 @@ def post_reconcile(name: str, fact_id: str):
 
 
 @router.get("/api/campaign/{name}/briefing")
-def get_briefing(name: str, since_week: int = 0, focus: str = ""):
+def get_briefing(name: str, since_week: int = Query(0, ge=0), focus: str = ""):
     """The deterministic DM briefing: approved changes after `since_week`,
     affected factions/places, and unresolved decisions — capped at the
     first ten items with an honest 'N more not shown' count. `focus` is a
@@ -168,7 +183,7 @@ def get_briefing(name: str, since_week: int = 0, focus: str = ""):
 
 @router.get("/api/campaign/{name}/briefing/markdown",
             response_class=PlainTextResponse)
-def get_briefing_markdown(name: str, since_week: int = 0, focus: str = ""):
+def get_briefing_markdown(name: str, since_week: int = Query(0, ge=0), focus: str = ""):
     """The same briefing as durable Markdown (save/print for the session)."""
     require_campaign(name)
     doc = briefing.build(
@@ -178,7 +193,7 @@ def get_briefing_markdown(name: str, since_week: int = 0, focus: str = ""):
 
 
 @router.post("/api/campaign/{name}/prep")
-def post_prep(name: str, since_week: int = 0):
+def post_prep(name: str, since_week: int = Query(0, ge=0)):
     """Compile + write the next-session prep page — one vault file at
     lore/prep/<date>-next-session.md, the same date's re-run taking the
     next free -N name (never overwriting). A compile, not a generation:
@@ -195,7 +210,7 @@ def post_prep(name: str, since_week: int = 0):
 
 @router.get("/api/campaign/{name}/prep/markdown",
             response_class=PlainTextResponse)
-def get_prep_markdown(name: str, since_week: int = 0):
+def get_prep_markdown(name: str, since_week: int = Query(0, ge=0)):
     """The same compile the write produces, as plain text — for printing
     without Obsidian. Reads only; nothing is written."""
     require_campaign(name)

@@ -51,9 +51,12 @@ def build(name: str, since_week: int = 0,
           today: datetime.date | None = None) -> dict:
     """The prep document: frontmatter fields + the five sections, with
     every link already resolved. Deterministic: same canon + same date,
-    same bytes (markdown() below renders exactly what is on disk)."""
+    same bytes (markdown() below renders exactly what is on disk) — the
+    date pins the quests' overdue check too, so a regeneration across a
+    midnight that flips a due date reproduces the original file (ticket
+    14)."""
     today = today or datetime.date.today()
-    b = briefing.build(name, since_week=since_week)
+    b = briefing.build(name, since_week=since_week, today=today)
     state = spine.load_state(name)
     chronicles = {c["week"]: c for c in spine.chronicles(name)}
     current_week = spine.state_clock_week(state)
@@ -65,6 +68,7 @@ def build(name: str, since_week: int = 0,
         "covers_weeks": [since_week + 1, current_week]
                         if isinstance(current_week, int) else [],
         "events": _events(b, chronicles),
+        "events_omitted": b.get("omitted") or 0,
         "rumors": _rumors(state, chronicles),
         "quests": _quests(b),
         "unrevealed": _unrevealed(name),
@@ -165,12 +169,14 @@ def _unrevealed(name: str) -> list:
 def _decisions(b: dict) -> list:
     """Section 5 — the briefing's unresolved decisions (pending proposal,
     pending reviews, stale facts), carrying the briefing's own NOT-canon /
-    needs-attention labels verbatim."""
+    needs-attention labels verbatim. Read from the briefing's UNCAPPED
+    `decisions` key (ticket 14): its capped `items` slice sorts week-None
+    decision items last, so a busy campaign silently lost every decision
+    here — and the page printed a false 'nothing awaits'."""
     return [{"kind": i.get("kind"), "week": i.get("week"),
              "title": i.get("title"), "detail": i.get("detail"),
              "status": i.get("status")}
-            for i in b.get("items") or []
-            if i.get("status") in ("pending", "needs_attention")]
+            for i in b.get("decisions") or []]
 
 
 # -------------------------------------------------------------------- links
@@ -272,6 +278,13 @@ def markdown(doc: dict) -> str:
             if e["chronicle"]:
                 line += f" — {e['chronicle']}"
             lines.append(line)
+        if doc.get("events_omitted"):
+            # the briefing caps its own view; the prep page never lies by
+            # omission — it says what it left out (ticket 14)
+            n = doc["events_omitted"]
+            lines.append(f"_{n} older briefing item{'' if n == 1 else 's'} "
+                         "not shown — narrow the range (a higher "
+                         "since-week) or read the full DM briefing._")
     else:
         lines.append("_No approved changes recorded yet._")
 

@@ -626,16 +626,20 @@ shapes in this document true.
   labeled `status: "pending"` (PROPOSED, NOT CANON), stale knowledge facts
   and pending review counts as `needs_attention`. Capped: `shown` items
   (default cap 10) plus an honest `omitted` count — never a silent
-  truncation. `markdown` rides in the payload, and a `quests` section
-  (overdue timers first, active quests intersecting the covered range,
-  the hooked count as one line — see Quests below) renders even when the
-  week range itself is empty.
+  truncation. `decisions` is the UNCAPPED pending/needs_attention list
+  (ticket 14: the cap sorts week-less decision items last, so readers
+  must not stop at `items`). `markdown` rides in the payload, and a
+  `quests` section (overdue timers first, active quests intersecting the
+  covered range, the hooked count as one line — see Quests below) renders
+  even when the week range itself is empty. `since_week` must be >= 0.
 - `GET /api/campaign/{name}/briefing/markdown` → the same briefing as
   durable Markdown (PlainTextResponse) for save/print.
 - `POST /api/campaign/{name}/prep?since_week=N` → next session prep
-  (tickets/07): compiles the briefing's events (top of the cap), the
-  freshest week's rumors (top 3), the quests briefing section (overdue
-  first), the public facts not yet revealed, and the open decisions into
+  (tickets/07): compiles the briefing's events (top of the cap, with the
+  omitted count stated on the page), the freshest week's rumors (top 3),
+  the quests briefing section (overdue first), the public facts not yet
+  revealed, and the open decisions (read from the briefing's UNCAPPED
+  `decisions`, ticket 14) into
   ONE vault page, `lore/prep/<YYYY-MM-DD>-next-session.md`, frontmatter
   `kind: prep` / `date` / `covers_weeks`. Every item links back to its
   source of record (chronicles as relative links, entity pages as

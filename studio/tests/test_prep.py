@@ -15,7 +15,9 @@ pass anywhere.
 import datetime
 import re
 
+import knowledge
 import prep
+import pytest
 import spine
 import yaml
 from conftest import client  # noqa: F401
@@ -266,3 +268,80 @@ def test_cli_equivalent_writes_next_free(tmp_spine_root, capsys):
                        / out2).read_text(encoding="utf-8")
     assert not (spine.campaign_dir("testvale") / "lore" / "prep" /
                 "2026-10-01-next-session-3.md").exists()
+
+
+# ------------------------------------------------ ticket 14: the whole truth
+
+
+def test_decisions_read_past_the_briefing_cap(client, tmp_spine_root):
+    """>=10 week-bearing items crowd the week-less decision items out of
+    the briefing's capped slice; prep reads the UNCAPPED decisions key,
+    says what the events section left out, and never prints a false
+    'Nothing awaiting a decision'."""
+    d = tmp_spine_root / "testvale"
+    state_path = d / "simulation" / "state.yaml"
+    state = yaml.safe_load(state_path.read_text(encoding="utf-8"))
+    for w in range(10, 20):
+        state["events"].append({"week": w, "actor": "wardens",
+                                "text": f"escrow event {w}"})
+    state_path.write_text(
+        yaml.safe_dump(state, sort_keys=False, allow_unicode=True,
+                       width=100), encoding="utf-8")
+    # a pending review file = a week-less decision item
+    (d / "lore").mkdir(exist_ok=True)
+    (d / "lore" / "pending-9.yaml").write_text(
+        "entries:\n- id: pw9-1\n  when: week 9\n  title: T\n  text: x\n"
+        "  source: hand\n", encoding="utf-8")
+
+    doc = prep.build("testvale")
+    assert doc["events_omitted"] > 0, "the fixture must exceed the cap"
+    assert doc["decisions"], "decisions must survive the cap (ticket 14)"
+    text = prep.markdown(doc)
+    assert "Nothing awaiting a decision" not in text
+    assert "pending review" in text
+    # the events section says what it left out instead of lying by omission
+    assert "not shown" in text
+
+
+def test_frozen_today_pins_quest_overdue_across_midnight(tmp_spine_root):
+    """The determinism contract holds across a due-date midnight: the
+    frozen date reaches the quests' overdue check, so rebuilding
+    yesterday's file reproduces yesterday's bytes even though the due
+    date flipped overdue under the real clock."""
+    d = tmp_spine_root / "testvale"
+    (d / "lore" / "entities").mkdir(parents=True, exist_ok=True)
+    (d / "lore" / "entities" / "Due Tomorrow.md").write_text(
+        "---\n" + yaml.safe_dump(
+            {"kind": "quest", "name": "Due Tomorrow", "status": "active",
+             "due": "2026-10-02"}, sort_keys=False) +
+        "---\n\nBeat the clock.\n", encoding="utf-8")
+    frozen = datetime.date(2026, 10, 1)   # 2026-10-02 is tomorrow: open
+    t1 = prep.markdown(prep.build("testvale", today=frozen))
+    t2 = prep.markdown(prep.build("testvale", today=frozen))
+    assert t1 == t2
+    assert "OVERDUE" not in t1, "not overdue on the frozen date"
+    # a date past the due date DOES read overdue — the caller's date
+    # decides, not the wall clock (strict < : due-day itself is the timer
+    # running out, not missed)
+    later = prep.markdown(prep.build("testvale",
+                                     today=datetime.date(2026, 10, 5)))
+    assert "OVERDUE" in later
+
+
+def test_since_week_and_fact_week_bounds(client, tmp_spine_root):
+    """since_week is bounded at the route boundary (>= 0), fact weeks are
+    campaign weeks (>= 1), and the record path validates like the
+    route."""
+    r = client.get("/api/campaign/testvale/prep/markdown?since_week=-5")
+    assert r.status_code == 422
+    r = client.post("/api/campaign/testvale/prep?since_week=-1")
+    assert r.status_code == 422
+    r = client.post("/api/campaign/testvale/knowledge",
+                    json={"text": "x", "visibility": "public", "week": 0})
+    assert r.status_code == 422, r.text
+    assert "campaign week" in r.json()["error"]
+    doc = knowledge.load("testvale")
+    with pytest.raises(knowledge.KnowledgeError):
+        knowledge.apply_fact_records(
+            "testvale", doc, set(),
+            [{"text": "x", "visibility": "public", "week": "3"}])

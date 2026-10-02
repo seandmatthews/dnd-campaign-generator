@@ -52,9 +52,12 @@ def _chronicle_ref(name: str, week):
     return None
 
 
-def build(name: str, since_week: int = 0, focus=None) -> dict:
+def build(name: str, since_week: int = 0, focus=None,
+          today=None) -> dict:
     """The DM briefing as structured items + markdown. Deterministic: same
-    campaign state, same briefing."""
+    campaign state (+ same date, when the caller pins one — prep does, so
+    its byte-identical contract survives a midnight crossing a quest due
+    date) — same briefing."""
     state = spine.load_state(name)
     clock = (state.get("meta") or {}).get("clock") or {}
     current_week = clock.get("week")
@@ -123,6 +126,13 @@ def build(name: str, since_week: int = 0, focus=None) -> dict:
 
     items.sort(key=lambda i: (i.get("week") is None,
                               -(i.get("week") or 0)))
+    # decisions BEFORE the cap (ticket 14): the briefing's slice cuts
+    # week-None items — stale facts, pending reviews — last, so `items`
+    # can silently drop every decision from readers that stop at the cap;
+    # prep reads THIS key, and render_markdown keeps its honest "N more
+    # not shown" line for its own capped view
+    decisions = [i for i in items
+                 if i.get("status") in ("pending", "needs_attention")]
     total = len(items)
     shown = items[:BRIEFING_CAP]
     doc = {
@@ -134,6 +144,7 @@ def build(name: str, since_week: int = 0, focus=None) -> dict:
         "shown": len(shown),
         "omitted": max(0, total - len(shown)),
         "items": shown,
+        "decisions": decisions,
     }
     # the quests section (tickets/06-quests-first-class.md): overdue
     # timers first, active quests intersecting the covered range, the
@@ -146,7 +157,8 @@ def build(name: str, since_week: int = 0, focus=None) -> dict:
     import quests as quest_store
     try:
         doc["quests"] = quest_store.briefing_section(
-            name, since_week=since_week, current_week=current_week)
+            name, since_week=since_week, current_week=current_week,
+            today=today)
     except spine.CampaignFileError as e:
         doc["quests"] = {"overdue": [], "active": [], "hooks_not_shown": 0,
                          "counts": {}, "findings": [], "error": str(e)}

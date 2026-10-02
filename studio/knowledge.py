@@ -130,13 +130,22 @@ def apply_fact_records(name: str, doc: dict, faction_ids: set,
                         if f.get("id") == old_id), None)
             if old is None:
                 raise KnowledgeError(f"no such fact: {old_id}")
+        week = rec.get("week")
+        if week is not None and (not isinstance(week, int)
+                                 or isinstance(week, bool) or week < 1):
+            # the same gate the route's FactBody applies (ticket 14): an
+            # untyped record week from a future caller is a readable
+            # error, not a TypeError on int(week) downstream
+            raise KnowledgeError(
+                f"fact record {i + 1}: week must be a campaign week "
+                f"(an integer >= 1) or omitted, not {week!r}")
         fact = _apply_upsert(name, doc, faction_ids,
                              text=rec.get("text"),
                              visibility=rec.get("visibility"),
                              subjects=rec.get("subjects"),
                              place_ids=rec.get("place_ids"),
                              source_file=rec.get("source_file") or "",
-                             week=rec.get("week"))
+                             week=week)
         if old is not None:
             old["status"] = "superseded"
             old["superseded_by"] = fact["id"]
