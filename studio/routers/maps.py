@@ -495,6 +495,22 @@ def post_world(name: str, body: WorldBody):
         raise HTTPException(status_code=422, detail=str(e))
 
     def job(log):
+        # ticket 24 R1: the create-versus-replace gate above ran at SUBMIT
+        # time — a world-gen queued ahead of this one may have written
+        # geography.yaml since (exactly the race the FIFO cannot see).
+        # Re-check under the campaign lock this job runs in, the same
+        # pattern as the week job's find_pending re-check: a create-only
+        # job that finds a world on disk refuses with the route's own
+        # message — nothing was run or spent. force skips it, as it skips
+        # the route's gate: a forced job still replaces.
+        if (d / "world" / "geography.yaml").is_file() and not body.force:
+            log("refusing: a world already exists — it landed while this "
+                "job was queued; force:true is required to replace it")
+            raise RuntimeError(
+                "world/geography.yaml already exists — pass force:true to "
+                "regenerate (this replaces world/source.* and "
+                "world/geography.yaml) — a world landed while this job was "
+                "queued; nothing was run or spent")
         tmp = Path(tempfile.mkdtemp(prefix="studio-world-"))
         try:
             fmg = engines.fmg_dir()

@@ -58,7 +58,55 @@ _log = logging.getLogger("studio.engines")
 # (spine.campaign_lock) cannot protect it: two campaigns share the home.
 # Ordering: campaign lock (outer, held by week jobs) then engine lock —
 # never the reverse, or a views call could deadlock a running week.
-ENGINE_LOCK = threading.Lock()
+#
+# The lock records WHO holds it (ticket 24 R2): the submit-time probes in
+# post_week/post_forecast 409 on CROSS-campaign contention (this lock is
+# global, the queue is per-campaign) but must let a same-campaign request
+# join its own campaign's queue behind the running week/forecast. A holder
+# of None means "not a week/forecast that named itself" (a direct
+# `with ENGINE_LOCK:`) — the probes treat that as cross-campaign, which is
+# today's behavior for any unknown holder.
+class _HolderTrackingLock:
+    """threading.Lock plus the holding campaign's name. acquire() takes the
+    same (blocking, timeout) shape as threading.Lock plus an optional holder
+    recorded for probes to read; release() clears it. The context-manager
+    form acquires without a holder (unknown), exactly like a bare lock."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._mu = threading.Lock()
+        self._holder = None
+
+    def acquire(self, blocking=True, timeout=-1, holder=None) -> bool:
+        ok = self._lock.acquire(blocking, timeout)
+        if ok:
+            with self._mu:
+                self._holder = holder
+        return ok
+
+    def release(self) -> None:
+        with self._mu:
+            self._holder = None
+        self._lock.release()
+
+    def locked(self) -> bool:
+        return self._lock.locked()
+
+    @property
+    def holder(self):
+        """The campaign name the current holder passed, or None (unknown)."""
+        with self._mu:
+            return self._holder
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self._lock.release()
+
+
+ENGINE_LOCK = _HolderTrackingLock()
 
 
 def run_py(engine_root: Path, script: str, *args, timeout: int = 600,
@@ -289,16 +337,18 @@ def run_record_identity(engine: str) -> dict:
 
 
 @contextlib.contextmanager
-def engine_lock_logged(log, why: str):
+def engine_lock_logged(log, why: str, holder=None):
     """The engine home is one shared scratch across campaigns: jobs that
     passed the submit-time courtesy check can still queue here behind
     another campaign's run. Log the wait so a slow run is never silent,
-    and bound it (a run aborted by its own watchdog eventually releases)."""
+    and bound it (a run aborted by its own watchdog eventually releases).
+    holder names the campaign taking the home, so the submit-time probes
+    can tell same-campaign contention (queue behind it) from cross (409)."""
     deadline = 3 * (WEEK_TIMEOUT + 60)
-    if not ENGINE_LOCK.acquire(timeout=5.0):
+    if not ENGINE_LOCK.acquire(timeout=5.0, holder=holder):
         log(f"waiting for the engine home — {why} is in flight; this run "
             "starts when it finishes (the job log goes quiet meanwhile)")
-        if not ENGINE_LOCK.acquire(timeout=deadline):
+        if not ENGINE_LOCK.acquire(timeout=deadline, holder=holder):
             raise RuntimeError(
                 f"the engine home stayed busy for over {deadline // 60} "
                 f"minutes — giving up without running anything")

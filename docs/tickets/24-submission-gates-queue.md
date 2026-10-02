@@ -54,12 +54,12 @@ queue the same way. Cross-campaign 409 unchanged.
 
 ## Acceptance criteria
 
-- [ ] Blocked first world-gen + second create-only POST: second job refuses
+- [x] Blocked first world-gen + second create-only POST: second job refuses
       inside the queue (visible in its log/job status), first world intact
       — test with faked FMG, real queue threads.
-- [ ] A forced second job still replaces (force semantics preserved).
-- [ ] Same-campaign: week running → second week (auto_accept) queues and
+- [x] A forced second job still replaces (force semantics preserved).
+- [x] Same-campaign: week running → second week (auto_accept) queues and
       runs after it; forecast queues behind a week — test with the real
       lock held by a faked week.
-- [ ] Cross-campaign 409 behavior + estimate line unchanged (existing
+- [x] Cross-campaign 409 behavior + estimate line unchanged (existing
       tests keep passing).
