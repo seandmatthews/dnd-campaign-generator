@@ -466,7 +466,11 @@ def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=(),
         p["risk_acceptance"] = "medium"
     if notes:
         p["llm_notes"] = notes
-    p["actor"] = actor_id
+    # actor and target leave here as TEXT together: resolve's known ids are
+    # str(f["id"]), so an id YAML parsed as a number must not split the
+    # seam (target stringified, actor raw) — the mismatch surfaced as a
+    # post-spend "unknown target" in resolve_tick
+    p["actor"] = str(actor_id)
     return p
 
 

@@ -105,7 +105,14 @@ def _known_name_tokens(state):
     id, every place and district (multi-place campaigns get the whole set),
     and generic city-book words (state.yaml's `generic_words` or the
     built-in fallback)."""
-    toks = set(state.get("generic_words") or _DEFAULT_GENERIC)
+    raw = state.get("generic_words")
+    if isinstance(raw, str):
+        # a scalar ('council harbor') is its WORDS — set() on the string
+        # would be its letters, quietly replacing the filter with noise.
+        # validate_state refuses the shape for --live; this check runs on
+        # states the gate never saw, so degrade here too
+        raw = raw.split()
+    toks = set(raw or _DEFAULT_GENERIC)
     toks |= store.place_words(state)
     for f in state.get("factions", []):
         toks |= _content(f.get("name", ""))

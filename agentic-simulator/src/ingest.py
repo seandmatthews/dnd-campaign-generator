@@ -58,7 +58,17 @@ def faction_tokens(state):
     city = place_words(state, include_districts=False)
     table = {}
     for f in state["factions"]:
-        words = _words(f["id"]) | _words(f["name"]) | _words(" ".join(aliases.get(f["id"], [])))
+        extra = aliases.get(f["id"], [])
+        if isinstance(extra, str):
+            # a scalar alias (mint: ferrand) is that ONE word — joining it
+            # raw would iterate its letters and the alias would never
+            # match. validate_state refuses the shape for --live; extract
+            # runs on states the gate never saw, so degrade here too
+            extra = [extra]
+        elif not isinstance(extra, list):
+            extra = []
+        joined = " ".join(str(w) for w in extra)
+        words = _words(f["id"]) | _words(f["name"]) | _words(joined)
         table[f["id"]] = words - _STOPWORDS - city
     owners = {}
     for fid, toks in table.items():

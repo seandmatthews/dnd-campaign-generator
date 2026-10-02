@@ -129,7 +129,11 @@ def faction_view(state, faction_id):
             "apparent_strength": _OUTSIDER_STRENGTH.get(
                 (f.get("resources") or {}).get("muscle", "none")
             ),
-            "posture_toward_you": f.get("disposition", {}).get(
+            # or {}: a hand-written `disposition:` (null) degrades like an
+            # absent one (the neighboring resources read does the same) —
+            # this CLI serves states validate_state never saw (inspect,
+            # the studio's view route), and null must not AttributeError
+            "posture_toward_you": (f.get("disposition") or {}).get(
                 faction_id, "unknown"
             ),
         })
