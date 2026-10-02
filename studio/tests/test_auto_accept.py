@@ -96,9 +96,8 @@ def test_lore_entries_auto_accept_publishes_and_records_auto(
 
     # the SAME approve path ran: the timeline gained the entry, the pending
     # file is gone (approved fully)
-    assert "rerouted the Vane" in _timeline_texts(tmp_spine_root)[0] or any(
-        "rerouted the Vane" in t
-        for t in _timeline_texts(tmp_spine_root))
+    assert any("rerouted the Vane" in t
+               for t in _timeline_texts(tmp_spine_root))
     assert not (tmp_spine_root / "testvale" / "lore" / "pending-2.yaml"
                 ).exists()
 

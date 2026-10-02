@@ -16,6 +16,11 @@ dnd-mapping/out-gen-city-smoke/
 # battlemap engine home: scratch, regenerated on demand (battlemap.py gen,
 # seed defaults to crc32(slug)); canon copies live in the campaigns repos
 dnd-mapping/worlds/sites/
+# import_fmg.py drops its candidate world yaml here on every world-gen run
+# (documented scratch — test_integration.py leaves candidates behind the
+# same way). Already-tracked candidates and index.md stay tracked; a new
+# curated one needs git add -f.
+dnd-mapping/worlds/candidates/
 
 # session-local scratch (ZCode automations) and the engine home chronicle
 # output dir — restored from the campaign on every week run

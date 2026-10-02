@@ -25,15 +25,18 @@ echo   Installing Campaign Studio into:
 echo     %DEST%
 echo   Copying the program files - once per version, please wait...
 echo.
-robocopy "%SRC%." "%DEST%" /MIR /XD campaigns /R:5 /W:2 /NFL /NDL /NJH /NJS /NP >nul
+rem /XD with the FULL source path excludes exactly the top-level data dir
+rem (a bare "campaigns" name would exclude same-named dirs at ANY depth,
+rem so a future nested campaigns/ would silently stop mirroring), and it
+rem still keeps /MIR from ever touching the installed data dir.
+robocopy "%SRC%." "%DEST%" /MIR /XD "%SRC%campaigns" /R:5 /W:2 /NFL /NDL /NJH /NJS /NP >nul
 echo [%DATE% %TIME%] robocopy exit %ERRORLEVEL% >> "%DEST%\install-log.txt"
 if errorlevel 8 (
   echo   Some files could not be copied ^(exit %ERRORLEVEL%^).
   echo   Trying to start anyway - if the Studio does not come up, close
   echo   everything and run the installer again.
 )
-rem /XD campaigns means robocopy never touches the data dir: seed it on
-rem first install only.
+rem the mirror never touches the data dir: seed it on first install only.
 if not exist "%DEST%\campaigns" robocopy "%SRC%campaigns" "%DEST%\campaigns" /E /R:5 /W:2 /NFL /NDL /NJH /NJS /NP >nul
 
 if not exist "%DEST%\launch.cmd" (

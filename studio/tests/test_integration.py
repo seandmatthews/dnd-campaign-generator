@@ -33,8 +33,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-pytestmark = pytest.mark.integration
-
 PARENT = Path(__file__).resolve().parents[2]  # .../Documents/D&D
 DND_MAPPING = PARENT / "dnd-mapping"
 AGENTIC_SIMULATOR = PARENT / "agentic-simulator"
@@ -45,6 +43,26 @@ SAMPLE = CAMPAIGNS / "sample"
 RURAVAQAN = CAMPAIGNS / "ruravaqan"
 
 PY = [sys.executable, "-X", "utf8"]  # mirrors engines.run_py
+
+# What this tier needs that git does not carry — the same three paths
+# run-tests.py's INTEGRATION_NEEDS checks (campaigns/ and tools/ are
+# gitignored). pytest.ini documents `pytest -m integration` as a direct
+# invocation; this guard makes a fresh clone skip cleanly the way the
+# orchestrator's note does, instead of erroring through the fixtures.
+NEEDS = [
+    RURAVAQAN / "simulation" / "state.yaml",
+    DND_MAPPING / "tools" / "Fantasy-Map-Generator",
+    DND_MAPPING / "tools" / "settlemaker" / "dist" / "index.js",
+]
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not all(p.exists() for p in NEEDS),
+        reason="missing (gitignored) prerequisites: campaigns/ruravaqan, "
+               "dnd-mapping/tools — the tier runs on the machines that "
+               "have them; see run-tests.py"),
+]
 
 
 def run(cmd, cwd, timeout, env=None):

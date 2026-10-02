@@ -171,8 +171,10 @@ def main():
                 print("  fix: https://nodejs.org  (LTS — npm comes with it)")
             elif n == "git":
                 print("  fix: https://git-scm.com/download")
-        print("\nthe studio still runs without the tools — maps/world generation needs them.")
-        return 1 if args.check else 1
+        print("\nthe studio still runs without the tools — maps/world "
+              "generation needs them, and setup cannot proceed without "
+              "git and node.")
+        return 1
     print("prerequisites: git and node (with npm) present")
 
     incomplete = []
