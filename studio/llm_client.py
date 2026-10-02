@@ -239,6 +239,15 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
     best = ""
     while True:
         data = _post_json(cfg, body, timeout)
+        if not isinstance(data, dict):
+            # a 200 whose body is not a JSON object (a proxy returning an
+            # array) takes the readable provider-error path — dereferencing
+            # data.get("usage") before this guard crashed with
+            # AttributeError (P3-24)
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response was {type(data).__name__}, not a "
+                "JSON object")
         b = _budget()
         usage = data.get("usage") or {}
         if usage:
@@ -248,11 +257,11 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
                       "completion=%s", b["calls"], b["tokens"],
                       usage.get("prompt_tokens", "?"),
                       usage.get("completion_tokens", "?"))
-        choices = data.get("choices") if isinstance(data, dict) else None
+        choices = data.get("choices")
         if not choices:
             # a 200 with no choices (content filter, proxy anomaly) must not
             # surface as a bare IndexError job failure
-            shape = sorted(data)[:6] if isinstance(data, dict) else type(data).__name__
+            shape = sorted(data)[:6]
             raise RuntimeError(
                 f"provider returned no choices (content filter or proxy "
                 f"anomaly?); response keys: {shape}")

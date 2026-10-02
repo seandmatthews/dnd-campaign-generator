@@ -75,6 +75,24 @@ def test_lore_generation_is_fed_or_refused(client, tmp_spine_root):
     assert "error" in r.json()
 
 
+def test_name_provider_failure_is_a_503(client, tmp_spine_root, monkeypatch):
+    """P3-14: a provider outage on the synchronous /lore/name call answers
+    503 like its sibling LLM endpoints (simulation, maps) — llm_client's
+    readable RuntimeError used to escape as a raw 500."""
+    import llm_client
+
+    def outage(*a, **kw):
+        raise RuntimeError("HTTP 503: upstream unavailable")
+
+    monkeypatch.setattr(llm_client, "complete", outage)
+    # the fed-or-refused gate passes: shadian has its seed list in the
+    # fixtures, so the call really reaches the (broken) provider
+    r = client.post("/api/campaign/testvale/lore/name",
+                    json={"culture": "shadian", "count": 3})
+    assert r.status_code == 503, r.text
+    assert "upstream unavailable" in r.json()["error"]
+
+
 def test_review_now_lives_in_test_review(client, spine_root):
     """M4 replaced the 501 review stubs — the queue's tests are in
     test_review.py; this only pins the route's existence."""

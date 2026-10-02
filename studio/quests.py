@@ -391,8 +391,18 @@ def set_status(name: str, page: str, status: str,
     # places._page_snapshot): hashing after the parse could pair old text
     # with a newer revision and let publication accept a stale write over
     # an external edit
-    raw, base_revision, newline = _page_snapshot(path, expected_page_revision)
-    meta, body = _frontmatter_of(raw)
+    try:
+        raw, base_revision, newline = _page_snapshot(path,
+                                                     expected_page_revision)
+        meta, body = _frontmatter_of(raw)
+    except (OSError, ValueError, PlaceError) as e:
+        # load() degrades a page broken BEFORE the write to a finding and
+        # a 404, but this re-read sits under the lock and outside that
+        # per-page guard: a page breaking in that window is a readable
+        # 422 naming the file (P3-22), never an opaque 500
+        raise QuestError(
+            f"quest page {record['file']} could not be re-read ({e}) — "
+            "fix the page, then flip the status again")
     meta = meta or {}
     if str(meta.get("status") or "").strip().lower() == status:
         return {"page": record["file"], "name": record["name"],

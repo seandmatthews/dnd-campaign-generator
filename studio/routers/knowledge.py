@@ -24,11 +24,28 @@ from routers.common import (
     campaign_lock_nowait,
     ensure_publishable_409,
     finalize_publication,
+    publication_500,
     require_campaign,
     store_errors,
 )
 
 router = APIRouter()
+
+
+def _campaign_week_gate(field: str):
+    """The >= 1 week validator FactBody and RevealBody share (tickets 14
+    and 25): a provenance or reveal week is a real campaign week — the
+    form's min is advisory, the route is the gate. Without it, "known
+    since week 0" persists into the disclosure store and the handout."""
+    @field_validator(field)
+    @classmethod
+    def _week_is_a_campaign_week(cls, v):
+        if v is not None and v < 1:
+            raise ValueError(
+                "week must be a campaign week (>= 1) or omitted — the "
+                f"engine clock has no week {v!r}")
+        return v
+    return _week_is_a_campaign_week
 
 
 class FactBody(BaseModel):
@@ -44,14 +61,7 @@ class FactBody(BaseModel):
     place_ids: list[str] | None = None
     id: str | None = None        # present = update the existing fact
 
-    @field_validator("week")
-    @classmethod
-    def _week_is_a_campaign_week(cls, v):
-        if v is not None and v < 1:
-            raise ValueError(
-                "week must be a campaign week (>= 1) or omitted — the "
-                f"engine clock has no week {v!r}")
-        return v
+    _week_is_a_campaign_week = _campaign_week_gate("week")
 
 
 class SupersedeBody(BaseModel):
@@ -65,8 +75,11 @@ class SupersedeBody(BaseModel):
 class RevealBody(BaseModel):
     """The reveal week, when the DM records one — absent/null means 'no
     week recorded'. Typed: a malformed payload is a 422, not a silently
-    ignored dict."""
+    ignored dict — and a numbered one must be a real campaign week,
+    exactly like FactBody's provenance week (ticket 25)."""
     week: int | None = None
+
+    _week_is_a_campaign_week = _campaign_week_gate("week")
 
 
 def _require_state(name: str) -> None:
@@ -109,8 +122,16 @@ def post_knowledge(name: str, body: FactBody):
                 f"campaign/{name}: record fact {fact['id']}")
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except publication.RevisionConflict as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"stale knowledge base: {e} — refresh the knowledge "
+                   "list and record again. Nothing was written.")
     except publication.PublicationConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except publication.PublicationError as e:
+        # mid-flight failure: the staged transaction is kept for recovery
+        raise publication_500("knowledge write", e)
     return {"fact": fact, "compiled": len(knowledge.compile_state_section(name)),
             "transaction": pub.get("transaction"), "snapshot": snap}
 
@@ -133,8 +154,16 @@ def post_supersede(name: str, fact_id: str, body: SupersedeBody):
                 f"campaign/{name}: supersede fact {fact_id}")
     except knowledge.KnowledgeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except publication.RevisionConflict as e:
+        raise HTTPException(
+            status_code=409,
+            detail=f"stale knowledge base: {e} — refresh the knowledge "
+                   "list and supersede again. Nothing was written.")
     except publication.PublicationConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except publication.PublicationError as e:
+        # mid-flight failure: the staged transaction is kept for recovery
+        raise publication_500("supersede", e)
     return {"fact": new, "superseded": fact_id,
             "compiled": len(knowledge.compile_state_section(name)),
             "transaction": pub.get("transaction"), "snapshot": snap}

@@ -725,3 +725,55 @@ def test_status_flip_keeps_comments_blank_keys_and_body_whitespace(camp):
     assert "# Keep the timer secret." in after
     assert "\ngiven_by:\n" in after
     assert "  An indent opens the ledger.  \n" in after
+
+
+def _break_page_between_load_and_reread(camp, monkeypatch, breakage):
+    """P3-22's window: set_status re-reads the page under the lock OUTSIDE
+    load()'s per-page guard. Patch quests.load so the page breaks only
+    after set_status's own (successful) load — exactly a hand-edit landing
+    between the two reads. `breakage(page)` performs the breaking write."""
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "The Trolls Tithe.md"
+    real_load = quests.load
+
+    def load_then_break(name):
+        doc = real_load(name)
+        breakage(page)
+        return doc
+
+    monkeypatch.setattr(quests, "load", load_then_break)
+    return page
+
+
+def test_page_breaking_to_bad_bytes_between_load_and_reread_is_a_422(
+        client, camp, monkeypatch):
+    """Non-UTF-8 bytes in the window: a readable 422 naming the file, not
+    'internal error: UnicodeDecodeError'."""
+
+    def bad_bytes(page):
+        page.write_bytes(page.read_bytes() + b"\xff\xfe not utf-8")
+
+    page = _break_page_between_load_and_reread(camp, monkeypatch, bad_bytes)
+    r = client.patch(f"/api/campaign/{camp}/quests/The%20Trolls%20Tithe",
+                     json={"status": "resolved"})
+    assert r.status_code == 422, r.text
+    assert "lore/entities/The Trolls Tithe.md" in r.json()["error"]
+    assert "could not be re-read" in r.json()["error"]
+
+
+def test_page_breaking_to_bad_frontmatter_between_load_and_reread_is_a_422(
+        client, camp, monkeypatch):
+    """Unparsable frontmatter in the window (PlaceError) answers the same
+    readable 422 naming the file."""
+
+    def bad_frontmatter(page):
+        page.write_text("---\nstatus: [unclosed\n---\n\nbody\n",
+                        encoding="utf-8")
+
+    page = _break_page_between_load_and_reread(camp, monkeypatch,
+                                               bad_frontmatter)
+    r = client.patch(f"/api/campaign/{camp}/quests/The%20Trolls%20Tithe",
+                     json={"status": "resolved"})
+    assert r.status_code == 422, r.text
+    assert "lore/entities/The Trolls Tithe.md" in r.json()["error"]
+    assert "could not be re-read" in r.json()["error"]
