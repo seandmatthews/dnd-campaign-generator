@@ -38,10 +38,10 @@
 
 ## Acceptance criteria
 
-- [ ] Kind switch updates the dropdown options in BOTH directions; a
+- [x] Kind switch updates the dropdown options in BOTH directions; a
       stale value never submits (reset-and-flag or block) — node test on
       the state machine like `test_sessions_prepare.cjs`.
-- [ ] A project-progress row can never submit a resource word, and a
+- [x] A project-progress row can never submit a resource word, and a
       resource row can never submit 0–8 as a level.
-- [ ] Foreign-id card: user sees a message; the PUT body and server
+- [x] Foreign-id card: user sees a message; the PUT body and server
       minting stay aligned (test).

@@ -404,6 +404,35 @@ def test_stale_draft_editor_409(client, tmp_spine_root):
     assert r.status_code == 409
 
 
+def test_foreign_card_id_refused_nothing_written(client, tmp_spine_root):
+    """Ticket 29: a DOM card whose id the open draft no longer knows (a
+    stale multi-tab render) must never enter the PUT body silently — the
+    editor aborts the save (sessions.js draftSavePlan), and the server
+    side of the contract refuses the foreign id outright, so the
+    positional id minting can never run against a body with a hole in
+    it."""
+    s = _mk_session(client)
+    sid = s["session_id"]
+    draft = _manual_draft(client, tmp_spine_root, sid,
+                          [_wardens_resource_sug(), _history_sug()])
+    known = [sug["id"] for sug in draft["suggestions"]]
+    body = {"suggestions": [
+        {"id": known[0], "kind": "resource_change", "selected": True},
+        {"id": "s-ghost", "kind": "history_event", "selected": True},
+        {"id": known[1], "kind": "history_event", "selected": False},
+    ], "expected_revision": draft["revision"]}
+    r = client.put(f"{C}/sessions/{sid}/drafts/{draft['draft_id']}",
+                   json=body)
+    assert r.status_code == 422
+    assert "not part of this draft" in r.json()["error"]
+    # nothing was written: the stored draft keeps its revision and ids —
+    # the silent skip (which dropped the card and shifted every later
+    # card's position) stays impossible from either side
+    after = session_store.load_draft("testvale", sid, draft["draft_id"])
+    assert after["revision"] == draft["revision"]
+    assert [sug["id"] for sug in after["suggestions"]] == known
+
+
 def test_extraction_without_evidence_cannot_prepare(client, tmp_spine_root):
     """An extraction result with no citation at all is unresolved — it can
     never become a mechanical target on the extractor's word alone."""
