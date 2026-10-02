@@ -32,9 +32,9 @@ for any sibling field consumed with `.items()`/`.get` on the reply path.
 
 ## Acceptance criteria
 
-- [ ] A reply with scalar/list `resources` triggers a re-ask (issue named in
+- [x] A reply with scalar/list `resources` triggers a re-ask (issue named in
       the re-ask quote or findings), never a 500 — unit test with the faked
       client returning the bad shape then a good shape.
-- [ ] Grep the simdesign reply path for other unguarded `.items()`/dict
+- [x] Grep the simdesign reply path for other unguarded `.items()`/dict
       assumptions on model-supplied values; each either coerced or
       issue-reported.
