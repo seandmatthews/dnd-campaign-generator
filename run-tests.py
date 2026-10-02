@@ -47,9 +47,12 @@ if _node:
         ("studio-js-logtail", [_node, "studio/tests/js/test_logtail.cjs"]))
     FAST_SUITES.append(
         ("studio-js-handoff", [_node, "studio/tests/js/test_handoff.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-sessions", [_node,
+                                "studio/tests/js/test_sessions_prepare.cjs"]))
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
-          "handoff) suites")
+          "handoff/sessions) suites")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").

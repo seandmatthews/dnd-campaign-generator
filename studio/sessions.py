@@ -1114,19 +1114,21 @@ def decision_text(decision: dict) -> str:
     return _dump(decision)
 
 
-def on_accepted(name: str, manifest: dict, bundle: dict) -> None:
+def on_accepted(name: str, manifest: dict, bundle: dict) -> str:
     """Post-publication bookkeeping for a session_changes accept: mark the
     selected suggestions accepted in their draft and record the proposal
     in the session's decision list. BEST-EFFORT without exception: the
     canon publication and its receipt are the source of truth, so a
     missing or damaged session record must never fail the accept response
-    (or its idempotent replays) — it logs and leaves a repairable
-    warning; replaying the accept repairs the bookkeeping."""
+    (or its idempotent replays). Returns "ok" or "failed" — the accept
+    response carries it as `draft_update` so the DM learns the draft
+    bookkeeping needs the repair (ticket 11: a log line alone hid real
+    write failures like disk-full); replaying the accept repairs it."""
     session_id = manifest.get("session_id")
     draft_id = manifest.get("draft_id")
     pid = manifest.get("proposal_id")
     if not (session_id and draft_id and pid):
-        return
+        return "ok"
     selected = set(manifest.get("selected_suggestion_ids") or [])
     try:
         draft = load_draft(name, session_id, draft_id)
@@ -1134,7 +1136,7 @@ def on_accepted(name: str, manifest: dict, bundle: dict) -> None:
         _log.warning("accept of %s: draft %s unreadable (%s) — draft "
                      "bookkeeping skipped; replaying the accept repairs it",
                      pid, draft_id, e)
-        return
+        return "failed"
     try:
         changed = False
         for s in draft.get("suggestions") or []:
@@ -1153,18 +1155,21 @@ def on_accepted(name: str, manifest: dict, bundle: dict) -> None:
         _log.warning("accept of %s: session bookkeeping failed (%s) — "
                      "canon and receipt are fine; replaying the accept "
                      "repairs it", pid, e)
+        return "failed"
+    return "ok"
 
 
-def on_discarded(name: str, manifest: dict) -> None:
+def on_discarded(name: str, manifest: dict) -> str:
     """A discarded session_changes proposal reopens its prepared
     suggestions so they can be prepared again against a new base.
     Best-effort like on_accepted: the discard itself (the bundle status
-    flip) is already done when this runs."""
+    flip) is already done when this runs. Returns "ok"/"failed" for the
+    response's `draft_update` flag (ticket 11)."""
     session_id = manifest.get("session_id")
     draft_id = manifest.get("draft_id")
     pid = manifest.get("proposal_id")
     if not (session_id and draft_id and pid):
-        return
+        return "ok"
     try:
         draft = load_draft(name, session_id, draft_id)
         changed = False
@@ -1178,6 +1183,8 @@ def on_discarded(name: str, manifest: dict) -> None:
     except Exception as e:  # noqa: BLE001 — advisory, never the discard's answer
         _log.warning("discard of %s: draft %s could not be reopened (%s)",
                      pid, draft_id, e)
+        return "failed"
+    return "ok"
 
 
 _PROPOSAL_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")

@@ -188,8 +188,10 @@ def accept_locked(name: str, pid: str, *, auto: bool = False) -> dict:
     if manifest.get("kind") == "session_changes":
         # canon landed: freeze the draft's selected suggestions and
         # record the decision — best-effort; the receipt repairs it on
-        # idempotent replay
-        sessions.on_accepted(name, manifest, bundle)
+        # idempotent replay. The status rides in the response (ticket 11)
+        # so a failed draft write is visible, not just logged.
+        result["draft_update"] = sessions.on_accepted(name, manifest,
+                                                      bundle)
     publication.record_receipt(name, key, result)
     # the week HAS landed and the receipt is recorded: a set_status
     # failure here must not surface as a 500 for a publish that
@@ -232,11 +234,13 @@ def discard(name: str, pid: str) -> dict:
                              "change ever happened")
         except proposals.ProposalError as e:
             raise ProposalFlowError(409, str(e))
+        out = {"discarded": pid}
         if manifest.get("kind") == "session_changes":
             # reopen the prepared suggestions so the excluded/rest of the
-            # session can be prepared again against a new base
-            sessions.on_discarded(name, manifest)
-        return {"discarded": pid}
+            # session can be prepared again against a new base; the
+            # status rides in the response like the accept's (ticket 11)
+            out["draft_update"] = sessions.on_discarded(name, manifest)
+        return out
 
 
 # ------------------------------------------------------ result construction

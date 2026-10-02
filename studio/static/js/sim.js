@@ -808,6 +808,10 @@
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
               ' — use the Retry snapshot button above.', 'error');
           }
+          if (r.draft_update === 'failed') {
+            S.toast('Published, but the session draft could not be updated — ' +
+              'accepting again (it is idempotent) repairs it.', 'error');
+          }
           S.rerenderIfCurrent('sim');
         } catch (err) {
           errBox.innerHTML = '';
@@ -826,9 +830,13 @@
         if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
         try {
-          await S.api(S.campUrl('/simulation/proposal/' +
+          const r = await S.api(S.campUrl('/simulation/proposal/' +
             encodeURIComponent(p.proposal_id) + '/discard'), { method: 'POST' });
           S.toast('Proposal discarded — the campaign never changed.', 'ok');
+          if (r && r.draft_update === 'failed') {
+            S.toast('Discarded, but the session draft could not be reopened — ' +
+              'the excluded cards may need re-preparing by hand.', 'error');
+          }
           S.rerenderIfCurrent('sim');
         } catch (err) {
           errBox.innerHTML = '';

@@ -236,6 +236,39 @@ def test_manual_prepare_accept_end_to_end(client, tmp_spine_root):
     assert r.status_code == 200
 
 
+def test_accept_and_discard_carry_draft_update(client, tmp_spine_root):
+    """ticket 11: draft bookkeeping failures surface in the response
+    (`draft_update`), never as a failed accept — canon and the receipt are
+    the source of truth; the DM gets told the draft needs the repair.
+    (mock.patch.object, not monkeypatch: an undo() mid-test would also
+    undo the fixture's CAMPAIGNS_ROOT patch.)"""
+    from unittest import mock
+
+    s = _mk_session(client)
+    sid = s["session_id"]
+    draft = _manual_draft(client, tmp_spine_root, sid,
+                          [_wardens_resource_sug()])
+    ids = [x["id"] for x in draft["suggestions"]]
+    pid = _prepare(client, sid, draft["draft_id"], ids).json()["proposal_id"]
+
+    # a draft/session write failure (disk full, permissions) is VISIBLE…
+    with mock.patch.object(session_store, "_save_yaml",
+                           side_effect=OSError("disk full")):
+        r = client.post(f"{C}/simulation/proposal/{pid}/accept")
+    assert r.status_code == 200, r.text      # canon and receipt still land
+    assert r.json()["draft_update"] == "failed"
+
+    # …and a healthy round trip says so
+    draft2 = _manual_draft(client, tmp_spine_root, sid,
+                           [_history_sug()])
+    ids2 = [x["id"] for x in draft2["suggestions"]]
+    pid2 = _prepare(client, sid, draft2["draft_id"], ids2) \
+        .json()["proposal_id"]
+    r = client.post(f"{C}/simulation/proposal/{pid2}/discard")
+    assert r.status_code == 200, r.text
+    assert r.json()["draft_update"] == "ok"
+
+
 def test_same_resource_conflict_refused(client, tmp_spine_root):
     s = _mk_session(client)
     sid = s["session_id"]

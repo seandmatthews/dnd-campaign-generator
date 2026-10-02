@@ -27,6 +27,25 @@
 
   function camp() { return S.campUrl('/'); }
 
+  /* The prepare selection, resolved AFTER the draft save (ticket 11):
+     saveDraft serializes the cards in DOM order and the server mints ids
+     for the new ones, so POSITION correlates a card with its saved
+     suggestion. Cards is [{checked, id}] in panel order (id null for a
+     card the DM just added); a checked card resolves to the minted id
+     when there is one, its own id otherwise. Pure — pinned by
+     studio/tests/js/test_sessions_prepare.cjs. */
+  S.prepareSelection = function (cards, savedSuggestions) {
+    const saved = Array.isArray(savedSuggestions) ? savedSuggestions : [];
+    const out = [];
+    (cards || []).forEach(function (c, i) {
+      if (!c || !c.checked) return;
+      const minted = saved[i] && saved[i].id;
+      const id = minted || c.id;
+      if (id) out.push(String(id));
+    });
+    return out;
+  };
+
   function pill(text, cls) {
     return '<span class="pill ' + (cls || 'pill-kind') + '">' + S.esc(text) + '</span>';
   }
@@ -389,16 +408,31 @@
 
     // prepare: save the editor state first, then stage with the revision
     // saveDraft returned — a concurrent edit between the two calls is a
-    // 409, never a silently staged older selection
+    // 409, never a silently staged older selection. The checked cards are
+    // collected BEFORE the save as positions, and their ids resolved from
+    // the save's response: a card the DM just added has no id until the
+    // save mints one, and it MUST stage with everything else (ticket 11)
     panel.querySelector('.ssn-prepare').addEventListener('click', async () => {
-      const checked = Array.from(panel.querySelectorAll('.ssn-check:checked'))
-        .map((c) => c.getAttribute('data-id')).filter(Boolean);
-      if (!checked.length) {
+      const cards = Array.from(panel.querySelectorAll('.ssn-card')).map(
+        (cardEl) => {
+          const check = cardEl.querySelector('.ssn-check');
+          return {
+            checked: !!(check && check.checked && !check.disabled),
+            id: check ? (check.getAttribute('data-id') || null) : null
+          };
+        });
+      if (!cards.some((c) => c.checked)) {
         errBox.textContent = 'Select at least one suggestion first.';
         return;
       }
       try {
         const saved = await saveDraft();
+        const checked = S.prepareSelection(cards, saved.suggestions);
+        if (!checked.length) {
+          errBox.textContent =
+            'The save returned no ids for the checked cards — nothing staged.';
+          return;
+        }
         const r = await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
           '/prepare', {
           method: 'POST',

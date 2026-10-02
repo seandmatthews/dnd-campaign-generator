@@ -476,7 +476,18 @@ shapes in this document true.
   Suggestion ids are preserved (edits never re-mint identity); unknown
   ids are 422; a stale expected_revision is 409 (another editor or a
   finished extraction). Server-owned fields (`status`, `proposal`,
-  `accepted`) cannot be edited through this route.
+  `accepted`) cannot be edited through this route. Suggestions with no
+  id (or `id: null`) are minted server-side on save — the response's
+  `suggestions` list carries them in the same order they were sent, so
+  a client correlates by position (the Sessions tab's prepare does
+  exactly this: `Studio.prepareSelection`).
+- `POST /api/campaign/{name}/sessions/{id}/drafts`
+  `{"suggestions":[…]}` → 201, the new MANUAL draft — the "start a
+  manual draft" action; manual drafting needs no API key.
+- `POST /api/campaign/{name}/sessions/{id}/drafts/{draft_id}/suggestions`
+  `{"suggestions":[…],"expected_revision"?:int}` → 201, the updated
+  draft. Adds NEW suggestions to an existing draft (the "add suggestion"
+  action); existing ids are never touched.
 - `POST /api/campaign/{name}/sessions/{id}/extract` `{"confirm":true}`
   → 202 job; `confirm` must be exactly true (the metered-spend gate).
   One bounded LLM pass (at most two completion attempts; transport
@@ -507,7 +518,12 @@ shapes in this document true.
   decision record through ONE `publication.publish` call (one receipt,
   recover together; stable idempotency key campaign+session+proposal;
   applied-effect ids derive from session/suggestion ids so retries
-  deduplicate). Discard reopens the prepared suggestions. Already
+  deduplicate). Both responses carry `draft_update`:
+  `"ok" | "failed"` — best-effort draft bookkeeping (freezing accepted
+  suggestions on accept, reopening prepared ones on discard) that NEVER
+  fails the canon answer; `"failed"` means the DM should replay the
+  accept (idempotent) or re-prepare by hand. Discard reopens the
+  prepared suggestions. Already
   accepted suggestions can never be re-prepared (corrections = new
   suggestions).
 - Manual drafting without an LLM: build a draft through the service
