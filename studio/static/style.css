@@ -1387,6 +1387,34 @@ tr.entity-row:hover { background: var(--hover, rgba(0, 0, 0, 0.04)); }
 }
 li.backlink-item[style] { cursor: pointer; }
 
+/* ---------- quests (first-class entities on lore pages) ---------- */
+
+ul.quest-list { list-style: none; margin: 0 0 12px; padding: 0; }
+li.quest-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+li.quest-row:hover { background: var(--hover, rgba(0, 0, 0, 0.04)); }
+li.quest-row .quest-where { font-size: 13px; }
+/* overdue rows are loud: a forgotten timer is the one that kills a campaign */
+li.quest-row.quest-overdue {
+  background: #f3ddd5;
+  border-color: #c9907f;
+}
+li.quest-row.quest-overdue .quest-name { color: var(--oxblood-dark); }
+.pill-overdue {
+  background: var(--oxblood);
+  border-color: var(--oxblood-dark);
+  color: var(--paper);
+}
+.quests-empty p { margin: 6px 0; }
+
 /* ---------- authoring lore (the Obsidian-household pointer) ---------- */
 
 .world-head { display: flex; justify-content: flex-end; }

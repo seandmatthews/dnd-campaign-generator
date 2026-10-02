@@ -566,7 +566,10 @@ shapes in this document true.
   labeled `status: "pending"` (PROPOSED, NOT CANON), stale knowledge facts
   and pending review counts as `needs_attention`. Capped: `shown` items
   (default cap 10) plus an honest `omitted` count — never a silent
-  truncation. `markdown` rides in the payload.
+  truncation. `markdown` rides in the payload, and a `quests` section
+  (overdue timers first, active quests intersecting the covered range,
+  the hooked count as one line — see Quests below) renders even when the
+  week range itself is empty.
 - `GET /api/campaign/{name}/briefing/markdown` → the same briefing as
   durable Markdown (PlainTextResponse) for save/print.
 - `POST /api/campaign/{name}/knowledge/{id}/reveal` `{"week"?:int}` → moves
@@ -632,6 +635,40 @@ shapes in this document true.
 - CLI (same service): `python studio/places.py show|list|link|associate …`
   — `show <campaign> <id> --markdown` prints DM material that labels
   private / pending / hypothetical sections; it is not a player handout.
+
+### Quests (first-class entities on lore pages — deterministic, no LLM)
+- A quest IS a lore page: `lore/entities/<name>.md` with `kind: quest`
+  frontmatter. Contract: `status:` hooked | active | resolved | abandoned
+  (default `hooked`; an unknown value degrades to `hooked` with an
+  advisory finding), plus optional `given_by`, `places` / `factions`
+  (page names, matched through the links index: a page's `place_id`
+  owns the id; a unique simulated-place/faction name match only widens
+  the briefing's intersection), `due` (a week number or an ISO date —
+  never anything else; `level` is free text and is never parsed). Extra
+  frontmatter keys are ignored, never errors; non-quest pages are
+  invisible to the read model. Reads are disk-fresh — hand-edits in
+  Obsidian are equally valid, there is no cache to invalidate.
+- `GET /api/campaign/{name}/quests` → `{quests:[{page,file,name,status,
+  given_by,places,place_ids,factions,faction_ids,due_week,due_date,
+  overdue,level,note,body,revision}], counts:{status:n}, findings:[…]}`
+  — the World Building panel's Quests card (no new tab): grouped by
+  status with counts, overdue rows loud, a row opens the existing
+  lore-page view.
+- `GET .../quests/{page}` → one quest + its backlinks (`{page}` is the
+  filename stem). Unknown page → 404.
+- `PATCH .../quests/{page}` `{status, expected_page_revision?}` → the
+  reviewed short write: campaign lock or 409, publication-path revision
+  checks (a stale revision → 409 with nothing written), transactional,
+  body and unknown frontmatter keys preserved, history snapshot
+  committed (`snapshot` in the response). Same status again → `noop`.
+- The DM briefing (`GET .../briefing`) gains a **quests section**:
+  overdue timers (due in the past, week or date, while status is not
+  `resolved`) listed FIRST, then `active` quests whose places/factions
+  intersect the factions/places changed in the covered week range, then
+  the hooked count as one honest line ("N hooks not shown").
+- CLI (same service): `python studio/quests.py <campaign> list|show|set …`
+  — `set` takes the campaign lock and commits the snapshot like the
+  route.
 
 ### Search (H)
 - `GET /api/campaign/{name}/search?q=<str>` → line-by-line, case-insensitive

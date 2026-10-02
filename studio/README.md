@@ -144,7 +144,11 @@ Work through the app, or copy the state back into the campaign yourself.
   name seed list? The name helper offers to stage one from the page.
   Dangling wiki-links get their own card: *Write the missing pages* turns
   each one into an LLM draft grounded in the linking pages, staged to
-  Review like everything else.
+  Review like everything else. The **Quests** card groups the `kind: quest`
+  pages by status (hooked / active / resolved / abandoned), flags overdue
+  timers loudly, and opens the lore-page view on a click; a status flip is
+  a reviewed write (lock- and revision-checked, snapshotted) — or just edit
+  the frontmatter in Obsidian.
 - **Agent Simulation** — the faction sandbox: create it right on the tab
   (premise + 2-5 factions — create is free, no LLM; arrive without a
   concept and one metered LLM pass will draft the factions from your
@@ -196,7 +200,11 @@ The Knowledge tab (facts, briefing, party disclosure) and the Simulation tab's d
 pass — into a **DM briefing**: changes in a week range, unresolved
 decisions (pending proposals clearly labeled as NOT canon, stale facts,
 pending reviews), capped at ten items with an honest "N more not shown"
-count. `GET /api/campaign/{name}/briefing/markdown` is the durable copy.
+count, and the **quests section**: overdue timers first (a `due` the clock
+or calendar has passed while the quest is not `resolved` — the forgotten
+timer is the one that kills a campaign), then active quests touching the
+places/factions that changed in the range, then the hooked count as one
+line. `GET /api/campaign/{name}/briefing/markdown` is the durable copy.
 
 The **player handout** is a separate, deliberate step: revealing a fact
 (only current `public` facts can be revealed) copies its approved text into

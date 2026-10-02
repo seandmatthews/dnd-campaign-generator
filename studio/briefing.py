@@ -135,6 +135,21 @@ def build(name: str, since_week: int = 0, focus=None) -> dict:
         "omitted": max(0, total - len(shown)),
         "items": shown,
     }
+    # the quests section (tickets/06-quests-first-class.md): overdue
+    # timers first, active quests intersecting the covered range, the
+    # hooked count as one honest line. Deferred import: quests borrows the
+    # raw-page byte contract from places.py, and places imports this
+    # module — a top-level import here would make the triangle a cycle.
+    # A vault page that does not parse degrades to a section error, the
+    # same way _page_ref survives one — one bad hand-edit must not take
+    # the whole briefing down.
+    import quests as quest_store
+    try:
+        doc["quests"] = quest_store.briefing_section(
+            name, since_week=since_week, current_week=current_week)
+    except spine.CampaignFileError as e:
+        doc["quests"] = {"overdue": [], "active": [], "hooks_not_shown": 0,
+                         "counts": {}, "findings": [], "error": str(e)}
     doc["markdown"] = render_markdown(name, doc)
     return doc
 
@@ -166,9 +181,48 @@ def render_markdown(name: str, doc: dict) -> str:
         for ref in item.get("refs") or []:
             lines.append(f"  - see {ref['type']}: `{ref['file']}` "
                          f"({ref['label']})")
-    if not doc["items"]:
+    _quests_markdown(doc, lines)
+    if not doc["items"] and not _quests_present(doc):
         lines.append("_Nothing to report in this range._")
     return "\n".join(lines) + "\n"
+
+
+def _quests_present(doc: dict) -> bool:
+    q = doc.get("quests") or {}
+    return bool(q.get("overdue") or q.get("active")
+                or q.get("hooks_not_shown") or q.get("error"))
+
+
+def _quests_markdown(doc: dict, lines: list) -> None:
+    """The quests section of the briefing (quests.briefing_section): overdue
+    timers FIRST — a timer the GM forgot is the one that kills the campaign
+    — then the active quests touching the covered range, then the hooked
+    count as one line. Rendered even when the week range has no items: an
+    open timer does not care what week it is."""
+    if not _quests_present(doc):
+        return
+    import quests as quest_store
+    q = doc["quests"]
+    lines.append("")
+    lines.append("## Quests (open story)")
+    if q.get("error"):
+        lines.append(f"- _Quests could not be read: {q['error']}_")
+        return
+    for rec in q.get("overdue") or []:
+        lines.append(f"- **OVERDUE** {rec['name']} (status {rec['status']},"
+                     f" due {quest_store.due_label(rec)}) — "
+                     f"`{rec['file']}`")
+    for rec in q.get("active") or []:
+        where = ", ".join(rec["places"]) if rec["places"] else \
+            ", ".join(rec["factions"])
+        patron = f", given by {rec['given_by']}" if rec["given_by"] else ""
+        lines.append(f"- {rec['name']}{patron} — active"
+                     + (f" at {where}" if where else "")
+                     + f" — `{rec['file']}`")
+    hooks = q.get("hooks_not_shown") or 0
+    if hooks:
+        lines.append(f"_{hooks} hook{'s' if hooks != 1 else ''} not "
+                     "shown._")
 
 
 # ---------------------------------------------------------------- disclosure
