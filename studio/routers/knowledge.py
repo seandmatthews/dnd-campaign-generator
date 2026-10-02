@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import briefing
 import canon
 import knowledge
+import prep
 import publication
 from routers.common import (campaign_lock_nowait, ensure_publishable_409,
                             finalize_publication, require_campaign,
@@ -174,6 +175,31 @@ def get_briefing_markdown(name: str, since_week: int = 0, focus: str = ""):
         name, since_week=since_week,
         focus=[f.strip() for f in focus.split(",") if f.strip()])
     return doc["markdown"]
+
+
+@router.post("/api/campaign/{name}/prep")
+def post_prep(name: str, since_week: int = 0):
+    """Compile + write the next-session prep page — one vault file at
+    lore/prep/<date>-next-session.md, the same date's re-run taking the
+    next free -N name (never overwriting). A compile, not a generation:
+    deterministic from the briefing + quests + state rumors, no LLM pass,
+    no budget; the only gate is the normal campaign lock. The write lands
+    as a history snapshot like every canon change."""
+    require_campaign(name)
+    with campaign_lock_nowait(name, "writing the next-session prep"):
+        out = prep.write(name, since_week=since_week)
+        snap = canon.snapshot_result(
+            name, f"campaign/{name}: next-session prep {out['file']}")
+    return {"file": out["file"], "snapshot": snap}
+
+
+@router.get("/api/campaign/{name}/prep/markdown",
+            response_class=PlainTextResponse)
+def get_prep_markdown(name: str, since_week: int = 0):
+    """The same compile the write produces, as plain text — for printing
+    without Obsidian. Reads only; nothing is written."""
+    require_campaign(name)
+    return prep.markdown(prep.build(name, since_week=since_week))
 
 
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/reveal")
