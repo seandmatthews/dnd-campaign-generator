@@ -27,7 +27,11 @@ member path is validated (no traversal, no absolute paths), every file is
 verified against the manifest's hash before anything is written, unknown
 members are refused, and the restored campaign is then opened with the
 app's own loaders (campaign.yaml, state.yaml, chronicles, entity pages) so
-a restore that cannot be loaded fails loudly.
+a restore that cannot be loaded fails loudly. The exclusion list is a
+trust boundary BOTH ways: members it excludes (.git, credentials,
+forecasts, machine noise — even hash-verified in the manifest) are skipped
+with a warning naming them, never written, so a hand-zipped copy of a live
+campaign restores to the same shape a studio export would have.
 
 Exit codes: 0 ok, 1 error, 2 usage.
 """
@@ -61,7 +65,9 @@ EXCLUDES = [
     "*.log",
     ".git/*",
     ".gitignore",
-    "llm.env*",
+    "llm.env*",  # a dropped credential never rides along — at any depth:
+    "*/llm.env*",  # fnmatch anchors at the string start, so the top-level
+    # pattern alone would miss a copy nested deeper in the tree
 ]
 SCHEMA_VERSION = 1
 
@@ -172,13 +178,27 @@ def restore(archive: pathlib.Path, into: pathlib.Path) -> pathlib.Path:
                   "overwrites; choose another --into directory",
                   file=sys.stderr)
             raise SystemExit(1)
+        # the exclusion list is the trust boundary BOTH ways: a manifest
+        # entry for an excluded path (a hand zip hashes everything it
+        # zipped) is ignored, not honored — those files are never written,
+        # so they are neither required from the archive nor re-verified
+        wanted = {rel: digest for rel, digest in manifest["files"].items()
+                  if not excluded(rel)}
         # hash-verify everything IN MEMORY before writing anything
         verified: dict = {}
+        skipped: list = []
         for member in z.namelist():
+            # a hand-zipped campaign folder (Explorer) carries directory
+            # entries; they hold no content — parents are made on write
+            if member.startswith(CAMPAIGN_PREFIX) and member.endswith("/"):
+                continue
             rel = _safe_member(member)
             if rel is None:
                 continue
-            expected = manifest["files"].get(rel)
+            if excluded(rel):
+                skipped.append(rel)  # a hash does not make noise canon
+                continue
+            expected = wanted.get(rel)
             if expected is None:
                 raise SystemExit(
                     f"error: {rel} is in the archive but not in the "
@@ -189,7 +209,11 @@ def restore(archive: pathlib.Path, into: pathlib.Path) -> pathlib.Path:
                     f"error: hash mismatch for {rel} — the archive is "
                     "corrupt or tampered with")
             verified[rel] = z.read(member)
-        missing = set(manifest["files"]) - set(verified)
+        if skipped:
+            print("warning: skipped excluded member(s) — the export never "
+                  "includes these and neither does a restore: "
+                  + ", ".join(sorted(skipped)))
+        missing = set(wanted) - set(verified)
         if missing:
             raise SystemExit(
                 "error: the archive is missing manifest file(s): "
@@ -200,7 +224,7 @@ def restore(archive: pathlib.Path, into: pathlib.Path) -> pathlib.Path:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
         # re-verify what landed on disk matches the manifest byte for byte
-        for rel, expected in manifest["files"].items():
+        for rel, expected in wanted.items():
             actual = sha256((target / rel).read_bytes())
             if actual != expected:
                 raise SystemExit(

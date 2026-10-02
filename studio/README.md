@@ -246,7 +246,12 @@ into `DIR/<campaign>` and refuses an existing directory — restore never
 overwrites a real campaign by default. Every member path is validated (no
 traversal), every file is hash-verified against the manifest BEFORE
 anything is written, and the restored campaign is opened with the app's
-own loaders so a restore that cannot load fails loudly.
+own loaders so a restore that cannot load fails loudly. The exclusion
+list is two-way: archive members it excludes (`.git`, credential files at
+any depth, forecasts, machine noise — even when a hand-zipped archive
+hash-verifies them in the manifest) are skipped with a warning naming
+them, so a hand-zipped copy of a live campaign restores to the same
+shape a studio export would have.
 
 ## The job queue — set the evening up and walk away
 

@@ -54,7 +54,7 @@ def test_export_manifest_and_exclusions(client, tmp_spine_root, monkeypatch,
 
 
 def test_restore_to_new_directory_verifies_and_loads(
-        client, tmp_spine_root, monkeypatch, tmp_path):
+        client, tmp_spine_root, monkeypatch, tmp_path, capsys):
     root = _make_campaigns(tmp_spine_root, monkeypatch)
     archive = tmp_path / "testvale.zip"
     export_campaign.main(["testvale", "--out", str(archive)])
@@ -70,6 +70,14 @@ def test_restore_to_new_directory_verifies_and_loads(
     for rel in manifest["files"]:
         assert (restored / rel).read_bytes() == \
             (root / "testvale" / rel).read_bytes()
+    # the exclusion list is shared, so a studio export restores WHOLE:
+    # nothing legitimately in the archive is dropped, nothing extra lands
+    out, _ = capsys.readouterr()
+    assert "skipped" not in out
+    assert f"restored {len(manifest['files'])} file(s)" in out
+    on_disk = {p.relative_to(restored).as_posix()
+               for p in restored.rglob("*") if p.is_file()}
+    assert on_disk == set(manifest["files"])
     # the app's own loaders open it (the script ran load_check; assert here
     # too through the same loaders)
     saved = spine.CAMPAIGNS_ROOT
@@ -79,6 +87,56 @@ def test_restore_to_new_directory_verifies_and_loads(
         assert spine.load_state("testvale").get("city")
     finally:
         spine.CAMPAIGNS_ROOT = saved
+
+
+def test_restore_skips_excluded_members(client, tmp_spine_root, monkeypatch,
+                                        tmp_path, capsys):
+    """A hand-zipped live campaign (dir entries and all, every planted file
+    hash-verified in the manifest — hashes do not discriminate) must not
+    resurrect what the export promises never ride along: a nested .git, a
+    credential at any depth, a stale ACTIVE forecast (review P3-25)."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    archive = tmp_path / "testvale.zip"
+    export_campaign.main(["testvale", "--out", str(archive)])
+    planted = {
+        ".git/HEAD": "ref: refs/heads/main\n",
+        ".git/hooks/post-commit": "#!/bin/sh\n",
+        "llm.env": "LLM_API_KEY=sekrit\n",
+        "sessions/llm.env": "LLM_API_KEY=also-sekrit\n",
+        "simulation/forecasts/20260925T120000-ab12cd34/manifest.yaml":
+            "status: ACTIVE\n",
+    }
+    hand = tmp_path / "hand.zip"
+    with zipfile.ZipFile(archive) as zin, \
+            zipfile.ZipFile(hand, "w") as zout:
+        manifest = json.loads(zin.read("manifest.json").decode("utf-8"))
+        for item in zin.namelist():
+            if item != "manifest.json":
+                zout.writestr(item, zin.read(item))
+        # an Explorer-style zip carries directory entries too
+        for d in ("", ".git", ".git/hooks", "sessions",
+                  "simulation/forecasts/20260925T120000-ab12cd34"):
+            zout.writestr("campaign/" + d + "/", "")
+        for rel, text in planted.items():
+            manifest["files"][rel] = export_campaign.sha256(
+                text.encode("utf-8"))
+            zout.writestr("campaign/" + rel, text.encode("utf-8"))
+        zout.writestr("manifest.json", json.dumps(manifest))
+    fresh = tmp_path / "restored"
+    rc = export_campaign.main(["--restore", str(hand), "--into", str(fresh)])
+    assert rc == 0
+    restored = fresh / "testvale"
+    for rel in planted:
+        assert not (restored / rel).exists(), f"{rel} landed on disk"
+    assert not (restored / "simulation" / "forecasts").exists()
+    assert not (restored / "sessions").exists()
+    # the response names every skipped member
+    out, _ = capsys.readouterr()
+    assert "skipped excluded member" in out
+    for rel in planted:
+        assert rel in out, f"the skip warning must name {rel}"
+    # and the campaign's real files all landed — it loaded (rc 0)
+    assert (restored / "campaign.yaml").is_file()
 
 
 def test_restore_refuses_existing_target(client, tmp_spine_root,
@@ -293,9 +351,11 @@ def test_export_excludes_every_documented_noise_pattern(client,
     _make_campaigns(tmp_spine_root, monkeypatch)
     for rel in ("x.log", "x.bak", "x.tmp", "x.pyc", "sub/__pycache__/m.pyc",
                 ".git/HEAD", ".gitignore", "llm.env", "llm.env.example",
+                "sessions/llm.env", "lore/deep/llm.env.local",
                 "simulation/forecasts/20260925T120000-ab12cd34/manifest.yaml",
                 "simulation/forecasts/20260925T120000-ab12cd34/week-0004.yaml"):
         assert export_campaign.excluded(rel), f"{rel} must be excluded"
     for rel in ("campaign.yaml", "simulation/state.yaml", "notes.md",
+                "sessions/session-0001.md",
                 "simulation/proposals/p1/proposal.yaml"):
         assert not export_campaign.excluded(rel), f"{rel} must ride along"
