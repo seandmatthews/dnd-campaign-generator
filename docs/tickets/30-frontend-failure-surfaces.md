@@ -46,14 +46,14 @@
 
 ## Acceptance criteria
 
-- [ ] Entities rows with backing pages are styled clickable and open the
+- [x] Entities rows with backing pages are styled clickable and open the
       page view (browser-verified or DOM-tested).
-- [ ] Killing the server then clicking a session shows the standard error
+- [x] Killing the server then clicking a session shows the standard error
       panel, not a blank tab.
-- [ ] Prepare failures (both 409 flavors) leave a visible, actionable
+- [x] Prepare failures (both 409 flavors) leave a visible, actionable
       message on screen.
-- [ ] session_changes accept toast names what actually published.
-- [ ] A conflict-parked transaction renders a banner with a working
+- [x] session_changes accept toast names what actually published.
+- [x] A conflict-parked transaction renders a banner with a working
       Resolve action (against a fixture tx).
-- [ ] Queue strip never renders an older snapshot after a newer one
+- [x] Queue strip never renders an older snapshot after a newer one
       (sequencing test or reasoned note if untestable in node).

@@ -274,30 +274,56 @@
       ' — an estimate';
   }
 
+  let queueStripInFlight = false;
   function pollQueueStrip() {
     const camp = Studio.state.campaign;
     if (!camp) { renderQueueStrip(null); return; }
+    // Sequencing, like pollJob: an older slow response must never land
+    // after a newer one rendered (a finished job would briefly resurrect
+    // on the strip). One request in the air at a time; snapshots render
+    // in the order they were requested (ticket 30 / P3-35). Exposed for
+    // studio/tests/js/test_core_banners.cjs.
+    if (queueStripInFlight) return;
+    queueStripInFlight = true;
     api('/api/campaign/' + encodeURIComponent(camp) + '/jobs')
       .then(renderQueueStrip)
-      .catch(() => { renderQueueStrip(null); });
+      .catch(() => { renderQueueStrip(null); })
+      .finally(() => { queueStripInFlight = false; });
   }
 
-  /* ---------- history snapshot recovery ---------- */
+  Studio.pollQueueStrip = pollQueueStrip;
+
+  /* ---------- history snapshot + conflict recovery ---------- */
 
   // A failed snapshot means "your change published, but the git undo trail
-  // does not have it" — the one recovery path that must never require curl.
+  // does not have it"; a conflict-parked transaction means "a crashed
+  // publication met an external edit and 409-blocks every publication
+  // write until you decide". Both are the recovery paths that must never
+  // require curl (ticket 30 / P3-34).
   Studio.snapshotBanner = async function () {
+    let txs = [];
     try {
       const summary = await api(campUrl(''));
-      const txs = (summary && summary.publication &&
-                   Array.isArray(summary.publication.transactions))
+      txs = (summary && summary.publication &&
+             Array.isArray(summary.publication.transactions))
         ? summary.publication.transactions : [];
-      const broken = txs.some((t) => t && t.snapshot &&
-        (t.snapshot.state === 'failed' || t.snapshot.state === 'unavailable'));
-      if (!broken) return null;
     } catch (_) {
       return null; // advisory: a missing summary never blocks the tab
     }
+    const conflicts = txs.filter((t) => t && t.status === 'conflict');
+    const broken = txs.some((t) => t && t.snapshot &&
+      (t.snapshot.state === 'failed' || t.snapshot.state === 'unavailable'));
+    if (!conflicts.length && !broken) return null;
+
+    const host = el('<div class="recovery-banners"></div>');
+    conflicts.forEach((t) => {
+      host.appendChild(conflictBanner(t));
+    });
+    if (broken) host.appendChild(snapshotRetryBanner());
+    return host;
+  };
+
+  function snapshotRetryBanner() {
     const banner = el(
       '<div class="snapshot-banner" role="status">' +
         '<span>Your change published, but the <strong>history snapshot</strong> ' +
@@ -310,7 +336,55 @@
       await Studio.retrySnapshot();
     });
     return banner;
-  };
+  }
+
+  // One conflict-parked transaction and its two DM decisions, wired to
+  // POST .../publication/resolve: "apply" forces the staged outcome over
+  // the external edit, "discard" keeps the live bytes and abandons the
+  // transaction. Recovery never chooses by itself — neither does this UI.
+  function conflictBanner(t) {
+    const files = (Array.isArray(t.conflicts) ? t.conflicts : [])
+      .map((f) => '<code>' + esc(String(f)) + '</code>').join(', ');
+    const banner = el(
+      '<div class="snapshot-banner conflict-banner" role="alert">' +
+        '<span>A publication crashed and was <strong>parked as a ' +
+          'conflict</strong> &mdash; every publication write is blocked ' +
+          'until you decide (transaction <code class="conflict-tx"></code>' +
+          (files ? ', external edit to ' + files : '') + '). ' +
+          '<strong>Apply</strong> forces the crashed change over the ' +
+          'external edit; <strong>keep my edits</strong> abandons it and ' +
+          'leaves your files as they are.</span>' +
+        '<span>' +
+          '<button type="button" class="btn conflict-apply">Apply the crashed change</button> ' +
+          '<button type="button" class="btn conflict-discard">Keep my edits</button>' +
+        '</span>' +
+      '</div>');
+    banner.querySelector('.conflict-tx').textContent = String(t.transaction || '?');
+    const applyBtn = banner.querySelector('.conflict-apply');
+    const discardBtn = banner.querySelector('.conflict-discard');
+    const decide = async (resolution, okMsg) => {
+      applyBtn.disabled = true;
+      discardBtn.disabled = true;
+      try {
+        await api(campUrl('/publication/resolve'), {
+          method: 'POST',
+          body: { transaction: t.transaction, resolution: resolution }
+        });
+        toast(okMsg, 'ok');
+        showTab(Studio.state.activeTab); // re-render: the banner reflects the decision
+      } catch (err) {
+        toast('Resolve failed' + (err && err.error ? ': ' + err.error : ''),
+              'error');
+        applyBtn.disabled = false;
+        discardBtn.disabled = false;
+      }
+    };
+    applyBtn.addEventListener('click', () =>
+      decide('apply', 'Conflict resolved — the crashed change was applied.'));
+    discardBtn.addEventListener('click', () =>
+      decide('discard', 'Conflict resolved — your edited files stand.'));
+    return banner;
+  }
 
   Studio.retrySnapshot = async function () {
     try {
