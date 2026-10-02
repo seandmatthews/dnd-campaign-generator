@@ -6,6 +6,11 @@ Rule version 2 (resolver correctness): the resolver verifies target
 identity against the state (a typo raises, never an easy win), difficulty
 is a fixed default DC (risk_acceptance is descriptive only), and an
 inactive faction still defends — d20 + current muscle bonus +2, no LLM.
+
+Rule version 3 (attacks degrade, never delete — GM ruling 2026-10-02):
+an acting defender attacked by rivals keeps its −2-per-extra-front penalty
+on every roll, defenses AND its own non-attack proposal — which now also
+resolves as a normal uncontested action instead of being swallowed.
 """
 
 import copy
@@ -67,24 +72,40 @@ def test_targeting_an_actor_contests_both():
     random.seed(7)
     out = resolve_tick([approx("a", target="b"), approx("b"), approx("c")],
                        state_for("a", "b", "c"))
-    by = {o["actor"]: o for o in out}
-    assert by["a"]["contested"] and by["b"]["contested"], "both sides of a targeting pair are contested"
-    assert by["c"]["contested"] is False, "bystander is uncontested"
-    assert by["a"]["vs"] == "b" and by["b"]["vs"] == "a"
-    assert by["a"]["margin"] == -by["b"]["margin"], "margins mirror across the pair"
-    assert sum(o["success"] for o in out if o["actor"] in ("a", "b")) == 1, "exactly one winner"
-    print("  contested pair: opposed rolls, one winner, mirrored margins  OK")
+    by_actor = {}
+    for o in out:
+        by_actor.setdefault(o["actor"], []).append(o)
+    a = by_actor["a"][0]
+    b_contest = [o for o in by_actor["b"] if o["contested"]]
+    assert a["contested"] and len(b_contest) == 1, "both sides of a targeting pair contest"
+    assert a["vs"] == "b" and b_contest[0]["vs"] == "a"
+    assert by_actor["c"][0]["contested"] is False, "bystander is uncontested"
+    # rule version 3: the targeted actor's own proposal ALSO resolves — one
+    # front means no beleaguered penalty, a clean roll against the DC
+    b_own = [o for o in by_actor["b"] if not o["contested"]]
+    assert len(b_own) == 1 and b_own[0]["dc"] == DEFAULT_DC \
+        and b_own[0]["penalty"] == 0, \
+        "a single front does not overextend the defender's own action"
+    assert a["margin"] == -b_contest[0]["margin"], "margins mirror across the pair"
+    assert sum(o["success"] for o in (a, b_contest[0])) == 1, "exactly one winner"
+    print("  contested pair: opposed rolls, one winner, both proposals resolved  OK")
 
 
 def test_ties_go_to_defender():
     random.seed(1)
-    # force a tie by giving both sides the same fixed roll via many trials
+    # force a tie by giving both sides the same fixed roll via many trials.
+    # rule version 3: the acting defender also keeps its own uncontested
+    # action, so the tie is judged on the pair's CONTESTED rows
     for _ in range(2000):
         out = resolve_tick([approx("a", target="b"), approx("b")],
                            state_for("a", "b"))
-        by = {o["actor"]: o for o in out}
-        if by["a"]["total"] == by["b"]["total"]:
-            assert by["a"]["success"] is False and by["b"]["success"] is True, "tie must favor the defender"
+        by_actor = {}
+        for o in out:
+            by_actor.setdefault(o["actor"], []).append(o)
+        a = by_actor["a"][0]
+        b_defense = [o for o in by_actor["b"] if o["contested"]][0]
+        if a["total"] == b_defense["total"]:
+            assert a["success"] is False and b_defense["success"] is True, "tie must favor the defender"
             print("  tie: defender wins  OK")
             return
     raise AssertionError("no tie occurred in 2000 trials — statistically impossible")
@@ -120,7 +141,8 @@ def test_inactive_defender_still_opposes():
         "the defender's outcome is marked defensive"
     assert d["action"] == "defend (did not act this week)"
     assert d["bonus"] == 3 + 2, "defense bonus = current muscle (high=3) + 2"
-    assert d["penalty"] == 0, "defending does not overextend the defender"
+    assert d["penalty"] == 0, \
+        "an inactive defender proposed nothing and is never overextended"
     # deterministic: the same seed replays the same defense
     resolve.set_rng(19)
     again = {o["actor"]: o for o in resolve_tick([approx("a", target="b")],
@@ -195,14 +217,23 @@ def test_dry_run_week_replay():
     state = state_for("mint", "reliquary", "bastard", "longshoremen",
                       "marsh_gang")
     out = resolve_tick(week, state)
-    by = {o["actor"]: o for o in out}
-    assert by["marsh_gang"]["contested"] and by["marsh_gang"]["vs"] == "reliquary"
-    assert by["reliquary"]["contested"] and by["reliquary"]["vs"] == "marsh_gang"
-    if by["reliquary"]["success"]:
-        assert not by["marsh_gang"]["success"]
-        print(f"  replay: reliquary {by['reliquary']['total']} beat gang {by['marsh_gang']['total']} — procession holds  OK")
+    by_actor = {}
+    for o in out:
+        by_actor.setdefault(o["actor"], []).append(o)
+    gang = by_actor["marsh_gang"][0]
+    reliquary_contest = [o for o in by_actor["reliquary"] if o["contested"]][0]
+    assert gang["contested"] and gang["vs"] == "reliquary"
+    assert reliquary_contest["contested"] and reliquary_contest["vs"] == "marsh_gang"
+    # rule version 3: the gang's attack no longer deletes the reliquary's
+    # own procession — it resolves too (one front, so no penalty)
+    reliquary_own = [o for o in by_actor["reliquary"] if not o["contested"]]
+    assert len(reliquary_own) == 1 and reliquary_own[0]["dc"] == DEFAULT_DC \
+        and reliquary_own[0]["penalty"] == 0
+    if reliquary_contest["success"]:
+        assert not gang["success"]
+        print(f"  replay: reliquary {reliquary_contest['total']} beat gang {gang['total']} — procession holds  OK")
     else:
-        print(f"  replay: gang {by['marsh_gang']['total']} upset reliquary {by['reliquary']['total']} — procession robbed! OK")
+        print(f"  replay: gang {gang['total']} upset reliquary {reliquary_contest['total']} — procession robbed! OK")
 
 
 def test_commit_clamp():
@@ -244,16 +275,36 @@ def test_validate_refuses_unknown_target():
 
 
 def test_overextension_penalty():
-    """Besieged on all fronts: a faction in two contests rolls −2 in both;
-    its attackers roll clean. Uncontested actions take no penalty."""
+    """Rule version 3, pinned (GM ruling 2026-10-02): an ACTING defender
+    attacked by two rivals rolls BOTH defenses at −2, and its own
+    non-attack proposal ALSO resolves — as a normal uncontested action, at
+    the same beleaguered penalty. Attacks degrade, never delete."""
     random.seed(9)
     out = resolve_tick([approx("a", target="c"), approx("b", target="c"), approx("c")],
                        state_for("a", "b", "c"))
-    by = {o["actor"]: o for o in out}
-    assert by["c"]["contested"] and by["c"]["penalty"] == -2, "defender in 2 contests is penalized"
-    assert by["a"]["penalty"] == 0 and by["b"]["penalty"] == 0, "single-contest attackers are clean"
-    assert by["c"]["total"] == by["c"]["roll"] + by["c"]["bonus"] - 2
-    print("  overextension: −2 per extra contest, in all of them  OK")
+    by_actor = {}
+    for o in out:
+        by_actor.setdefault(o["actor"], []).append(o)
+    defenses = by_actor["c"]
+    contested = [o for o in defenses if o["contested"]]
+    assert len(defenses) == 3 and len(contested) == 2, \
+        "the defender stood against both attacks AND kept its own action"
+    assert {o["vs"] for o in contested} == {"a", "b"}, "one contest per attacker"
+    assert all(o["penalty"] == -2 for o in contested), \
+        "two fronts: both defense rolls at −2"
+    assert all(o["total"] == o["roll"] + o["bonus"] - 2 for o in contested)
+    for attacker in ("a", "b"):
+        assert len(by_actor[attacker]) == 1, \
+            f"{attacker}'s attack resolves inside its contest, never twice"
+        assert by_actor[attacker][0]["contested"] \
+            and by_actor[attacker][0]["penalty"] == 0, \
+            f"{attacker} fights one clean contest"
+    own = [o for o in defenses if not o["contested"]][0]
+    assert own["dc"] == DEFAULT_DC and own["contested"] is False, \
+        "the beleaguered faction's own action resolves vs the fixed DC"
+    assert own["penalty"] == -2, "one beleaguered faction, one penalty"
+    assert own["total"] == own["roll"] + own["bonus"] - 2
+    print("  overextension: −2 on defenses AND the own action; attackers clean  OK")
 
 
 def test_mutual_targeting_is_one_contest():
@@ -269,20 +320,31 @@ def test_mutual_targeting_is_one_contest():
 
 
 def test_besieged_stack():
-    """Three attackers, one defender: the defender eats −4 in every fight;
-    each attacker fights its own single contest clean."""
+    """Three attackers, one acting defender: the defender eats −4 in every
+    fight AND on its own action (rule version 3 — attacks degrade, never
+    delete); each attacker fights its own single contest clean."""
     random.seed(2)
     out = resolve_tick([
         approx("a", target="c"), approx("b", target="c"),
         approx("d", target="c"), approx("c"),
     ], state_for("a", "b", "c", "d"))
-    by = {o["actor"]: o for o in out}
-    assert by["c"]["contested"] and by["c"]["penalty"] == -4, "three contests: −4"
-    assert by["c"]["total"] == by["c"]["roll"] + by["c"]["bonus"] - 4
+    by_actor = {}
+    for o in out:
+        by_actor.setdefault(o["actor"], []).append(o)
+    rows = by_actor["c"]
+    contested = [o for o in rows if o["contested"]]
+    assert len(contested) == 3 and all(o["penalty"] == -4 for o in contested), \
+        "three fronts: −4 in every defense"
+    own = [o for o in rows if not o["contested"]]
+    assert len(own) == 1 and own[0]["penalty"] == -4, \
+        "the beleaguered faction's own action takes the same −4"
+    assert own[0]["total"] == own[0]["roll"] + own[0]["bonus"] - 4
     for attacker in ("a", "b", "d"):
-        assert by[attacker]["contested"] and by[attacker]["penalty"] == 0, \
+        attacker_rows = by_actor[attacker]
+        assert len(attacker_rows) == 1 and attacker_rows[0]["contested"] \
+            and attacker_rows[0]["penalty"] == 0, \
             f"{attacker} fights one clean contest"
-    print("  besieged stack: −4 on the defender, clean attackers  OK")
+    print("  besieged stack: −4 on every roll the defender makes  OK")
 
 
 def test_replay_without_network_is_identical():
