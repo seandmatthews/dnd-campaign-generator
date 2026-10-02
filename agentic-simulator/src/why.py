@@ -46,8 +46,10 @@ def find_event(state, week, actor):
 
 
 def _name(state, actor):
-    faction = faction_map(state).get(actor)
-    return faction["name"] if faction else actor
+    """Display name for an actor id; a faction that carries no name shows
+    its id — the why CLI serves hand-edited states validate_state never
+    saw, and a nameless faction must not KeyError the route."""
+    return (faction_map(state).get(actor) or {}).get("name") or actor
 
 
 def _tokens(text):

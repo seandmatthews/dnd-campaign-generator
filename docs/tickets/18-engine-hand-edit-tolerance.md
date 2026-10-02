@@ -59,12 +59,12 @@ Normalize at the boundary, don't sprinkle isinstance checks downstream:
 
 ## Acceptance criteria
 
-- [ ] Numeric-id state: `--live` refuses pre-spend with a readable
+- [x] Numeric-id state: `--live` refuses pre-spend with a readable
       validate_state message (or runs correctly if normalization is chosen)
       — no `TypeError` in scheduler, no post-spend `ValueError` in resolve.
-- [ ] Scalar alias / scalar generic_words: either refused by validate_state
+- [x] Scalar alias / scalar generic_words: either refused by validate_state
       with a named error or coerced to one-item list — test both shapes.
-- [ ] `default_dc: twelve` is a pre-spend refusal naming the key.
-- [ ] Duplicate faction ids refused like duplicate place ids.
-- [ ] views/why on `disposition: null` and nameless factions return
+- [x] `default_dc: twelve` is a pre-spend refusal naming the key.
+- [x] Duplicate faction ids refused like duplicate place ids.
+- [x] views/why on `disposition: null` and nameless factions return
       diagnostics, never tracebacks (unit tests per case).

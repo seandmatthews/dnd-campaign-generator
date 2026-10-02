@@ -112,8 +112,11 @@ def _known_targets(state):
     """The typed target set the resolver accepts, straight from the state:
     faction ids, 'world', 'self', and every place's districts (any place,
     not just the primary — a district target must resolve wherever the
-    faction that proposed it lives)."""
-    ids = {f["id"] for f in (state or {}).get("factions", [])} | {"world", "self"}
+    faction that proposed it lives). Ids are collected as str(id) to match
+    llm._validate, which canonicalizes every target to text: an id YAML
+    parsed as a number used to raise 'unknown target' HERE, after the
+    week's provider spend."""
+    ids = {str(f["id"]) for f in (state or {}).get("factions", [])} | {"world", "self"}
     districts = set()
     for p in places_of(state or {}):
         districts |= {str(x) for x in (p.get("districts") or [])}
@@ -187,7 +190,9 @@ def resolve_tick(proposals, state=None):
                 "uncontested roll")
 
     if state is not None:
-        faction_map = {f["id"]: f for f in state.get("factions", [])}
+        # keyed by str(id): targets arrive canonicalized to text by
+        # llm._validate, and the lookup must key the same way
+        faction_map = {str(f["id"]): f for f in state.get("factions", [])}
     else:
         # no state: only mutual contests between proposers are decidable
         faction_map = {}

@@ -26,7 +26,10 @@ def _name_tokens(faction, place_words_set=frozenset()):
     Reliquary quarter vs the Reliquary) must not activate the faction on a
     mere mention of the place."""
     words = set(_WORD_RE.findall(faction["name"].lower()))
-    words.add(faction["id"])
+    # ids are text (validate_state enforces it for --live); str() keeps an
+    # id YAML parsed as a number from dying on len() below when a state
+    # reaches here without the gate (hand-built, replay-side)
+    words.add(str(faction["id"]))
     return {w for w in words if len(w) > 1 and w not in _ARTICLES} - place_words_set
 
 

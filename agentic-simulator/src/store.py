@@ -142,7 +142,13 @@ def validate_state(state):
     resources) must carry those keys; an explicitly-null optional
     (disposition:, knows:) is refused too — `.get(key, default)` defaults
     only when the key is ABSENT, so a hand-written null defeats every
-    downstream reader. Raises ValueError."""
+    downstream reader. Faction ids are TEXT and unique (an unquoted YAML
+    number is refused, not stringified: the scheduler's tokens, llm's
+    targets, and the resolver's known ids all key on the id as text);
+    `aliases` values and `generic_words` are lists of words (a scalar is
+    refused — downstream joins it letter-by-letter); `meta.rules`
+    (when present) is a mapping with a numeric default_dc the resolver
+    can int() after the spend. Raises ValueError."""
     if not isinstance(state, dict):
         raise ValueError("state is not a mapping (empty or corrupt file?)")
     places = places_of(state)
@@ -175,14 +181,51 @@ def validate_state(state):
     week = clock.get("week") if isinstance(clock, dict) else None
     if not isinstance(week, int) or isinstance(week, bool):
         raise ValueError(f"meta.clock.week is {week!r}, not an integer")
+    rules = meta.get("rules") if isinstance(meta, dict) else None
+    if rules is not None and not isinstance(rules, dict):
+        raise ValueError(
+            f"meta.rules must be a mapping (rules: {{default_dc: 12}}), "
+            f"not {rules!r} — resolve_action calls rules.get('default_dc') "
+            "on it for every unopposed roll")
+    if isinstance(rules, dict) and rules.get("default_dc") is not None:
+        dc = rules["default_dc"]
+        numeric = not isinstance(dc, bool)
+        if numeric:
+            try:
+                int(dc)
+            except (TypeError, ValueError):
+                numeric = False
+        if not numeric:
+            raise ValueError(
+                f"meta.rules.default_dc is {dc!r}, not a number — write "
+                "default_dc: 12; the resolver rolls against "
+                "int(default_dc), and that call used to fire only after "
+                "the week's whole provider spend")
     factions = state.get("factions")
     if not isinstance(factions, list) or not factions:
         raise ValueError("factions is missing or empty — a week needs at "
                          "least one faction")
+    seen_fids = set()
     for f in factions:
         if not isinstance(f, dict) or not str(f.get("id") or "").strip():
             raise ValueError("every faction needs a non-empty id")
-        fid = str(f["id"])
+        if not isinstance(f["id"], str):
+            # ids key the scheduler's activation tokens, llm's proposal
+            # targets, and the resolver's known-target set; YAML hands a
+            # raw number to some of those and a stringified one to others
+            raise ValueError(
+                f"faction id {f['id']!r} must be text, not "
+                f"{type(f['id']).__name__} — quote it in state.yaml "
+                f"(id: '{f['id']}')")
+        fid = f["id"]
+        if fid in seen_fids:
+            # mirrors the places check above: by_actor keeps the last of a
+            # duplicate pair, silently merging two factions' weeks
+            raise ValueError(
+                f"two factions share the id '{fid}' — give each a distinct "
+                "id: the scheduler, the resolver, and the rumor mill all "
+                "key on it, and a duplicate silently merges their weeks")
+        seen_fids.add(fid)
         if not str(f.get("name") or "").strip():
             raise ValueError(f"faction '{fid}' needs a non-empty name — "
                              "the scheduler and the inspect view read it")
@@ -214,6 +257,33 @@ def validate_state(state):
             raise ValueError(
                 f"faction '{fid}' names place '{place}', which is not "
                 f"one of: {', '.join(sorted(seen_ids))}")
+    aliases = state.get("aliases")
+    if aliases is not None:
+        if not isinstance(aliases, dict):
+            raise ValueError(
+                f"aliases must be a mapping of faction id to a list of "
+                f"match words, not {aliases!r}")
+        for key, val in aliases.items():
+            if isinstance(val, str) or not (
+                    isinstance(val, list)
+                    and all(isinstance(w, str) and w.strip() for w in val)):
+                raise ValueError(
+                    f"aliases for faction '{key}' must be a list of match "
+                    f"words (aliases: {{{key}: [ferrand, ...]}}), not "
+                    f"{val!r} — ingest joins the value into the faction's "
+                    "match words, and a scalar joins letter-by-letter so "
+                    "the alias never matches a note")
+    generic_words = state.get("generic_words")
+    if generic_words is not None and (
+            not isinstance(generic_words, list)
+            or not all(isinstance(w, str) and w.strip()
+                       for w in generic_words)):
+        raise ValueError(
+            f"generic_words must be a list of words (generic_words: "
+            f"[council, harbor, ...]), not {generic_words!r} — consistency "
+            "builds the city-book filter from it, and a scalar string "
+            "would be read as single letters, replacing the default "
+            "filter with nonsense")
     events = state.get("events")
     if not isinstance(events, list):
         raise ValueError("events is missing or not a list — resolved weeks "
