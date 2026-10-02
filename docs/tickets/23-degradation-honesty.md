@@ -49,12 +49,12 @@ but four degradation gaps remain where one bad input kills more than itself:
 
 ## Acceptance criteria
 
-- [ ] Broken sole quest page: prep page names the unreadable file, briefing
+- [x] Broken sole quest page: prep page names the unreadable file, briefing
       shows findings, neither says "No quest pages yet".
-- [ ] Broken knowledge.yaml: briefing returns its other sections plus a
+- [x] Broken knowledge.yaml: briefing returns its other sections plus a
       knowledge-section finding; prep builds.
-- [ ] Broken state.yaml: Quests panel renders quests with unknown-clock
+- [x] Broken state.yaml: Quests panel renders quests with unknown-clock
       findings instead of a 422 error panel.
-- [ ] A BOM'd `kind: quest` page appears in the quests read model (or is
+- [x] A BOM'd `kind: quest` page appears in the quests read model (or is
       surfaced as a finding) — never silently absent.
-- [ ] `since_week` above the clock: sane output (clamped or 422), tested.
+- [x] `since_week` above the clock: sane output (clamped or 422), tested.

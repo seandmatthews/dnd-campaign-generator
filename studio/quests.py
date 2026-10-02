@@ -227,7 +227,17 @@ def load(name: str) -> dict:
         findings.append({"rule": rule, "level": level,
                          "message": message, "source": source})
 
-    state = spine.load_state(name)
+    try:
+        state = spine.load_state(name)
+    except spine.CampaignFileError as e:
+        # a hand-broken state.yaml costs only what it feeds — the clock and
+        # the faction/place resolution. Quests themselves live in lore
+        # pages: the panel keeps its rows, week timers read as unknown
+        # (never overdue without a clock), and the finding names the file
+        # (P3-18 — one YAML slip must not 422 the whole Quests panel)
+        state = {}
+        finding("quests/state-unreadable", "error", str(e),
+                "simulation/state.yaml")
     current_week = spine.state_clock_week(state)
     sim_places = spine.state_places(state)
     factions_by_key: dict[str, str] = {}
@@ -257,6 +267,16 @@ def load(name: str) -> dict:
             # back as expected_page_revision (see places._page_snapshot)
             raw, revision, _newline = _page_snapshot(path, None)
             meta, body = _frontmatter_of(raw)
+            if raw.startswith("\ufeff"):
+                # the frontmatter fence tolerates the BOM, so the page
+                # reads — but the GM learns their editor wrote "UTF-8 with
+                # BOM" and why tools without the tolerance saw nothing
+                # (P3-19: the page used to vanish with NO finding)
+                finding("quests/page-bom", "warning",
+                        f"quest page {p['file']} starts with a UTF-8 BOM — "
+                        "its frontmatter was invisible to tools that do not "
+                        "tolerate one; re-save the page as plain UTF-8",
+                        p["file"])
         except (OSError, ValueError, PlaceError) as e:
             # OSError: vanished mid-read; ValueError: not UTF-8; PlaceError:
             # frontmatter that does not parse — one bad page costs only
@@ -408,7 +428,10 @@ def briefing_section(name: str, *, since_week: int = 0,
     timer does not stop being open because the DM is reading about
     something else."""
     doc = load(name)
-    state = spine.load_state(name)
+    try:
+        state = spine.load_state(name)
+    except spine.CampaignFileError:
+        state = {}  # load() already surfaced the finding; nothing intersects
     if current_week is None:
         current_week = spine.state_clock_week(state)
     today = today or datetime.date.today()

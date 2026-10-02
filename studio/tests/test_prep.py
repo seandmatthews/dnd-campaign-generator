@@ -15,6 +15,7 @@ pass anywhere.
 import datetime
 import re
 
+import briefing
 import knowledge
 import prep
 import pytest
@@ -345,3 +346,82 @@ def test_since_week_and_fact_week_bounds(client, tmp_spine_root):
         knowledge.apply_fact_records(
             "testvale", doc, set(),
             [{"text": "x", "visibility": "public", "week": "3"}])
+
+
+# ------------------------------------------------- ticket 23: honest degradation
+
+
+def test_broken_sole_quest_page_named_not_declared_absent(client,
+                                                          tmp_spine_root):
+    """R5: when the ONLY quest page cannot be read, the prep page carries
+    the briefing's error finding (naming the file) instead of dropping it
+    and printing 'No quest pages yet' over a quest that exists but cannot
+    be read."""
+    d = tmp_spine_root / "testvale"
+    (d / "lore" / "entities").mkdir(parents=True, exist_ok=True)
+    (d / "lore" / "entities" / "The Only Quest.md").write_text(
+        "---\nkind: quest\nname: [unclosed\n---\n\nProse.\n",
+        encoding="utf-8")
+
+    text = prep.markdown(prep.build("testvale"))
+    assert "## Active quests" in text
+    assert "The Only Quest.md" in text, "the finding names the unreadable file"
+    assert "No quest pages yet" not in text
+    # the finding rode the doc, not just the markdown
+    assert any(f["level"] == "error"
+               for f in prep.build("testvale")["quests"]["findings"])
+
+    # the briefing side already rendered it (ticket 09) — and never
+    # answers 'nothing to report' over an unreadable quest
+    doc = briefing.build("testvale")
+    md = doc["markdown"]
+    assert "Quest finding" in md and "The Only Quest.md" in md
+    assert "No quest pages yet" not in md
+    assert "Nothing to report" not in md
+
+
+def test_broken_knowledge_yaml_costs_only_its_sections(client, tmp_spine_root):
+    """P3-17: a hand-mangled simulation/knowledge.yaml degrades the
+    sections it feeds — the briefing's stale facts, prep's reveal list —
+    and never kills either build. Both carry a finding naming the file."""
+    (tmp_spine_root / "testvale" / "simulation" / "knowledge.yaml").write_text(
+        "facts: [unclosed\n", encoding="utf-8")
+
+    doc = briefing.build("testvale")
+    assert any(i["kind"] == "event" for i in doc["items"]), \
+        "the other briefing sections survive"
+    assert [f["rule"] for f in doc["knowledge_findings"]] == \
+        ["knowledge/unreadable"]
+    assert doc["knowledge_findings"][0]["source"] == \
+        "simulation/knowledge.yaml"
+    assert "Knowledge finding" in doc["markdown"]
+
+    r = client.get("/api/campaign/testvale/briefing")
+    assert r.status_code == 200, r.text
+    assert r.json()["knowledge_findings"]
+
+    text = prep.markdown(prep.build("testvale"))
+    assert "## Waiting to be revealed" in text
+    assert "could not be read" in text
+    assert "No public facts waiting" not in text, \
+        "the reminder list must not claim 'nothing waiting' over an " \
+        "unreadable store"
+    # every other section still compiles
+    assert "## Active quests" in text and "## Open decisions" in text
+
+
+def test_since_week_above_the_clock_covers_no_weeks(client, tmp_spine_root):
+    """P3-23: since_week above the clock is an over-narrow range, not an
+    inverted one — 'covers weeks 11–3' on a week-3 clock becomes an empty
+    range that says why (clamped, documented in prep.build)."""
+    r = client.get("/api/campaign/testvale/prep/markdown?since_week=10")
+    assert r.status_code == 200, r.text
+    assert "covers_weeks: []" in r.text
+    assert "11\u20133" not in r.text, "the range must never run backwards"
+    assert "covers no weeks" in r.text
+    # the boundary: changes AFTER the clock week cover nothing either;
+    # one below the clock is the last real week
+    assert "covers_weeks: []" in client.get(
+        "/api/campaign/testvale/prep/markdown?since_week=3").text
+    assert "covers_weeks: [3, 3]" in client.get(
+        "/api/campaign/testvale/prep/markdown?since_week=2").text

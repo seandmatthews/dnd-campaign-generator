@@ -553,8 +553,11 @@ def load_entities(name: str) -> list:
 
 # ------------------------------------------------------- entity pages (vault)
 
-# Frontmatter fence: --- at the very top, closing --- on its own line.
-_FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
+# Frontmatter fence: --- at the very top, closing --- on its own line. A
+# leading UTF-8 BOM (Windows Notepad's "UTF-8 with BOM") is tolerated:
+# without it a BOM'd page parsed as frontmatter-less and silently lost its
+# kind (P3-19) — readers that care flag the BOM as a finding instead.
+_FRONTMATTER_RE = re.compile(r"\A\ufeff?---[ \t]*\n(.*?)\n---[ \t]*(?:\n|\Z)", re.DOTALL)
 # A page filename is a display name (spaces, dots fine) with the
 # filesystem's trouble characters already excluded; .md rides in the caller.
 _PAGE_STEM_RE = re.compile(r"^[^/\\:*?\"<>|\x00-\x1f]{1,80}$")
