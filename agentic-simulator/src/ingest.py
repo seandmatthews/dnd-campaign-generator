@@ -20,6 +20,7 @@ destroyed in prose changes nothing until the DM adds a set_resource
 effect.
 """
 
+import contextlib
 import pathlib
 import re
 import sys
@@ -31,6 +32,7 @@ import effects
 from store import ROOT, STATE_FILE, place_words, split_argv
 from store import load_state as _store_load
 from store import save_state as _store_save
+from store import HomeLockBusy, standalone_home_lock
 
 PENDING_COMMENT = "# edit freely: delete or fix lines, then: python src/ingest.py --apply <this file>"
 
@@ -191,10 +193,22 @@ def main(argv):
             return 2
         try:
             pending = read_pending(paths[0])
-            n = apply(pending, state_path)
+            # --apply against the SHARED engine home (the default --state)
+            # claims the home's cross-process lock (ticket 26) so it cannot
+            # interleave with a studio week/forecast job or another
+            # standalone run; an explicit --state target is the caller's
+            # own file and needs no claim.
+            applies_to_home = pathlib.Path(state_path).resolve() == \
+                pathlib.Path(STATE_FILE).resolve()
+            with standalone_home_lock() if applies_to_home \
+                    else contextlib.nullcontext():
+                n = apply(pending, state_path)
         except (OSError, yaml.YAMLError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+        except HomeLockBusy as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 4
         if n < 0:
             return 1
         print(f"merged {n} events")

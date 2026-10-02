@@ -53,12 +53,12 @@
 
 ## Acceptance criteria
 
-- [ ] Style PUT during a held campaign lock → 409 like its siblings
+- [x] Style PUT during a held campaign lock → 409 like its siblings
       (test).
-- [ ] Engine-lock deadline firing mid-queue leaves no dangling flag;
+- [x] Engine-lock deadline firing mid-queue leaves no dangling flag;
       `GET status` honest afterwards (test with the lock held > deadline).
-- [ ] Standalone `--live` while a studio week holds the home: refused with
+- [x] Standalone `--live` while a studio week holds the home: refused with
       a readable message (new lock file), OR save_state uses unique tmp
       names and the constraint is documented in both CLIs.
-- [ ] Recovery-under-lock (or documented exemption) decided and noted in
+- [x] Recovery-under-lock (or documented exemption) decided and noted in
       `publication.recover_campaign`'s docstring.

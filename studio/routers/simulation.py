@@ -502,15 +502,19 @@ def post_week(name: str, body: WeekBody):
                 f"a proposal appeared while this run was starting "
                 f"({racing.get('proposal_id')}) — nothing was run or spent; "
                 "accept or discard it first")
-        # interrupted-run detection: flagged before copy-in, cleared only
-        # when the proposal is staged (or failed and rolled back)
-        engines.write_week_flag(name)
-        log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
-            "crash restores the engine home from its backup")
         # Lock order: campaign lock (held by this job) outside, engine
-        # lock inside — views/why take only the engine lock.
+        # lock inside — views/why take only the engine lock. The week flag
+        # is written only once the engine lock is HELD (ticket 26): a
+        # queued run whose bounded wait gives up must not leave a flag
+        # behind (GET status would report a week in flight until reboot),
+        # and a run still waiting must not overwrite the running job's
+        # attribution (boot restore would blame the wrong campaign).
+        # run_week_proposal clears it in its finally on every exit path.
         with engines.engine_lock_logged(log, "a week run or forecast",
                                         holder=name):
+            engines.write_week_flag(name)
+            log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after "
+                "a crash restores the engine home from its backup")
             result = engines.run_week_proposal(name, d, log)
         if auto_accept:
             # loud, and only behind the explicit checkbox: publish the
@@ -1120,11 +1124,14 @@ def post_forecast(name: str, body: ForecastBody):
             raise RuntimeError(
                 f"a forecast appeared while this run was starting "
                 f"({racing.get('forecast_id')}) — nothing was run or spent")
-        engines.write_week_flag(name)
-        log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
-            "crash restores the engine home from its backup")
+        # flag AFTER the engine lock is held, same rule as the week job
+        # (ticket 26): no flag while queued, no overwritten attribution,
+        # and run_forecast's finally always covers the clear.
         with engines.engine_lock_logged(log, "a week run or forecast",
                                         holder=name):
+            engines.write_week_flag(name)
+            log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after "
+                "a crash restores the engine home from its backup")
             return engines.run_forecast(name, d, body.weeks, log)
 
     return submit_campaign_job("forecast", name, job)

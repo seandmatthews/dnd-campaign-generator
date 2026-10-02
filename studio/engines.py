@@ -139,14 +139,37 @@ def fmg_dir() -> Path:
 
 
 WEEK_FLAG_NAME = ".week-run-flag"
+ENGINE_HOME_LOCK_NAME = ".engine-home.lock"
+
+# Set on every engine process the studio launches under engine_lock_logged:
+# the parent server already holds the engine-home lock file, and a child
+# that re-took it would deadlock on its own parent. The engine's standalone
+# mains (tick.py --live, effects.py --apply, ingest.py --apply) skip their
+# own lock claim when they see it (store.py standalone_home_lock).
+STUDIO_ENGINE_HOME_HELD = "STUDIO_ENGINE_HOME_HELD"
 
 
 def week_flag_path() -> Path:
-    """Marker for a week run in flight (routers/simulation.py writes it
-    before copy-in and removes it after copy-out; server.py restores the
-    engine home on boot when it is left behind). Read at call time so tests
-    can relocate engines.AGENTIC_SIMULATOR."""
+    """Marker for a week run in flight (the engine job writes it once it
+    HOLDS the engine home and removes it on every exit path; server.py
+    restores the engine home on boot when it is left behind). Read at call
+    time so tests can relocate engines.AGENTIC_SIMULATOR."""
     return AGENTIC_SIMULATOR / "world" / WEEK_FLAG_NAME
+
+
+def engine_home_lock_path() -> Path:
+    """The cross-process lock over the shared engine home (world/):
+    ENGINE_LOCK excludes this process's threads only, and the home is also
+    touched by the engine's standalone CLIs (tick.py --live, effects.py
+    --apply) as separate processes. Read at call time so tests can
+    relocate engines.AGENTIC_SIMULATOR."""
+    return AGENTIC_SIMULATOR / "world" / ENGINE_HOME_LOCK_NAME
+
+
+def engine_home_lock_held() -> bool:
+    """Whether any process holds the engine-home lock file (fresh-handle
+    probe, spine.file_lock_held) — tests and diagnostics assert on it."""
+    return spine.file_lock_held(engine_home_lock_path())
 
 
 # The rest of the engine home's layout is owned HERE the same way: routers
@@ -336,6 +359,19 @@ def run_record_identity(engine: str) -> dict:
     return rec
 
 
+# The first acquire window before the loud "waiting" line, split out so a
+# test can shrink it (most waits are a queued same-campaign run finishing
+# within seconds; a real 5s + 93min pair cannot be waited out in a test).
+ENGINE_LOCK_FIRST_WAIT_S = 5.0
+
+
+def engine_lock_deadline_s() -> float:
+    """The dead-man cap on a queued engine job's wait for the home: 3x the
+    longest legal run (one live week) plus its watchdog margin. A function
+    (not a constant) so tests can shrink it too."""
+    return 3 * (WEEK_TIMEOUT + 60)
+
+
 @contextlib.contextmanager
 def engine_lock_logged(log, why: str, holder=None):
     """The engine home is one shared scratch across campaigns: jobs that
@@ -343,18 +379,35 @@ def engine_lock_logged(log, why: str, holder=None):
     another campaign's run. Log the wait so a slow run is never silent,
     and bound it (a run aborted by its own watchdog eventually releases).
     holder names the campaign taking the home, so the submit-time probes
-    can tell same-campaign contention (queue behind it) from cross (409)."""
-    deadline = 3 * (WEEK_TIMEOUT + 60)
-    if not ENGINE_LOCK.acquire(timeout=5.0, holder=holder):
+    can tell same-campaign contention (queue behind it) from cross (409).
+
+    The section also takes the home's CROSS-PROCESS lock file (ticket 26):
+    ENGINE_LOCK excludes studio threads only, and the engine's standalone
+    CLIs (tick.py --live, effects.py --apply) touch the same world/ as
+    separate processes — a standalone run interleaving with a studio week
+    races state.yaml last-writer-wins and can leak a foreign chronicle
+    into the proposal's new_files diff. The engine processes launched
+    inside this section carry STUDIO_ENGINE_HOME_HELD so they do not
+    re-take the lock their parent holds (store.standalone_home_lock)."""
+    if not ENGINE_LOCK.acquire(timeout=ENGINE_LOCK_FIRST_WAIT_S, holder=holder):
+        deadline = engine_lock_deadline_s()
         log(f"waiting for the engine home — {why} is in flight; this run "
-            "starts when it finishes (the job log goes quiet meanwhile)")
+            f"starts when it finishes (the job log goes quiet meanwhile)")
         if not ENGINE_LOCK.acquire(timeout=deadline, holder=holder):
             raise RuntimeError(
-                f"the engine home stayed busy for over {deadline // 60} "
+                f"the engine home stayed busy for over {int(deadline // 60)} "
                 f"minutes — giving up without running anything")
+    home = None
     try:
+        home, held = spine.try_file_lock(engine_home_lock_path())
+        if held:
+            raise RuntimeError(
+                "the engine home is held by a process outside the studio (a "
+                "standalone tick.py --live or effects.py --apply run) — let "
+                "it finish, then submit again. Nothing was run or spent.")
         yield
     finally:
+        spine.release_file_lock(home)
         ENGINE_LOCK.release()
 
 
@@ -383,16 +436,28 @@ def copy_state_in(name: str) -> None:
 
 # ------------------------------------------------- interrupted-week flag
 
+# One module lock over the flag file's write and its compare-and-unlink
+# clear (ticket 26): both run under ENGINE_LOCK today, but the read->unlink
+# must stay atomic against a concurrent write even if another caller ever
+# slips between them — an unserialized clear could delete the OTHER run's
+# live flag (and with it, boot restore).
+_WEEK_FLAG_LOCK = threading.Lock()
+
 
 def write_week_flag(name: str) -> None:
-    """Mark a week run in flight (content: campaign name + ISO timestamp)."""
-    flag = week_flag_path()
-    flag.parent.mkdir(parents=True, exist_ok=True)
-    flag.write_text(json.dumps({
-        "campaign": name,
-        "started": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(timespec="seconds"),
-    }, indent=2), encoding="utf-8")
+    """Mark a week run in flight (content: campaign name + ISO timestamp).
+    Written by the engine job only once it HOLDS the engine home, so the
+    campaign named here is always the run that owns the home — a queued
+    job waiting its turn must not overwrite the running job's attribution
+    (boot restore would blame the wrong campaign)."""
+    with _WEEK_FLAG_LOCK:
+        flag = week_flag_path()
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text(json.dumps({
+            "campaign": name,
+            "started": datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds"),
+        }, indent=2), encoding="utf-8")
 
 
 def clear_week_flag(name: str | None = None) -> None:
@@ -400,26 +465,35 @@ def clear_week_flag(name: str | None = None) -> None:
     THIS campaign wrote: the flag is one shared file, and two queued engine
     jobs (a week behind a forecast) both write it — the first finisher must
     not delete the second's marker, or a crash during the second run skips
-    boot restore entirely."""
-    flag = week_flag_path()
-    if name is not None:
+    boot restore entirely. The compare-and-unlink runs under the same
+    module lock as write_week_flag, so the two can never interleave."""
+    with _WEEK_FLAG_LOCK:
+        flag = week_flag_path()
+        if name is not None:
+            try:
+                doc = json.loads(flag.read_text(encoding="utf-8"))
+                if not (isinstance(doc, dict)
+                        and doc.get("campaign") == name):
+                    return  # a later run's flag — leave it alone
+            except (OSError, ValueError):
+                pass  # unreadable/absent: the unlink below settles it
         try:
-            doc = json.loads(flag.read_text(encoding="utf-8"))
-            if not (isinstance(doc, dict) and doc.get("campaign") == name):
-                return  # a later run's flag — leave it alone
-        except (OSError, ValueError):
-            pass  # unreadable/absent: the unlink below settles it
-    try:
-        flag.unlink()
-    except FileNotFoundError:
-        pass
+            flag.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def restore_interrupted_week():
     """Boot-time repair (server.py lifespan): a left-behind week flag means
     the server died mid-week. Restore the engine home's state.yaml from its
     .bak (when one exists), delete the flag, and warn loudly. Returns
-    {"campaign","restored"} or None when no flag was left."""
+    {"campaign","restored"} or None when no flag was left.
+
+    The flag's campaign attribution is trustworthy (ticket 26): it is
+    written only while the engine lock is held, so the name in the flag is
+    always the campaign whose copy-in made the current .bak — restore
+    rolls the home back to exactly the state that campaign found."""
+    flag = week_flag_path()
     flag = week_flag_path()
     if not flag.is_file():
         return None
@@ -519,8 +593,11 @@ def run_week_proposal(name: str, d: Path, log) -> dict:
         log("state copied into engine home (previous engine state kept as "
             "state.yaml.bak)")
         log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
+        # STUDIO_ENGINE_HOME_HELD: this parent holds the home's cross-process
+        # lock for the whole section; the child re-taking it would deadlock
         rc, lines = run_py(AGENTIC_SIMULATOR, "src/tick.py",
-                           "--live", timeout=WEEK_TIMEOUT, on_line=log)
+                           "--live", timeout=WEEK_TIMEOUT, on_line=log,
+                           env={STUDIO_ENGINE_HOME_HELD: "1"})
         if rc != 0:
             for ln in lines[-10:]:  # make sure the tail shows the failure
                 log(ln)
@@ -649,7 +726,8 @@ def run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
                 f"(tick {i}/{n_weeks} on scratch data)")
             rc, lines = run_py(AGENTIC_SIMULATOR,
                                "src/tick.py", "--live",
-                               timeout=WEEK_TIMEOUT, on_line=log)
+                               timeout=WEEK_TIMEOUT, on_line=log,
+                               env={STUDIO_ENGINE_HOME_HELD: "1"})
             if rc != 0:
                 for ln in lines[-10:]:
                     log(ln)

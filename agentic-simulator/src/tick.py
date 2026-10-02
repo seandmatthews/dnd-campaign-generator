@@ -18,6 +18,11 @@ Stages in --live (one sentence each):
   consistency — a proposal may only assert facts its faction has a path to know
                 (advisory warnings, printed, never auto-rejected)
 
+--live refuses (exit 4) while another process holds the shared engine home
+(world/.engine-home.lock — a studio week/forecast job, or another
+standalone run): two writers interleave state.yaml last-writer-wins and
+corrupt each other's chronicles. Wait for the holder, then rerun.
+
 Mechanical consequence rules (one sentence each, applied by code):
   - contested loss, or margin <= -5: the faction's strongest committed
     resource steps down one grade (high->medium->low->none)
@@ -62,8 +67,9 @@ import rumors
 import scheduler
 import consistency
 import resolve
-from store import RESOURCE_LEVELS, STATE_FILE, load_state, save_state, \
-    validate_state, places_of
+from store import (RESOURCE_LEVELS, STATE_FILE, HomeLockBusy, load_state,
+                   save_state, standalone_home_lock, validate_state,
+                   places_of)
 from why import why_cli
 from views import faction_view
 
@@ -562,6 +568,40 @@ def main(argv=None):
         ok, message = replay_verify(argv[i + 1])
         print(message)
         return 0 if ok else 1
+    if "--live" in argv:
+        # The home gate comes BEFORE the state load (ticket 26): a refused
+        # run must say the shared home is held by another process, not
+        # complain about whatever scratch state.yaml the holder may be
+        # mid-way through swapping in. Studio-launched children carry
+        # STUDIO_ENGINE_HOME_HELD and skip the claim (the parent holds it).
+        try:
+            with standalone_home_lock():
+                try:
+                    state = load_state()
+                except OSError as e:
+                    print(f"error: world/state.yaml cannot be read: {e}",
+                          file=sys.stderr)
+                    return 2
+                except yaml.YAMLError as e:
+                    # a corrupt state file (a hand edit, a bad merge) must
+                    # not surface as a raw traceback — and certainly not
+                    # after a spend
+                    print(f"error: world/state.yaml does not parse as "
+                          f"YAML: {e}", file=sys.stderr)
+                    return 2
+                if not isinstance(state, dict):
+                    print("error: world/state.yaml is empty or not a mapping",
+                          file=sys.stderr)
+                    return 2
+                try:
+                    run_live(state)
+                except WeekAborted as e:
+                    print(f"WEEK ABORTED: {e}")
+                    return 3
+        except HomeLockBusy as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 4
+        return 0
     try:
         state = load_state()
     except OSError as e:
@@ -577,13 +617,6 @@ def main(argv=None):
         print("error: world/state.yaml is empty or not a mapping",
               file=sys.stderr)
         return 2
-    if "--live" in argv:
-        try:
-            run_live(state)
-        except WeekAborted as e:
-            print(f"WEEK ABORTED: {e}")
-            return 3
-        return 0
     if "--why" in argv:
         i = argv.index("--why")
         if i + 2 >= len(argv):
