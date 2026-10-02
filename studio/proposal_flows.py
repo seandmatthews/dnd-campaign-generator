@@ -19,6 +19,8 @@ import re
 from pathlib import Path
 
 import canon
+import job_history
+import jobs
 import links
 import proposals
 import publication
@@ -403,7 +405,12 @@ def _lock(name: str, action: str):
             with spine.lock_nowait(name, action):
                 yield
         except spine.CampaignBusy as e:
-            raise ProposalFlowError(409, str(e)) from e
+            # ticket 13: the accept/discard 409s carry the same
+            # what-is-running / how-long line every other busy-409 has
+            # (from the rolling history) — not just the static guess
+            line = job_history.blocked_by_line(
+                jobs.running_jobs(campaign=name))
+            raise ProposalFlowError(409, str(e) + line) from e
     return cm()
 
 

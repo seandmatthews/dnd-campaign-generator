@@ -184,12 +184,14 @@ class _CampaignQueue:
         return None
 
     def cancel(self, job: dict) -> bool:
-        """Cancel a still-pending job: flag it (the drainer honors the flag
-        between lock-wait attempts) and flip the record to cancelled. The
-        deque entry itself is removed unless it is the head — the drainer
-        may be mid wait-for-lock on the head and owns its finalization.
-        False when the job already started or was already cancelled (there
-        is nothing left to dequeue)."""
+        """Flag a still-pending job for cancellation and dequeue it unless
+        it is the head — the drainer may be mid wait-for-lock on the head
+        and owns its finalization. Only QUEUE state is touched here (under
+        the queue's own lock); the job-record flip is jobs.cancel's, under
+        the global _LOCK — taking _LOCK inside q.mu would invert the one
+        lock order the module keeps (_LOCK -> q.mu via position_of inside
+        _public, never the reverse). False when the job already started
+        or was already cancelled (there is nothing left to dequeue)."""
         with self.mu:
             for i, entry in enumerate(self.pending):
                 if entry["job"] is job:
@@ -198,8 +200,6 @@ class _CampaignQueue:
                     entry["cancelled"] = True
                     if i > 0:
                         del self.pending[i]
-                    job["status"] = "cancelled"
-                    job["_log_all"] = None
                     return True
         return False
 
@@ -312,13 +312,18 @@ def submit_queued(campaign: str, kind: str, fn, before_run=None) -> tuple[str, i
 def cancel(job_id: str) -> str:
     """Cancel a queued job (dequeue + status cancelled). Returns
     "cancelled", "not_queued" (already running/finished — or a job that
-    never sat in a queue), or "unknown" for a dead id."""
+    never sat in a queue), or "unknown" for a dead id. The record flip
+    happens under _LOCK like every other job-record mutation (the queue's
+    cancel only touches queue state — see _CampaignQueue.cancel)."""
     with _LOCK:
         job = _JOBS.get(job_id)
     if job is None:
         return "unknown"
     q = job.get("_queue")
     if q is not None and q.cancel(job):
+        with _LOCK:
+            job["status"] = "cancelled"
+            job["_log_all"] = None
         _log.info("job %s (%s) cancelled while queued", job_id, job["kind"])
         return "cancelled"
     return "not_queued"

@@ -136,21 +136,10 @@ def blocking_findings(findings) -> list:
             if isinstance(f, dict) and str(f.get("level") or "") == "error"]
 
 
-def blocked_by_line(running: list) -> str:
-    """"Blocked by: <what is running> — <how long it usually takes>", from
-    the running job's kind and ITS campaign's rolling history. The first
-    running job is the story; the rest are noise in a one-lock world. Empty
-    when nothing in the registry matches (the holder is an external CLI —
-    the honest message is then the plain busy one, not a guess)."""
-    if not running:
-        return ""
-    first = running[0]
-    est = None
-    try:
-        est = job_history.estimate(first.get("campaign") or "", first["kind"])
-    except Exception:  # noqa: BLE001 — the estimate is decoration
-        est = None
-    return " " + job_history.blocked_line(first["kind"], est)
+# shared from job_history (ticket 13) so busy_409, the engine-home 409s,
+# and proposal_flows._lock have ONE implementation; kept importable from
+# routers.common because the routers import it from here
+blocked_by_line = job_history.blocked_by_line
 
 
 def submit_campaign_job(kind: str, name: str, job):

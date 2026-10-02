@@ -172,3 +172,25 @@ def blocked_line(kind: str, est: dict | None) -> str:
                 "log is the source of truth)")
     return (f"Blocked by: {kind_label(kind)} — no duration history yet "
             "(the first runs set the estimate; watch the job log)")
+
+
+def blocked_by_line(running: list) -> str:
+    """"Blocked by: <what is running> — <how long it usually takes>", from
+    the running job's kind and ITS campaign's rolling history. Lives here
+    (a service) rather than routers/common so every busy-409 author —
+    routers/common.busy_409, the engine-home 409s, and
+    proposal_flows._lock — shares ONE implementation (ticket 13; the
+    proposal accept/discard 409s used to carry only the static guess).
+    The first running job is the story; the rest are noise in a one-lock
+    world. Empty when nothing in the registry matches (the holder is an
+    external CLI — the honest message is then the plain busy one, not a
+    guess)."""
+    if not running:
+        return ""
+    first = running[0]
+    est = None
+    try:
+        est = estimate(first.get("campaign") or "", first["kind"])
+    except Exception:  # noqa: BLE001 — the estimate is decoration
+        est = None
+    return " " + blocked_line(first["kind"], est)

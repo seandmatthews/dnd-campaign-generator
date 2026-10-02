@@ -319,3 +319,154 @@ def teardown_module(module):
     # tests: cancel queued jobs, then let the hardening-style release pass
     jobs.cancel_queued()
     jobs.wait_all(timeout=15.0)
+
+
+# ------------------------------------------------------ ticket 13: honesty
+
+
+def test_locked_and_position_see_an_external_process_holder(tmp_spine_root):
+    """locked() probes the FILE lock, not just the threading lock: a CLI
+    process mid-write must make submit_campaign_job answer queued:true
+    (position 1) instead of 'running now' — and locked() say held."""
+    import pathlib
+    import subprocess
+    import sys
+    import tempfile
+    root = pathlib.Path(tempfile.mkdtemp(prefix="lock-ext-"))
+    holder = root / "holder.py"
+    holder.write_text(
+        "import sys, time, pathlib\n"
+        f"sys.path.insert(0, r'{spine.STUDIO_DIR}')\n"
+        "import spine\n"
+        f"spine.CAMPAIGNS_ROOT = pathlib.Path(r'{root}')\n"
+        "lk = spine.campaign_lock('exthold')\n"
+        "assert lk.acquire(timeout=5)\n"
+        "print('held', flush=True)\n"
+        "time.sleep(6)\n")
+    p = subprocess.Popen([sys.executable, str(holder)],
+                         stdout=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline().strip() == "held"
+        saved = spine.CAMPAIGNS_ROOT
+        spine.CAMPAIGNS_ROOT = root
+        try:
+            lock = spine.campaign_lock("exthold")
+            assert lock.locked() is True, \
+                "an external (CLI) holder must read as locked"
+        finally:
+            spine.CAMPAIGNS_ROOT = saved
+    finally:
+        p.kill()
+        p.wait()
+
+
+def test_submit_position_is_honest_behind_external_holder(
+        tmp_spine_root, client, monkeypatch):
+    """The 202 for the only studio-side job, queued behind a CLI holding
+    the campaign's file lock, says queued (position 1) — not 'running
+    now'."""
+    import pathlib
+    import subprocess
+    import sys
+    import tempfile
+
+    def instant(campaign_dir, focus, log=None):
+        return {"entries": 0, "findings": []}
+
+    # the queued job must run the mocked generator the moment the holder
+    # dies — never a real loregen pass in a test
+    monkeypatch.setattr("routers.lore.loregen.generate_entries", instant)
+    saved = spine.CAMPAIGNS_ROOT
+    root = pathlib.Path(tempfile.mkdtemp(prefix="lock-202-"))
+    holder = root / "holder.py"
+    holder.write_text(
+        f"import sys, time, pathlib\n"
+        f"sys.path.insert(0, r'{spine.STUDIO_DIR}')\n"
+        "import spine\n"
+        f"spine.CAMPAIGNS_ROOT = pathlib.Path(r'{root}')\n"
+        "lk = spine.campaign_lock('testvale')\n"
+        "assert lk.acquire(timeout=5)\n"
+        "print('held', flush=True)\n"
+        "time.sleep(30)\n")
+    p = subprocess.Popen([sys.executable, str(holder)],
+                         stdout=subprocess.PIPE, text=True)
+    job_id = None
+    try:
+        assert p.stdout.readline().strip() == "held"
+        spine.CAMPAIGNS_ROOT = root
+        (root / "testvale").mkdir(parents=True, exist_ok=True)
+        # the submit only needs the campaign to exist far enough to build
+        # the lock; give the endpoint a real campaign dir to accept
+        (root / "testvale" / "campaign.yaml").write_text(
+            "name: testvale\ntitle: testvale\n", encoding="utf-8")
+        (root / "testvale" / "world").mkdir(exist_ok=True)
+        (root / "testvale" / "world" / "geography.yaml").write_text(
+            "nations: []\n", encoding="utf-8")
+        r = client.post("/api/campaign/testvale/lore/entries", json={})
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["queued"] is True and body["queue_position"] == 1, body
+        job_id = body["job_id"]
+        job = client.get(f"/api/jobs/{job_id}").json()
+        assert job["status"] == "queued"
+    finally:
+        spine.CAMPAIGNS_ROOT = saved
+        p.kill()
+        p.wait()
+    if job_id:
+        wait_for_job(client, job_id, timeout=15.0)
+
+
+def test_lock_file_unusable_degrades_to_process_local(
+        tmp_spine_root, monkeypatch):
+    """An OSError ANYWHERE in the file-lock path (bootstrap or open)
+    degrades loudly to process-local locking — never a raw 500, and the
+    threading lock still excludes."""
+    import pathlib
+    blocker = tmp_spine_root / "iamafile"
+    blocker.write_text("x", encoding="utf-8")
+
+    def unusable_root():
+        return pathlib.Path(str(blocker) + "/locks")  # under a FILE:
+        # mkdir raises OSError
+
+    monkeypatch.setattr(spine, "_locks_root", unusable_root)
+    lock = spine.campaign_lock("degradevale")
+    assert lock.acquire(blocking=False) is True
+    try:
+        assert lock._no_file_lock is True, "the degrade must have fired"
+        second = lock.acquire(blocking=False)
+        assert second is False, "process-local exclusion must hold"
+    finally:
+        lock.release()
+
+
+def test_proposal_flow_409_carries_the_wait_line(tmp_spine_root):
+    """proposal_flows._lock's 409 (accept/discard racing a running job)
+    carries the same Blocked-by line every other busy-409 has (ticket 13
+    — it used to be the static guess only)."""
+    import proposal_flows
+    (tmp_spine_root / "testvale").mkdir(parents=True, exist_ok=True)
+    release = threading.Event()
+
+    def slow(log):
+        release.wait(timeout=10)
+
+    jobs.submit("sim-week", slow, campaign="testvale")
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if jobs.running_jobs(campaign="testvale"):
+            break
+        time.sleep(0.02)
+    try:
+        with spine.campaign_lock("testvale"):
+            try:
+                with proposal_flows._lock("testvale",
+                                          "accepting the proposal"):
+                    raise AssertionError("the lock must have fast-failed")
+            except proposal_flows.ProposalFlowError as e:
+                assert "Blocked by: a week run" in e.detail, e.detail
+                assert "no duration history yet" in e.detail, e.detail
+    finally:
+        release.set()
+    assert jobs.wait_all(timeout=15.0)

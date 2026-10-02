@@ -95,6 +95,10 @@ response and the UI banner say **what is running and how long it takes**:
   `status: "queued", position: N` for exactly the jobs that have not had
   their turn, and cancellation works during the wait. The lock discipline
   itself is unchanged (held for the job's whole run).
+  (Ticket 13 correction: `locked()` originally probed only the in-process
+  threading lock, so a CLI process holding the file lock reported
+  `queued: false` — the "position 1 behind a CLI" claim below was
+  aspirational until ticket 13 made `locked()` probe the file lock too.)
 - Not queueable by design: a second campaign's week contending for the
   shared engine home (the `ENGINE_LOCK` 409s keep their fast-fail), and
   the short interactive writers (`busy_409`) — both now carry the

@@ -138,6 +138,12 @@ class CampaignLock:
         if _FILE_LOCK == "none" or self._no_file_lock:
             return True
         lock_path = self._lock_file()
+        # ONE open, inside the degrade handler (ticket 13): a transient
+        # OSError on ANY open — the bootstrap, or a Windows sharing
+        # violation on the lock file itself — degrades loudly to
+        # process-local locking instead of escaping as a 500. The handle
+        # is held for the lock's lifetime (retries lock and unlock THE
+        # SAME handle; reopening per attempt only churned handles).
         try:
             lock_path.parent.mkdir(parents=True, exist_ok=True)
             gitignore = lock_path.parent / ".gitignore"
@@ -155,8 +161,6 @@ class CampaignLock:
                          "back to process-local locking only", lock_path, e)
             return True
         while True:
-            fh = open(lock_path, "a+b")  # noqa: SIM115 — closed below on
-            # contention, or held for the lock's lifetime on success
             try:
                 if _FILE_LOCK == "windows":
                     fh.seek(0)
@@ -166,22 +170,49 @@ class CampaignLock:
                 self._fh = fh
                 return True
             except OSError:
-                fh.close()
                 if not blocking or (deadline is not None
                                     and time.monotonic() >= deadline):
+                    fh.close()
                     return False
                 time.sleep(0.05)
 
     def locked(self) -> bool:
-        """Whether the in-process lock is held RIGHT NOW (best-effort,
-        unlocked-on-failure probe). The queue uses it at submit time to
-        answer "will this job start immediately?" honestly — the holder
-        may be a CLI process about to release, so the answer is a probe
-        reading, not a promise."""
+        """Whether the campaign lock is held RIGHT NOW — by this process
+        OR an external one (a CLI mid-write). The queue asks at submit
+        time to answer "will this job start immediately?" honestly
+        (routers/common.submit_campaign_job); the file-lock probe makes
+        that answer true across processes too (ticket 13 — an in-process
+        -only probe reported 'not queued' while a CLI held the file
+        lock). Still a probe reading, not a promise: the holder may be a
+        CLI about to release, and a degraded (no file lock) CampaignLock
+        can only see its own process."""
         if self._local.acquire(False):
             self._local.release()
+        else:
+            return True
+        if _FILE_LOCK == "none" or self._no_file_lock:
             return False
-        return True
+        lock_path = self._lock_file()
+        try:
+            fh = open(lock_path, "a+b")  # noqa: SIM115 — probe: closed
+            # within this function
+        except OSError:
+            return False  # unreadable lock area: an honest "unknown" is
+            # not available; the in-process answer is all we have
+        try:
+            if _FILE_LOCK == "windows":
+                fh.seek(0)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+            else:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+            return False
+        except OSError:
+            return True  # contended: someone (this process raced, or an
+            # external one) holds it — "held" is the honest answer
+        finally:
+            fh.close()
 
     def release(self) -> None:
         try:
@@ -211,11 +242,15 @@ def campaign_lock(name: str) -> CampaignLock:
 
     A CampaignLock IS a context manager, so `with spine.campaign_lock(n):`
     is the blocking form — used by review approve/delete (short file
-    rewrites; they wait for a running job to finish) and the CLIs. Long jobs
-    acquire at submit time with `acquire(blocking=False)` and release in the
-    job's finally (routers/common.submit_campaign_job), answering 409 while
-    held. The lock is honored across processes (server vs CLI) through the
-    lock file; NEVER nest acquisitions of the same campaign's lock."""
+    rewrites; they wait for a running job to finish) and the CLIs. Long
+    campaign jobs QUEUE (routers/common.submit_campaign_job): the queue's
+    before_run hook takes the lock via jobs.take_turn while the job
+    record is still 'queued' (position visible, cancellable) and holds it
+    for the job's whole run — so a long job never 409s at submit any
+    more; the fast 409s belong to the short interactive writers
+    (campaign_lock_nowait / spine.lock_nowait). The lock is honored
+    across processes (server vs CLI) through the lock file; NEVER nest
+    acquisitions of the same campaign's lock."""
     with _CAMPAIGN_LOCKS_GUARD:
         return _CAMPAIGN_LOCKS.setdefault(name, CampaignLock(name))
 
