@@ -73,14 +73,14 @@ configuration block (base URL, `LLM_MODEL=<flash model id>`), so the
 
 ## Acceptance criteria
 
-- [ ] `POST .../simulation/design` returns a validated, form-shaped design
+- [x] `POST .../simulation/design` returns a validated, form-shaped design
       from one metered LLM pass; invalid model output is re-asked once,
       then 502s with the validator's words.
-- [ ] The create form can be fully prefilled from the response, edited
+- [x] The create form can be fully prefilled from the response, edited
       freely, and created through the unchanged free path.
-- [ ] Nothing touches `simulation/state.yaml` until Create is clicked.
-- [ ] Secrets appear only as proposed DM-only knowledge drafts.
-- [ ] Refuses with 422 when there is no world and no places (fed-or-refused).
-- [ ] `llm.env.example` documents a GLM/Flash configuration.
-- [ ] CLI equivalent exists; tests cover validation mapping and the
+- [x] Nothing touches `simulation/state.yaml` until Create is clicked.
+- [x] Secrets appear only as proposed DM-only knowledge drafts.
+- [x] Refuses with 422 when there is no world and no places (fed-or-refused).
+- [x] `llm.env.example` documents a GLM/Flash configuration.
+- [x] CLI equivalent exists; tests cover validation mapping and the
       no-LLM form path (generator mocked).

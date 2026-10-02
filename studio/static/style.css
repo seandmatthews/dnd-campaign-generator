@@ -1513,3 +1513,11 @@ li.backlink-item[style] { cursor: pointer; }
 .ssn-item:last-child { border-bottom: none; }
 .ssn-new { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .ssn-new-notes-field textarea { font: inherit; }
+
+/* premise-to-sandbox design: copyable hints + secret drafts */
+.design-hint {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 7px 0; border-bottom: 1px dotted var(--line);
+}
+.design-hint:last-child { border-bottom: none; }
+.design-hint .design-copy { margin-left: auto; flex: none; }
