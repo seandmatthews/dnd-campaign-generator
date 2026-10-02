@@ -325,6 +325,10 @@
               '<input type="text" class="input focus-input" placeholder="e.g. the salt tax riots of the Docks"></label>' +
             '<button type="submit" class="btn btn-primary">Generate</button>' +
           '</form>' +
+          '<label class="field auto-accept-field">' +
+            '<input type="checkbox" class="input entries-auto-accept">' +
+            '<span><strong>Auto-accept</strong> — approve the staged entries into the timeline the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
+          '</label>' +
           '<pre class="log-tail hidden"></pre>' +
           '<div class="form-error"></div>' +
           '<div class="gen-result hidden"></div>' +
@@ -337,6 +341,7 @@
     const logBox = card.querySelector('.log-tail');
     const errBox = card.querySelector('.form-error');
     const resultBox = card.querySelector('.gen-result');
+    const autoChk = card.querySelector('.entries-auto-accept');
 
     // show a remembered failure from before a tab switch (see above)
     if (backstoryFailure && backstoryFailure.campaign === S.state.campaign) {
@@ -346,17 +351,21 @@
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
       if (btn.disabled) return;
+      const auto = autoChk && autoChk.checked;
       const ok = await S.confirmRun(
         'Generate pending backstory entries with the LLM? This spends API ' +
         'credits and runs a few minutes; the entries land in Review — ' +
-        'nothing is applied directly.'
+        'nothing is applied directly.' +
+        (auto ? ' AUTO-ACCEPT is on: the entries are approved into the timeline as soon as they stage.' : '')
       );
       if (!ok) return;
       resultBox.classList.add('hidden');
       const log = S.makeLogBox(logBox);
       S.runJob({
         path: S.campUrl('/lore/entries'),
-        body: input.value.trim() ? { focus: input.value.trim() } : {},
+        body: Object.assign(
+          input.value.trim() ? { focus: input.value.trim() } : {},
+          { auto_accept: !!auto }),
         btn: btn, errBox: errBox, log: log,
         failLabel: 'Generation failed'
       }).then((result) => {
@@ -365,17 +374,35 @@
         const count = (r.entries != null) ? r.entries : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
         resultBox.innerHTML = '';
-        resultBox.appendChild(S.el(
-          '<div class="success-panel"><strong>' + S.esc(String(count)) + '</strong> entr' +
-          (String(count) === '1' ? 'y' : 'ies') + ' staged to Review — ' +
-          S.esc(String(findings)) + ' verification finding' + (findings === 1 ? '' : 's') + ' attached.' +
-          '</div>'
-        ));
+        if (r.auto_accept === 'approved') {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) + '</strong> entr' +
+            (String(count) === '1' ? 'y' : 'ies') + ' generated and AUTO-ACCEPTED into the timeline' +
+            ' — ' + S.esc(String(findings)) + ' verification finding' + (findings === 1 ? '' : 's') + ' attached (see the record).' +
+            '</div>'
+          ));
+          S.toast('Backstory generated and auto-accepted', 'ok');
+        } else if (r.auto_accept === 'blocked' || r.auto_accept === 'error') {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) + '</strong> entr' +
+            (String(count) === '1' ? 'y' : 'ies') + ' staged to Review — auto-accept ' +
+            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by error-level findings' : 'failed')) +
+            ', so they wait for your decision.</div>'
+          ));
+          S.toast('Auto-accept skipped — the entries wait in Review', 'info');
+        } else {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) + '</strong> entr' +
+            (String(count) === '1' ? 'y' : 'ies') + ' staged to Review — ' +
+            S.esc(String(findings)) + ' verification finding' + (findings === 1 ? '' : 's') + ' attached.' +
+            '</div>'
+          ));
+          S.toast('Backstory staged to Review', 'ok');
+        }
         const go = S.el('<button type="button" class="btn">Go to Review</button>');
         go.addEventListener('click', () => S.showTab('review'));
         resultBox.appendChild(go);
         resultBox.classList.remove('hidden');
-        S.toast('Backstory staged to Review', 'ok');
       }).catch((err) => {
         backstoryFailure = { campaign: S.state.campaign, error: err };
       });
@@ -512,6 +539,10 @@
                 'aria-label="Maximum pages to generate this run"></label>' +
             '<button type="button" class="btn btn-primary missing-write" disabled>Write the missing pages</button>' +
           '</div>' +
+          '<label class="field auto-accept-field">' +
+            '<input type="checkbox" class="input pages-auto-accept">' +
+            '<span><strong>Auto-accept</strong> — approve the staged page drafts the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
+          '</label>' +
           '<pre class="log-tail hidden"></pre>' +
           '<div class="form-error"></div>' +
           '<div class="gen-result hidden"></div>' +
@@ -524,6 +555,7 @@
     const logBox = card.querySelector('.log-tail');
     const errBox = card.querySelector('.form-error');
     const resultBox = card.querySelector('.gen-result');
+    const autoChk = card.querySelector('.pages-auto-accept');
     let targets = [];
 
     S.api(S.campUrl('/lore/pages/missing')).then((resp) => {
@@ -554,17 +586,20 @@
       // full LLM call ceiling in one go
       const n = Math.max(1, parseInt(limitInput.value, 10) || 1);
       const capped = Math.min(targets.length, n);
+      const auto = autoChk && autoChk.checked;
       const ok = await S.confirmRun(
         'Generate draft pages for up to ' + capped + ' dangling link' +
         (capped === 1 ? '' : 's') + ' with the LLM? This spends API ' +
-        'credits; the drafts land in Review — nothing is applied directly.'
+        'credits; the drafts land in Review — nothing is applied directly.' +
+        (auto ? ' AUTO-ACCEPT is on: the drafts are approved as pages as soon as they stage.' : '')
       );
       if (!ok) return;
       resultBox.classList.add('hidden');
       const log = S.makeLogBox(logBox);
       S.runJob({
         path: S.campUrl('/lore/pages/missing'),
-        body: { targets: targets.map((t) => t.target), limit: n },
+        body: { targets: targets.map((t) => t.target), limit: n,
+                auto_accept: !!auto },
         btn: btn, errBox: errBox, log: log,
         failLabel: 'Generation failed'
       }).then((result) => {
@@ -572,17 +607,37 @@
         const count = (r.pages != null) ? r.pages : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
         resultBox.innerHTML = '';
-        resultBox.appendChild(S.el(
-          '<div class="success-panel"><strong>' + S.esc(String(count)) +
-          '</strong> page draft' + (String(count) === '1' ? '' : 's') +
-          ' staged to Review — ' + S.esc(String(findings)) +
-          ' verification finding' + (findings === 1 ? '' : 's') + ' attached.</div>'
-        ));
+        if (r.auto_accept === 'approved') {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) +
+            '</strong> page draft' + (String(count) === '1' ? '' : 's') +
+            ' generated and AUTO-ACCEPTED as page' + (String(count) === '1' ? '' : 's') +
+            ' — ' + S.esc(String(findings)) +
+            ' verification finding' + (findings === 1 ? '' : 's') + ' attached (see the record).</div>'
+          ));
+          S.toast('Page drafts generated and auto-accepted', 'ok');
+        } else if (r.auto_accept === 'blocked' || r.auto_accept === 'error') {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) +
+            '</strong> page draft' + (String(count) === '1' ? '' : 's') +
+            ' staged to Review — auto-accept ' +
+            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by error-level findings' : 'failed')) +
+            ', so they wait for your decision.</div>'
+          ));
+          S.toast('Auto-accept skipped — the drafts wait in Review', 'info');
+        } else {
+          resultBox.appendChild(S.el(
+            '<div class="success-panel"><strong>' + S.esc(String(count)) +
+            '</strong> page draft' + (String(count) === '1' ? '' : 's') +
+            ' staged to Review — ' + S.esc(String(findings)) +
+            ' verification finding' + (findings === 1 ? '' : 's') + ' attached.</div>'
+          ));
+          S.toast('Page drafts staged to Review', 'ok');
+        }
         const go = S.el('<button type="button" class="btn">Go to Review</button>');
         go.addEventListener('click', () => S.showTab('review'));
         resultBox.appendChild(go);
         resultBox.classList.remove('hidden');
-        S.toast('Page drafts staged to Review', 'ok');
       }).catch(() => {});
     });
     host.appendChild(card);

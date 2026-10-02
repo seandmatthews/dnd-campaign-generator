@@ -248,6 +248,32 @@ traversal), every file is hash-verified against the manifest BEFORE
 anything is written, and the restored campaign is opened with the app's
 own loaders so a restore that cannot load fails loudly.
 
+## The job queue — set the evening up and walk away
+
+A campaign has ONE FIFO job queue: a second mutation submitted while a week
+runs answers 202 with a queue position and runs when its turn comes — no
+more waiting to re-click. The confirm gates do not move (the spend is
+approved at submit time, so a queued week needs no DM decision later);
+queued jobs show their position in the UI, with a Cancel button, and the
+strip under the header shows what is running and what is queued. Short
+interactive writers (approvals, fact writes) still fast-fail under
+contention instead of pinning your browser to a week run — but the 409 now
+says what is running and how long it usually takes, from a small rolling
+duration history kept per campaign (`.studio-jobs/history.json`,
+git-ignored; weeks and forecasts scale by roster size). It is labeled an
+estimate; the job log remains the truth.
+
+Chains that would otherwise dead-end on a decision can opt into
+**auto-accept**: backstory and missing-page generations, and the goal
+review, then approve their own staged bundle through the same Review path
+(same transactions, receipts, snapshots — the publication record says
+`auto: true`, and error-level verification findings still leave the bundle
+pending for a human). The week's auto-accept exists only behind a loud
+checkbox, default off — publish the week without reading it first is a
+deliberate act, and reading the chronicle is the point of the feature.
+Session effects and project changes are never auto-accepted: they encode
+DM rulings, not generation.
+
 ## The engines
 
 The studio invokes three sibling projects as headless CLIs and never

@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 import doctor
 import engines
+import job_history
 import jobs
 from routers.common import require_campaign
 
@@ -59,6 +60,42 @@ def job_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
     return job
+
+
+@router.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    """Cancel a QUEUED job (ticket 02): dequeue it, mark it cancelled. A
+    job that already started (or finished) cannot be cancelled — 409, the
+    campaign's worker is already running it."""
+    outcome = jobs.cancel(job_id)
+    if outcome == "unknown":
+        raise HTTPException(status_code=404, detail=f"unknown job: {job_id}")
+    if outcome == "not_queued":
+        raise HTTPException(
+            status_code=409,
+            detail=f"job {job_id} is not queued — it is already running or "
+                   "finished, so there is nothing to dequeue")
+    return jobs.get(job_id)
+
+
+@router.get("/api/campaign/{name}/jobs")
+def campaign_jobs(name: str):
+    """The campaign's job queue (ticket 02): what is running, what is
+    queued behind it (with positions), and — when history exists — the
+    running job's honest wait estimate, the same one busy 409s carry.
+    Read-only — the UI's queue strip and the cancel buttons poll this."""
+    require_campaign(name)
+    snap = jobs.queue_snapshot(name)
+    running = snap.get("running")
+    if running:
+        try:
+            snap["running_estimate"] = job_history.estimate(
+                name, running["kind"])
+        except Exception:  # noqa: BLE001 — the estimate is decoration
+            snap["running_estimate"] = None
+    else:
+        snap["running_estimate"] = None
+    return snap
 
 
 # ------------------------------------------------------------------- search

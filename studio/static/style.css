@@ -1483,6 +1483,26 @@ li.quest-row.quest-overdue .quest-name { color: var(--oxblood-dark); }
   padding: 10px 14px; margin-bottom: 14px;
 }
 
+/* job queue (ticket 02): the strip under the header + the per-form banner */
+.queue-strip {
+  border-bottom: 2px solid var(--line-strong);
+  background: var(--paper-dim);
+}
+
+.queue-strip-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.4rem 1rem;
+  line-height: 1.4;
+}
+
+.queue-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  border: 1px solid var(--line-strong); border-left: 4px solid var(--amber);
+  background: var(--paper-bright); border-radius: var(--radius-sm);
+  padding: 8px 12px; margin-bottom: 8px;
+}
+
 /* ---------------- Places tab (place-centered campaign view) ---------------- */
 
 .linklike {

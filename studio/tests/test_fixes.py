@@ -27,17 +27,24 @@ import spine
 
 def test_lore_entries_takes_the_campaign_lock(tmp_spine_root, client, monkeypatch):
     """lore-entries stages canon (pending-entries-N.yaml): it must go through
-    submit_campaign_job like every other mutating job — a second mutating job
-    while it runs answers 409 instead of racing the pending path."""
+    submit_campaign_job like every other mutating job — a second mutating
+    job QUEUES behind it (202 + position, ticket 02) instead of racing the
+    pending path, and runs only after the first releases the lock."""
     camp = tmp_spine_root / "testvale"
     (camp / "world" / "geography.yaml").write_text("nations: []\n", encoding="utf-8")
 
     release = threading.Event()
     entered = threading.Event()
+    order = []
 
     def fake_generate(campaign_dir, focus, log=None):
         entered.set()
-        release.wait(timeout=5)
+        order.append(1)
+        release.wait(timeout=10)
+        return {"entries": 0, "findings": []}
+
+    def fake_generate_2(campaign_dir, focus, log=None):
+        order.append(2)
         return {"entries": 0, "findings": []}
 
     monkeypatch.setattr("routers.lore.loregen.generate_entries", fake_generate)
@@ -46,17 +53,27 @@ def test_lore_entries_takes_the_campaign_lock(tmp_spine_root, client, monkeypatc
     first = r.json()["job_id"]
 
     assert entered.wait(timeout=5), "lore job never started"
+    monkeypatch.setattr("routers.lore.loregen.generate_entries",
+                        fake_generate_2)
     r2 = client.post("/api/campaign/testvale/lore/entries", json={})
-    assert r2.status_code == 409, "second lore-entries must 409 while the first runs"
+    assert r2.status_code == 202, "the second lore-entries queues, not 409"
+    assert r2.json()["queued"] is True and r2.json()["queue_position"] >= 1
+    second = r2.json()["job_id"]
+    job2 = client.get(f"/api/jobs/{second}").json()
+    assert job2["status"] == "queued", "the second job waits its turn"
 
     release.set()
-    job = wait_for_job(client, first)
+    job = wait_for_job(client, first, timeout=15.0)
     assert job["status"] == "done", job
+    job2 = wait_for_job(client, second, timeout=15.0)
+    assert job2["status"] == "done", job2
+    assert order == [1, 2], "the queue drains in submission order"
 
 
 def test_world_map_takes_the_campaign_lock(tmp_spine_root, client, monkeypatch):
     """world-map writes world/map.svg, which force world-gen also replaces:
-    same lock, or the two jobs race the same file."""
+    same lock, or the two jobs race the same file. The second submit now
+    queues behind it (202 + position) instead of 409ing (ticket 02)."""
     camp = tmp_spine_root / "testvale"
     (camp / "world" / "source.json").write_text("{}", encoding="utf-8")
     release = threading.Event()
@@ -64,7 +81,7 @@ def test_world_map_takes_the_campaign_lock(tmp_spine_root, client, monkeypatch):
 
     def fake_render(source, out):
         entered.set()
-        release.wait(timeout=5)
+        release.wait(timeout=10)
         return {"mode": "skeleton"}
 
     monkeypatch.setattr("routers.maps.worldmap.render_world_map", fake_render)
@@ -72,9 +89,11 @@ def test_world_map_takes_the_campaign_lock(tmp_spine_root, client, monkeypatch):
     assert r.status_code == 202, r.text
     assert entered.wait(timeout=5)
     r2 = client.post("/api/campaign/testvale/maps/world-map")
-    assert r2.status_code == 409, "second world-map must 409 while the first runs"
+    assert r2.status_code == 202, "the second world-map queues, not 409"
+    assert r2.json()["queued"] is True
     release.set()
-    wait_for_job(client, r.json()["job_id"])
+    wait_for_job(client, r.json()["job_id"], timeout=15.0)
+    wait_for_job(client, r2.json()["job_id"], timeout=15.0)
 
 
 # ----------------------------------------------------------- name validation

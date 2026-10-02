@@ -6,17 +6,26 @@ here is the whole story.
 """
 
 import contextlib
+import time
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import field_validator
 
 import canon
+import job_history
 import jobs
 import publication
 import spine
 
 BUSY_DETAIL = "another job is already modifying this campaign"
+
+# Dead-man cap on a queued job's wait for the campaign lock (the queue's
+# whole point is to wait, so this is far above the longest legal job — a
+# 3-week forecast — times a few queued behind it; it only fires when
+# something is actually wrong, e.g. a CLI process died holding the lock
+# in a way the OS could not release).
+QUEUE_LOCK_WAIT_S = 4 * 60 * 60
 
 
 def require_campaign(name: str):
@@ -118,41 +127,92 @@ def ensure_entities_migrated(name: str):
     return written
 
 
-def submit_campaign_job(kind: str, name: str, job):
-    """Submit a campaign-MUTATING long job under the per-campaign lock.
+def blocking_findings(findings) -> list:
+    """The error-level findings in a staged result — the auto-accept gate:
+    advisory findings ride along as always, but one at `error` level means
+    the bundle stays pending for a human (ticket 02). Non-dict findings
+    (the engine's dropped-update notes) are informational, never a gate."""
+    return [f for f in (findings or [])
+            if isinstance(f, dict) and str(f.get("level") or "") == "error"]
 
-    The lock is acquired non-blocking here (submit time) and released in the
-    worker thread when the job finishes; while it is held the route answers
-    409 {"error": "another job is already modifying this campaign"} instead
-    of queueing a second mutation. Short interactive writers use
-    campaign_lock_nowait (same fast-fail). Never nest acquisitions of one
-    campaign's lock."""
+
+def blocked_by_line(running: list) -> str:
+    """"Blocked by: <what is running> — <how long it usually takes>", from
+    the running job's kind and ITS campaign's rolling history. The first
+    running job is the story; the rest are noise in a one-lock world. Empty
+    when nothing in the registry matches (the holder is an external CLI —
+    the honest message is then the plain busy one, not a guess)."""
+    if not running:
+        return ""
+    first = running[0]
+    est = None
+    try:
+        est = job_history.estimate(first.get("campaign") or "", first["kind"])
+    except Exception:  # noqa: BLE001 — the estimate is decoration
+        est = None
+    return " " + job_history.blocked_line(first["kind"], est)
+
+
+def submit_campaign_job(kind: str, name: str, job):
+    """Submit a campaign-MUTATING long job through the campaign's FIFO
+    queue (ticket 02): the answer is 202 immediately — with a queue
+    position when another job is already running — and a per-campaign
+    worker drains the queue in order. The per-campaign lock stays exactly
+    as it was (taken before the job runs, released when it ends — the
+    before_run hook below hands that discipline to the queue): the queue
+    just means writers wait their turn instead of being refused.
+
+    The queue is safe because the confirm gates do not move: `confirm:
+    true` is still given at submit time, so a queued week already carries
+    the DM's explicit spend approval — nothing in the queue waits on a
+    decision the DM is not present for. Short interactive writers keep
+    fast-failing via campaign_lock_nowait (with a wait estimate). Never
+    nest acquisitions of one campaign's lock."""
     lock = spine.campaign_lock(name)
-    if not lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail=BUSY_DETAIL)
+
+    def before_run(log, entry):
+        # the turn-taking lives in the queue so the record stays "queued"
+        # (position visible, cancellable) until the lock is actually held
+        jobs.take_turn(log, entry, lock, max_wait_s=QUEUE_LOCK_WAIT_S)
+        return lock.release  # the drainer releases when the job ends
 
     def wrapped(log):
+        started = time.monotonic()
         try:
             return job(log)
         finally:
-            lock.release()
+            # duration history feeds the wait estimates busy 409s carry;
+            # best-effort — a history failure must never read as a job error
+            try:
+                job_history.record(name, kind, time.monotonic() - started)
+            except Exception:  # noqa: BLE001 — best-effort by contract
+                pass
 
-    try:
-        return JSONResponse({"job_id": jobs.submit(kind, wrapped)},
-                            status_code=202)
-    except BaseException:  # the job never started — do not hold the lock
-        lock.release()
-        raise
+    job_id, position = jobs.submit_queued(name, kind, wrapped,
+                                          before_run=before_run)
+    # "queued" must be honest even when this submission is the only one in
+    # the queue: a held lock (another campaign's writer, a CLI process)
+    # means the job waits for its turn even with nothing studio-side ahead
+    # of it — report that as position 1 (behind the current holder)
+    if position == 0 and lock.locked():
+        position = 1
+    return JSONResponse({"job_id": job_id, "queued": position > 0,
+                         "queue_position": position},
+                        status_code=202)
 
 
-def busy_409(action: str) -> HTTPException:
+def busy_409(action: str, name: str | None = None) -> HTTPException:
     """The fast-fail a DM sees when an interactive writer races a long job:
-    a 409 that says retrying is expected, not that their click failed."""
+    a 409 that says retrying is expected, not that their click failed — and
+    (ticket 02) what is running and how long it usually takes, from the
+    rolling duration history, so the wait is plannable."""
+    running = jobs.running_jobs(campaign=name) if name else []
+    line = blocked_by_line(running) if running else ""
     return HTTPException(
         status_code=409,
-        detail=f"{action} cannot run right now: another job is already "
-               "modifying this campaign (a week run?) — retry when it "
-               "finishes. Nothing was changed.")
+        detail=f"{action} cannot run right now: {BUSY_DETAIL}"
+               + (line or " (a week run?)") + " — retry when it finishes. "
+               "Nothing was changed.")
 
 
 @contextlib.contextmanager
@@ -162,11 +222,12 @@ def campaign_lock_nowait(name: str, action: str):
     30 minutes); a blocking acquire used to pin the HTTP request that long,
     and a browser or proxy timeout on the way turns the would-be success
     into an error the DM must guess about. Fast-fail exactly like
-    submit_campaign_job, with a message that says when to retry. Delegates
-    to spine.lock_nowait — the one implementation — and maps CampaignBusy
-    to the router's 409."""
+    submit_campaign_job, with a message that says when to retry and what
+    the wait looks like. Delegates to spine.lock_nowait — the one
+    implementation — and maps CampaignBusy to the router's 409."""
     try:
         with spine.lock_nowait(name, action):
             yield
     except spine.CampaignBusy as e:
-        raise busy_409(action) from e
+        raise busy_409(action, name=name) from e
+

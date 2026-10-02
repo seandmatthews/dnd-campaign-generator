@@ -27,17 +27,19 @@ from engines import (clear_week_flag, restore_interrupted_week,
 
 BUSY = {"error": "another job is already modifying this campaign"}
 
-
 @pytest.fixture(autouse=True)
 def _no_leaked_campaign_locks():
     """Locks are process-global: a test that leaves one held would deadlock
-    the next test's blocking acquire. Wait for the jobs registry to QUIESCE
-    first — releasing a lock a live job thread still holds breaks mutual
-    exclusion mid-suite (the leaked week job in test_forecast once ran the
-    real engine into every later test), and only then clear anything a
-    failed test left behind. threading.Lock has no owner thread, so
-    release() clears it from here even when the test thread held it."""
+    the next test's blocking acquire. First cancel anything still QUEUED
+    (a queued job must never start against a torn-down environment — it
+    would run after the monkeypatches unwound), then wait for the jobs
+    registry to QUIESCE — releasing a lock a live job thread still holds
+    breaks mutual exclusion mid-suite (the leaked week job in test_forecast
+    once ran the real engine into every later test) — and only then clear
+    anything a failed test left behind. threading.Lock has no owner thread,
+    so release() clears it from here even when the test thread held it."""
     yield
+    jobs.cancel_queued()
     jobs.wait_all(timeout=30.0)
     for lock in list(spine._CAMPAIGN_LOCKS.values()):
         try:
@@ -62,7 +64,15 @@ def fake_tick_ok(engine_root, script, *args, timeout=600, on_line=None, **kw):
 # ------------------------------------------------------- per-campaign locks
 
 
-def test_week_409_while_campaign_lock_held(client, tmp_spine_root, monkeypatch):
+def test_week_queues_while_campaign_lock_held(client, tmp_spine_root,
+                                              monkeypatch):
+    """Ticket 02: a submission while another mutation runs is QUEUED (202 +
+    queue position), not refused with a 409 — the confirm was given at
+    submit time, so the queued week can run unattended when its turn comes.
+    Here the holder is the test thread (any external writer behaves the
+    same through the lock file); the queued job stays queued, is cancelled
+    rather than leaking past the monkeypatches, and a fresh submission on
+    the free campaign runs and releases the lock."""
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
                         tmp_spine_root / "engine-home")
     monkeypatch.setattr(engines, "run_py", fake_tick_ok)
@@ -71,8 +81,16 @@ def test_week_409_while_campaign_lock_held(client, tmp_spine_root, monkeypatch):
     try:
         r = client.post("/api/campaign/testvale/simulation/week",
                         json={"confirm": True})
-        assert r.status_code == 409
-        assert r.json() == BUSY  # nothing queued while a mutation is in flight
+        assert r.status_code == 202
+        body = r.json()
+        assert body["queued"] is True and body["queue_position"] >= 1
+        job = client.get(f"/api/jobs/{body['job_id']}").json()
+        assert job["status"] == "queued", \
+            "it must wait for the lock, not start behind the holder's back"
+        # cancel while still queued: a failed assert must never leave a
+        # week that runs after the fakes are gone
+        assert client.post(f"/api/jobs/{body['job_id']}/cancel").status_code \
+            == 200
     finally:
         lock.release()
 
@@ -80,23 +98,60 @@ def test_week_409_while_campaign_lock_held(client, tmp_spine_root, monkeypatch):
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     assert r.status_code == 202
-    job = wait_for_job(client, r.json()["job_id"])
+    job = wait_for_job(client, r.json()["job_id"], timeout=30.0)
     assert job["status"] == "done", job["error"]
-    assert spine.campaign_lock("testvale").acquire(blocking=False)
+    deadline = time.monotonic() + 5.0  # "done" can beat the drainer's release
+    while time.monotonic() < deadline:
+        if spine.campaign_lock("testvale").acquire(blocking=False):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("the finished job never released the lock")
 
 
-def test_world_gen_409_while_campaign_lock_held(client, tmp_spine_root):
+def test_world_gen_queues_while_campaign_lock_held(client, tmp_spine_root,
+                                                   monkeypatch):
+    """Ticket 02, same contract for a second job kind: the world-gen
+    queues (202) behind whatever holds the campaign, stays queued until
+    the holder lets go, and a cancel keeps it from leaking past the test."""
+    def fake_run_node(engine_root, *args, timeout=600, on_line=None, env=None):
+        out = Path(env["FMG_OUT"])
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "headless-42.json").write_text("{}", encoding="utf-8")
+        return 0, ["headless ok"]
+
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None):
+        cands = engine_root / "worlds" / "candidates"
+        cands.mkdir(parents=True, exist_ok=True)
+        (cands / "headless-42.yaml").write_text(
+            "summary: {nations: 1, settlements: 1}\n", encoding="utf-8")
+        return 0, ["42.json -> headless-42.yaml: 1 nation, 1 settlement"]
+
+    monkeypatch.setattr(engines, "run_node", fake_run_node)
+    monkeypatch.setattr(engines, "run_py", fake_run_py)
+    monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+
     lock = spine.campaign_lock("testvale")
     lock.acquire()
     try:
-        # force:true so the only 409 left is the busy one
         r = client.post("/api/campaign/testvale/world",
                         json={"seed": "42", "force": True})
-        assert r.status_code == 409
-        assert r.json() == BUSY
+        assert r.status_code == 202
+        assert r.json()["queued"] is True
+        job = client.get(f"/api/jobs/{r.json()['job_id']}").json()
+        assert job["status"] == "queued"
+        assert client.post(f"/api/jobs/{job['id']}/cancel").status_code == 200
     finally:
         lock.release()
-    assert spine.campaign_lock("testvale").acquire(blocking=False)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        if spine.campaign_lock("testvale").acquire(blocking=False):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("the cancelled job never released the lock")
+    assert client.get(f"/api/jobs/{job['id']}").json()["status"] == \
+        "cancelled"
 
 
 def test_approve_fastfails_while_a_job_holds_the_lock(client, tmp_spine_root):

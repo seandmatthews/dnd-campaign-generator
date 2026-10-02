@@ -72,16 +72,47 @@ response and the UI banner say **what is running and how long it takes**:
 
 ## Acceptance criteria
 
-- [ ] Submitting a second mutation while one runs returns 202 + queue
+- [x] Submitting a second mutation while one runs returns 202 + queue
       position, not 409.
-- [ ] The queue is visible in the UI (positions, cancel buttons) and
+- [x] The queue is visible in the UI (positions, cancel buttons) and
       drains in order.
-- [ ] Auto-accept exists for the three staging job types, error-level
+- [x] Auto-accept exists for the three staging job types, error-level
       findings block it, and every auto-approval is identifiable in the
       publication record.
-- [ ] Week auto-accept exists only behind an explicit checkbox, default off.
-- [ ] A 409 (or queue-blocked state) that cannot be enqueued carries a
+- [x] Week auto-accept exists only behind an explicit checkbox, default off.
+- [x] A 409 (or queue-blocked state) that cannot be enqueued carries a
       duration estimate from the rolling history, phrased as a wait a human
       can plan around.
-- [ ] All existing tests green; new tests for queue order, cancel,
+- [x] All existing tests green; new tests for queue order, cancel,
       auto-accept-with-findings-blocked, and the ETA store.
+
+## Implementation notes (2026-10-02)
+
+- The queue lives in `studio/jobs.py` (`_CampaignQueue`, one FIFO +
+  drainer thread per campaign); `routers/common.submit_campaign_job`
+  hands it a `before_run` hook that takes the campaign lock while the
+  record is still `queued` — so `GET /api/jobs/{id}` shows
+  `status: "queued", position: N` for exactly the jobs that have not had
+  their turn, and cancellation works during the wait. The lock discipline
+  itself is unchanged (held for the job's whole run).
+- Not queueable by design: a second campaign's week contending for the
+  shared engine home (the `ENGINE_LOCK` 409s keep their fast-fail), and
+  the short interactive writers (`busy_409`) — both now carry the
+  "Blocked by: ... typically ..." line from `studio/job_history.py`
+  (`.studio-jobs/history.json`, git-ignored; roster-scaled for
+  weeks/forecasts, clamped; labeled an estimate).
+- Auto-accept reuses the exact approval machinery: `review.approve_items`
+  (extracted from the route, lock-agnostic) for the two lore jobs,
+  `proposal_flows.accept_locked` (same) for goal-review and the week.
+  `publication.publish(..., auto=True)` writes `auto: true` into the
+  transaction manifest, the result/receipt carries `auto: true`, and the
+  snapshot message gains "(auto-accepted)". The goal-review gate reads the
+  bundle's findings; engine drop-notes are plain strings and never block —
+  dict findings at `error` level do.
+- UI: the campaign strip under the header (running + queued + estimate,
+  5 s poll), a per-form queued banner with position and a Cancel button,
+  auto-accept checkboxes on the two lore forms, goal review, and the loud
+  week checkbox ("publish the week without reading it first"). The repo
+  has no DOM test harness, so the rendering itself is covered by
+  `node --check` and the API-level tests above, not an automated browser
+  test.
