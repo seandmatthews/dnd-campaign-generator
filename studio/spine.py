@@ -353,13 +353,16 @@ def write_text_atomic(path: Path, text: str) -> Path:
     """Write via tmp + os.replace so a crash or concurrent reader never sees
     a half-written spine file. Same volume, so the replace is atomic; the
     tmp name is UNIQUE (mkstemp) — a fixed `<name>.tmp` let two writers
-    under the same campaign lock clobber each other's partial write."""
+    under the same campaign lock clobber each other's partial write.
+    newline="" writes the text EXACTLY as given: default text mode would
+    re-translate every \\n and turn CRLF-carrying input (a Windows
+    state.yaml, a hand-edited style file) into \\r\\r\\n on disk."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".",
                                     suffix=".tmp")
     tmp = Path(tmp_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
         _replace_with_retry(tmp, path)
     except BaseException:
