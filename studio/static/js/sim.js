@@ -570,6 +570,31 @@
     return rows.join('');
   }
 
+  /* Pure — the accept toast must name what actually published (ticket 30 /
+     P3-32): every bundle kind gets its own line. session_changes used to
+     fall through to "Week N is canon", which is not what an accept of a
+     session's consequences publishes. r is the accept response (may carry
+     the published week). Pinned by studio/tests/js/test_sim_toast.cjs. */
+  S.proposalAcceptMsg = function (p, r) {
+    p = p || {};
+    const kind = p.kind;
+    if (kind === 'goal_updates') {
+      return 'Goal changes are canon — applied exactly once.';
+    }
+    if (kind === 'session_changes') {
+      return 'Session changes are canon — state, knowledge, and ' +
+        'disclosures published exactly once.';
+    }
+    if (kind === 'session_effects') {
+      return 'Session changes are canon — applied exactly once.';
+    }
+    if (kind === 'project_changes') {
+      return 'Project changes are canon — applied exactly once.';
+    }
+    const week = (r && r.week != null) ? r.week : p.proposed_week;
+    return 'Week ' + week + ' is canon — accepted exactly once.';
+  };
+
   function proposalPanel(root, pid, chronicles) {
     const panel = S.el(
       '<section class="panel proposal-panel">' +
@@ -795,14 +820,7 @@
         try {
           const r = await S.api(S.campUrl('/simulation/proposal/' +
             encodeURIComponent(p.proposal_id) + '/accept'), { method: 'POST' });
-          S.toast(isGoals
-            ? 'Goal changes are canon — applied exactly once.'
-            : isSession
-              ? 'Session changes are canon — applied exactly once.'
-              : isProjects
-                ? 'Project changes are canon — applied exactly once.'
-                : 'Week ' + (r.week != null ? r.week : p.proposed_week) +
-                  ' is canon — accepted exactly once.', 'ok');
+          S.toast(S.proposalAcceptMsg(p, r), 'ok');
           if (r.snapshot && (r.snapshot.state === 'failed' ||
               r.snapshot.state === 'unavailable')) {
             S.toast('Published, but the history snapshot ' + r.snapshot.state +
@@ -1742,8 +1760,10 @@
     }
     root.innerHTML = '';
 
-    // a failed history snapshot means published-but-untracked: surface the
-    // one-click recovery (POST .../snapshot) where the accept happened
+    // recovery surfaces where the accept happened: a failed history
+    // snapshot means published-but-untracked (POST .../snapshot), a
+    // conflict-parked transaction blocks publication writes until decided
+    // (POST .../publication/resolve)
     const snapBanner = await S.snapshotBanner();
     if (snapBanner) root.appendChild(snapBanner);
 

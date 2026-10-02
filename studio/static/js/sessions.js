@@ -507,14 +507,25 @@
           ' — review and accept it on the Simulation tab.', 'ok');
         S.showTab('sim');
       } catch (err) {
-        errBox.textContent = (err && err.error) || 'Prepare failed.';
+        // The message is placed AFTER the re-render decision: setting
+        // errBox first meant the re-render branch wiped its own error
+        // (including the draft-revision 409's "reload and reapply"
+        // guidance) with nothing left on screen (ticket 30 / P3-33).
+        const msg = (err && err.error) || 'Prepare failed.';
         if (err && err.keepView) {
           // already surfaced (toast + highlighted cards) — a re-render
           // would wipe the rows the DM needs to see
+          errBox.textContent = msg;
         } else if (err && err.status === 409 && /awaiting review/.test(err.error || '')) {
+          errBox.textContent = msg;
           S.toast('A proposal is already pending — review it on the Simulation tab.', 'info');
         } else {
-          S.showTab('sessions'); // re-render: validations changed
+          // re-render: validations changed. The inline box dies with this
+          // view, so the failure rides a toast that survives the
+          // re-render — and the re-render IS the reload the draft-revision
+          // 409 tells the DM to do
+          S.showTab('sessions');
+          S.toast('Prepare failed: ' + msg, 'error');
         }
       }
     });
@@ -563,8 +574,17 @@
         root2.innerHTML = '';
         const wrap = S.el('<div class="tab-root"></div>');
         root2.appendChild(wrap);
-        const sim = await S.api(camp() + 'simulation');
-        await sessionDetail(wrap, s.session_id, sim);
+        try {
+          const sim = await S.api(camp() + 'simulation');
+          await sessionDetail(wrap, s.session_id, sim);
+        } catch (err) {
+          // the detail view renders through two awaited fetches AFTER the
+          // list is cleared — without this guard a dead server (or a
+          // missing simulation/state.yaml) left a blank tab with only a
+          // console error. The standard error panel, like every tab
+          // renders (ticket 30 / P2-7).
+          wrap.appendChild(S.errorPanel(err));
+        }
       });
       ul.appendChild(li);
     });

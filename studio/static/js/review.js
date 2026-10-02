@@ -262,8 +262,10 @@
     }
     root.innerHTML = '';
 
-    // a failed history snapshot means published-but-untracked: surface the
-    // one-click recovery (POST .../snapshot) instead of telling the DM to curl
+    // recovery surfaces instead of curl: a failed history snapshot means
+    // published-but-untracked (POST .../snapshot), a conflict-parked
+    // transaction means publication writes are 409-blocked until decided
+    // (POST .../publication/resolve)
     const banner = await S.snapshotBanner();
     if (banner) root.appendChild(banner);
 

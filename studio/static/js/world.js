@@ -28,7 +28,11 @@
       name: e.name || e.id || '(unnamed)',
       kind: e.kind || fallbackKind || '',
       note: e.note || e.summary || e.text || e.description || '',
-      aliases: Array.isArray(e.aliases) ? e.aliases : []
+      aliases: Array.isArray(e.aliases) ? e.aliases : [],
+      // the backing page's campaign-relative path: entitiesTable keys the
+      // click-to-open affordance on it — dropping it here made the feature
+      // unreachable from the table (ticket 30 / P2-6)
+      file: e.file || null
     };
   }
 
@@ -54,6 +58,11 @@
     }
     return out;
   }
+
+  // exported for studio/tests/js/test_world_tab.cjs: the store's three
+  // historical shapes (list, keyed, grouped-by-kind) must all carry `file`
+  // through, or the entities table loses its click-to-open affordance
+  S.normalizeEntities = normalizeEntities;
 
   function townCount(n) {
     let v = n.towns;
