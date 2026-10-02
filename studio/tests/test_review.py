@@ -215,6 +215,66 @@ def test_partial_approve_keeps_the_rest_approvable(client, tmp_spine_root):
     assert not path.exists()
 
 
+def test_approve_refuses_case_colliding_page_drafts(client, tmp_spine_root):
+    """Ticket 28 (P3-27): entity filenames keep display case, so two page
+    drafts titled 'Ashen Order' and 'ashen order' plan two paths that
+    differ only by letter case. On a case-insensitive filesystem both
+    writes land on ONE file (the second replacing the first) while the
+    response counts pages: 2 — one draft silently lost. The batch must
+    refuse with a named conflict, writing nothing."""
+    path = _write_pending(tmp_spine_root, "lore/pending-pages-1.yaml", {
+        "entries": [
+            {"id": "page-1", "when": "week 9", "title": "Ashen Order",
+             "text": "The first draft's body.", "source": "authored",
+             "page": {"kind": "faction", "aliases": []}},
+            {"id": "page-2", "when": "week 9", "title": "ashen order",
+             "text": "The second draft's body.", "source": "authored",
+             "page": {"kind": "faction", "aliases": []}},
+        ],
+        "created": "2026-10-02T00:00:00+00:00", "mode": "missing-pages",
+    })
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-pages-1.yaml", "all": True})
+    assert r.status_code == 409, r.text
+    err = r.json()["error"]
+    assert "conflict" in err.lower()
+    assert "Ashen Order.md" in err and "ashen order.md" in err
+    # nothing was written: no entity page, no timeline append, both drafts
+    # stay pending for the DM to disambiguate
+    ents = tmp_spine_root / "testvale" / "lore" / "entities"
+    assert not [p for p in ents.glob("*shen*")]
+    assert len(_timeline_entries(tmp_spine_root)) == 2
+    kept = yaml.safe_load(path.read_text(encoding="utf-8"))["entries"]
+    assert [e["id"] for e in kept] == ["page-1", "page-2"]
+
+
+def test_approve_refuses_case_colliding_stub_and_page_draft(
+        client, tmp_spine_root):
+    """The same guard covers stub pages (ticket 28): an entry stubbing the
+    new name 'ASHEN ORDER' while a page draft in the same batch writes
+    'Ashen Order' would double-write one file on a case-insensitive
+    filesystem — refused like the draft/draft collision, nothing written."""
+    path = _write_pending(tmp_spine_root, "lore/pending-pages-2.yaml", {
+        "entries": [
+            {"id": "page-1", "when": "week 9", "title": "Ashen Order",
+             "text": "The draft's body.", "source": "authored",
+             "page": {"kind": "faction", "aliases": []}},
+            {"id": "t0009", "when": "week 9", "title": "A petition is heard",
+             "text": "An entry that names the order.", "source": "authored",
+             "new_names": ["ASHEN ORDER"]},
+        ],
+        "created": "2026-10-02T00:00:00+00:00", "mode": "missing-pages",
+    })
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-pages-2.yaml", "all": True})
+    assert r.status_code == 409, r.text
+    assert "conflict" in r.json()["error"].lower()
+    ents = tmp_spine_root / "testvale" / "lore" / "entities"
+    assert not [p for p in ents.glob("*shen*")]
+    assert len(_timeline_entries(tmp_spine_root)) == 2
+    assert path.exists()  # refused: the pending file is untouched
+
+
 def test_delete_removes_entries_and_empty_file(client, tmp_spine_root):
     path = _write_pending(tmp_spine_root, "lore/pending-entries-9.yaml", {
         "entries": [

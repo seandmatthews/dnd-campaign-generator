@@ -642,10 +642,14 @@ def receipt_with_snapshot(name: str, key: str) -> dict | None:
     """receipt(), with the snapshot backfilled from the recorded transaction
     when the receipt predates that field — the complete idempotent-repeat
     answer for the PROPOSAL accept flow (proposal_flows), its only caller.
-    Review approvals (routers/review) read publication.receipt directly
-    over their own idempotency keys — two receipt flows by design, since
-    they approve different things; this helper is not shared with them
-    (ticket 16 corrected the docstring that claimed it was)."""
+    accept_locked re-records its receipt WITH the snapshot once known
+    (ticket 28), so the backfill only serves receipts written before that
+    re-record (crash between finalize and the re-record, or an old receipt)
+    whose transaction is still on disk. Review approvals (routers/review)
+    read publication.receipt directly over their own idempotency keys —
+    two receipt flows by design, since they approve different things; this
+    helper is not shared with them (ticket 16 corrected the docstring that
+    claimed it was)."""
     prior = receipt(name, key)
     if prior is None:
         return None

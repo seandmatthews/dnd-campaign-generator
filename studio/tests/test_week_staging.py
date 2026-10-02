@@ -261,6 +261,44 @@ def test_accept_after_restart_is_still_idempotent(
     assert state["meta"]["clock"]["week"] == 4
 
 
+def test_accept_replay_keeps_the_snapshot_after_prune(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 28 (P3-28): the accept receipt used to be recorded before the
+    snapshot was attached to the result, and a committed transaction is
+    pruned by after_snapshot — so receipt_with_snapshot's manifest backfill
+    found nothing, and a retry of a fully-completed accept answered without
+    the `snapshot` key the live accept returned. The receipt itself must
+    carry the snapshot; the test drives the prune, then the retry."""
+    import shutil
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    r1 = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r1.status_code == 200, r1.text
+    live = r1.json()
+    assert live["snapshot"]["state"] in ("committed", "no_change")
+
+    # drive the prune: the transaction directory must be gone (a committed
+    # snapshot prunes it already — the rmtree makes the test prove the
+    # replay's shape even when it does not)
+    tx_dir = (tmp_spine_root / "testvale" / ".studio-transactions"
+              / live["transaction"])
+    if tx_dir.exists():
+        shutil.rmtree(tx_dir)
+    assert not tx_dir.exists()
+
+    r2 = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r2.status_code == 200, r2.text
+    replay = r2.json()
+    assert replay.get("idempotent") is True
+    assert replay["snapshot"] == live["snapshot"], \
+        "the replay answers with the live accept's snapshot, not a hole"
+    assert set(replay) - {"idempotent"} == set(live)
+    state = yaml.safe_load(_live_state_bytes(tmp_spine_root))
+    assert state["meta"]["clock"]["week"] == 4  # nothing re-applied
+
+
 def test_discard_preserves_all_bytes(client, tmp_spine_root, monkeypatch):
     before = _live_facts(tmp_spine_root)
     job = _run_week(client, monkeypatch, tmp_spine_root)

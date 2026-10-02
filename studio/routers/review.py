@@ -397,6 +397,29 @@ def _stub_writes(name: str, entry: dict) -> list[tuple[str, str]]:
     return out
 
 
+def _claim_page_target(claimed: dict, rel: str) -> None:
+    """Claim one batch page/stub target, refusing a CASE-INSENSITIVE
+    collision with a target this same batch already planned (ticket 28).
+    Entity filenames keep display case, so drafts titled 'Ashen Order' and
+    'ashen order' plan two paths differing only by case — on a
+    case-insensitive filesystem both writes land on ONE file (the second
+    replacing the first) while the response counts both, and the publish
+    verification then fails mid-flight leaving an open transaction. Two
+    such targets are two names for one page: refuse the whole approval —
+    nothing is written (the raise precedes publication.publish's staging)
+    — so the DM disambiguates instead of silently losing a draft."""
+    fold = rel.casefold()
+    if fold in claimed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"page filename conflict in this batch: {rel} collides "
+            f"with {claimed[fold]} — names that differ only by letter case "
+            "(or repeat) are one file on a case-insensitive filesystem, "
+            "and one write would silently replace the other. Rename or "
+            "remove one of them, then approve again; nothing was written.")
+    claimed[fold] = rel
+
+
 def _idempotency_key(name: str, body: ReviewBody, op: str,
                      content_fallback: str) -> str:
     """A stable key for this exact approval request: repeating it (double
@@ -508,6 +531,8 @@ def approve_items(name: str, d, body: ReviewBody, *,
                     f"generated (a page was created or deleted)")
 
         written, skipped, stubbed = 0, 0, 0
+        claimed: dict = {}  # casefolded rel -> rel: this batch's page/stub
+        # targets — the case-collision guard (ticket 28)
         for e in pages:
             try:
                 rel = _page_rel(e)
@@ -517,6 +542,7 @@ def approve_items(name: str, d, body: ReviewBody, *,
             if (d / rel).exists():
                 skipped += 1  # the hand page wins, the draft is discarded
                 continue
+            _claim_page_target(claimed, rel)
             rel_written, text = _page_write(name, e)
             writes.append({"path": rel_written, "text": text})
             base[rel_written] = publication.ABSENT  # create-only, race-safe
@@ -537,6 +563,7 @@ def approve_items(name: str, d, body: ReviewBody, *,
                             or any(w["path"] == rel for w in writes):
                         continue  # a hand page or this batch's own
                                   # page draft wins — never double-write
+                    _claim_page_target(claimed, rel)
                     writes.append({"path": rel, "text": text})
                     base[rel] = publication.ABSENT
                     stubbed += 1

@@ -110,6 +110,10 @@ def accept_locked(name: str, pid: str, *, auto: bool = False) -> dict:
             sessions.on_accepted(name, manifest, bundle)
         snap = _finalize(name, prior_tx["transaction"],
                          accept_message(name, manifest, None))
+        # same re-record as the live path (ticket 28): _finalize prunes a
+        # committed transaction, so the receipt itself must carry the
+        # snapshot for the NEXT replay to answer with the same shape
+        publication.record_receipt(name, key, {**result, "snapshot": snap})
         return {**result, "snapshot": snap, "idempotent": True}
     d = spine.campaign_dir(name)
 
@@ -220,6 +224,13 @@ def accept_locked(name: str, pid: str, *, auto: bool = False) -> dict:
             _log.warning("chronicle linkify skipped for %s: %s", fn, e)
     snap = _finalize(name, pub["transaction"], msg)
     result["snapshot"] = snap
+    # re-record the receipt WITH the snapshot (ticket 28): the record above
+    # is the crash-window anchor written before the snapshot exists, and a
+    # committed transaction is pruned by after_snapshot — receipt_with_
+    # snapshot's manifest backfill then finds nothing, and a replay of a
+    # fully-completed accept answered without the snapshot key the live
+    # accept returned
+    publication.record_receipt(name, key, result)
     return result
 
 
