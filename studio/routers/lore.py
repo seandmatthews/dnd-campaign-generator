@@ -22,11 +22,50 @@ import links
 import llm_client
 import loregen
 import spine
-from routers.common import (ensure_entities_migrated, require_campaign,
-                            store_errors, submit_campaign_job)
+from routers.common import (blocking_findings, ensure_entities_migrated,
+                            require_campaign, store_errors,
+                            submit_campaign_job)
+from routers.review import ReviewBody, approve_items
 from spine import CampaignError, CampaignExists, CampaignNotFound
 
 router = APIRouter()
+
+AUTO_ACCEPT_HELP = ("auto-accept: approve the staged bundle through the "
+                    "Review path the moment it lands (error-level "
+                    "verification findings leave it pending instead)")
+
+
+def _auto_accept_staged(name: str, result: dict, log) -> dict:
+    """The auto-accept half of a lore staging job (ticket 02): the job
+    itself approves the pending file it just staged, through the SAME
+    approve path the Review tab uses (same publication transactions,
+    receipts, snapshots), recorded in the transaction as auto: true.
+    Findings at error level block it — the bundle stays pending, as today.
+    The job already holds the campaign lock; the staged result is returned
+    with an `auto_accept` note either way, and an approve failure never
+    reads as a failed run (the staged bundle is the deliverable)."""
+    findings = result.get("findings") or []
+    blockers = blocking_findings(findings)
+    if blockers:
+        log(f"auto-accept blocked: {len(blockers)} error-level finding(s) — "
+            "the staged entries stay pending for review")
+        return {**result, "auto_accept": "blocked",
+                "blocking_findings": blockers}
+    pending = str(result.get("pending") or "")
+    if not pending:
+        return {**result, "auto_accept": "nothing-staged"}
+    log(f"auto-accepting {pending} (the job is the approver; recorded as "
+        "auto in the publication)")
+    try:
+        approved = approve_items(name, spine.campaign_dir(name),
+                                 ReviewBody(file=pending, all=True),
+                                 auto=True)
+    except Exception as e:  # noqa: BLE001 — staged, but the approve failed
+        log(f"auto-accept failed, the staged bundle stays pending: {e}")
+        return {**result, "auto_accept": "error", "auto_accept_error": str(e)}
+    log(f"auto-accepted: {approved.get('approved')} item(s) into the "
+        f"timeline ({approved.get('transaction')})")
+    return {**result, "auto_accept": "approved", "approval": approved}
 
 
 class TextBody(BaseModel):
@@ -45,10 +84,16 @@ class MissingPagesBody(BaseModel):
     payload is a 422, not a silently ignored dict."""
     targets: list[str] | None = None
     limit: int | None = None
+    # opt-in auto-accept (ticket 02): approve the staged drafts through the
+    # Review path as soon as they land — unless an error-level finding
+    # leaves them pending
+    auto_accept: bool = False
 
 
 class EntriesBody(BaseModel):
     focus: str = ""
+    # opt-in auto-accept (ticket 02) — same gate as missing-pages
+    auto_accept: bool = False
 
 
 @router.get("/api/campaign/{name}/lore")
@@ -103,11 +148,13 @@ def post_missing_pages(name: str, body: MissingPagesBody | None = None):
     d = require_campaign(name)
     targets = None
     limit = None
+    auto_accept = False
     if body is not None:
         if body.targets is not None:
             targets = [t for t in body.targets if str(t).strip()]
         if body.limit is not None and body.limit > 0:
             limit = body.limit
+        auto_accept = bool(body.auto_accept)
 
     def job(log):
         result = loregen.generate_missing_pages(d, targets, log=log,
@@ -115,6 +162,8 @@ def post_missing_pages(name: str, body: MissingPagesBody | None = None):
         canon.snapshot(name,
                        f"campaign/{name}: stage {result['pages']} pending "
                        "lore pages")
+        if auto_accept:
+            result = _auto_accept_staged(name, result, log)
         return result
 
     return submit_campaign_job("lore-missing-pages", name, job)
@@ -190,6 +239,7 @@ def post_style(name: str, file: str, body: TextBody):
 def post_entries(name: str, body: EntriesBody | None = None):
     d = require_campaign(name)
     focus = (body.focus if body is not None else "").strip()
+    auto_accept = bool(body.auto_accept) if body is not None else False
     if not (d / "world" / "geography.yaml").is_file():
         raise HTTPException(
             status_code=422,
@@ -204,6 +254,8 @@ def post_entries(name: str, body: EntriesBody | None = None):
         canon.snapshot(name,
                        f"campaign/{name}: stage {result['entries']} pending "
                        "lore entries")
+        if auto_accept:
+            result = _auto_accept_staged(name, result, log)
         return result
 
     return submit_campaign_job("lore-entries", name, job)

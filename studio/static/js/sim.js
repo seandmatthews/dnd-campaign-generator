@@ -924,6 +924,11 @@
           '<button type="button" class="btn btn-primary goal-review-btn">Propose goal updates</button>' +
           '<span class="muted form-note">Spends API credits; most runs justify few or no changes.</span>' +
         '</div>' +
+        '<label class="field auto-accept-field">' +
+          '<input type="checkbox" class="input goal-auto-accept">' +
+          '<span><strong>Auto-accept</strong> — apply the proposed goal updates the moment they stage ' +
+          '(error-level findings leave the proposal pending instead). Default is off.</span>' +
+        '</label>' +
         '<pre class="log-tail hidden goals-log"></pre>' +
         '<div class="goals-error"></div>' +
       '</section>'
@@ -931,18 +936,21 @@
     const btn = card.querySelector('.goal-review-btn');
     const logBox = card.querySelector('.goals-log');
     const errBox = card.querySelector('.goals-error');
+    const autoChk = card.querySelector('.goal-auto-accept');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
+      const auto = autoChk && autoChk.checked;
       btn.disabled = true;
       const ok = await S.confirmRun(
         'Run a goal review? One LLM pass reads the ledger and proposes goal ' +
         'updates — it spends API credits. Nothing changes unless you accept ' +
-        'the proposal afterwards.'
+        'the proposal afterwards.' +
+        (auto ? ' AUTO-ACCEPT is on: the updates apply as soon as they stage.' : '')
       );
       if (!ok) { btn.disabled = false; return; }
       S.runJob({
         path: S.campUrl('/simulation/goal-review'),
-        body: {},
+        body: { auto_accept: !!auto },
         btn: btn, errBox: errBox, log: S.makeLogBox(logBox),
         // 50 min: the server's own watchdog for this job sits at 2800 s
         // (~47 min) — the default 31-min poll cap used to give up first
@@ -950,7 +958,11 @@
         failLabel: 'Goal review failed'
       }).then((result) => {
         const r = result || {};
-        if (r.staged) {
+        if (r.auto_accept === 'approved') {
+          S.toast(r.proposed + ' goal update' + (r.proposed === 1 ? '' : 's') +
+            ' AUTO-ACCEPTED — the ledger moves on.', 'ok');
+          S.rerenderIfCurrent('sim');
+        } else if (r.staged) {
           S.toast(r.proposed + ' goal update' + (r.proposed === 1 ? '' : 's') +
             ' proposed — review it above, then accept or discard.', 'ok');
           S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
@@ -1871,6 +1883,12 @@
           '<button type="button" class="btn btn-primary run-week-btn">Propose week ' + S.esc(String(nextWeek)) + '</button>' +
           '<span class="muted form-note">Runs the live scheduler, factions and dice against scratch data and stages a proposal — the campaign changes only when you accept it. The week runs faction-by-faction: expect 10–20 minutes, roster-dependent.</span>' +
         '</div>' +
+        '<label class="field auto-accept-field">' +
+          '<input type="checkbox" class="input week-auto-accept">' +
+          '<span><strong>Publish the week without reading it first.</strong> ' +
+          'Auto-accept: the proposal is accepted the moment it stages — no chronicle review, no discard step. ' +
+          'The engine still refuses invalid candidates and git keeps the undo. Default is off; reading the chronicle is the point.</span>' +
+        '</label>' +
         '<pre class="log-tail hidden run-log"></pre>' +
         '<div class="run-error"></div>' +
       '</section>'
@@ -1878,28 +1896,40 @@
     const runBtn = runPanel.querySelector('.run-week-btn');
     const runLog = runPanel.querySelector('.run-log');
     const runErr = runPanel.querySelector('.run-error');
+    const autoChk = runPanel.querySelector('.week-auto-accept');
     runBtn.addEventListener('click', async () => {
       if (runBtn.disabled) return;
+      const auto = autoChk && autoChk.checked;
       const ok = await S.confirmRun(
         'This runs a real week against scratch data — it spends API credits ' +
         'and takes 10–20 minutes with a full roster. ' +
-        'The campaign changes only if you accept the proposal afterwards.'
+        'The campaign changes only if you accept the proposal afterwards.' +
+        (auto ? ' AUTO-ACCEPT IS ON: the week publishes itself the moment it stages, without reading it first.' : '')
       );
       if (!ok) return;
       S.runJob({
         path: S.campUrl('/simulation/week'),
-        body: { confirm: true },
+        body: { confirm: true, auto_accept: !!auto },
         btn: runBtn, errBox: runErr, log: S.makeLogBox(runLog),
         failLabel: 'Week run failed'
       }).then((result) => {
         const r = result || {};
         const held = Array.isArray(r.held) ? r.held : [];
         if (held.length) S.state.lastHeld = held; // banner on the re-render
-        S.toast(
-          'Week ' + (r.week != null ? r.week : nextWeek) + ' is PROPOSED — review it above' +
-          (held.length ? ' (' + held.length + ' faction' + (held.length === 1 ? '' : 's') + ' held)' : ''),
-          'ok'
-        );
+        if (r.auto_accept === 'approved') {
+          S.toast('Week ' + (r.week != null ? r.week : nextWeek) +
+            ' was AUTO-ACCEPTED and published — read the chronicle above' +
+            (held.length ? ' (' + held.length + ' faction' + (held.length === 1 ? '' : 's') + ' held)' : ''), 'ok');
+        } else if (r.auto_accept === 'blocked' || r.auto_accept === 'error') {
+          S.toast('Week ' + (r.week != null ? r.week : nextWeek) +
+            ' staged but auto-accept did not run — review it above.', 'info');
+        } else {
+          S.toast(
+            'Week ' + (r.week != null ? r.week : nextWeek) + ' is PROPOSED — review it above' +
+            (held.length ? ' (' + held.length + ' faction' + (held.length === 1 ? '' : 's') + ' held)' : ''),
+            'ok'
+          );
+        }
         S.rerenderIfCurrent('sim'); // re-render: the proposal panel leads the tab
       }).catch(() => {});
     });

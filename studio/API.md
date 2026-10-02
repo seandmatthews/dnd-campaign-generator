@@ -18,11 +18,49 @@ change — never let them drift.
   status — including unhandled exceptions (a catch-all handler maps them to
   `{"error": "internal error: <type>"}`, 500).
 - Jobs (D5): long work returns `{"job_id": "..."}` with status 202.
-  `GET /api/jobs/{id}` → `{"id","kind","status":"queued|running|done|error",
-  "log_tail":[str,...],"result":object|null,"error":str|null,"started":ts}`.
-  UI polls ~1 s and gives up after 31 minutes (the job itself may still be
-  running server-side). The jobs dict is in-process: finished records beyond
-  the newest ~200 are dropped, and a finished job keeps only its log tail.
+  `GET /api/jobs/{id}` → `{"id","kind","campaign","status":"queued|running|
+  done|error|cancelled","log_tail":[str,...],"result":object|null,
+  "error":str|null,"started":ts}` — plus `"position": N` while the job sits
+  in a campaign queue. UI polls ~1 s and gives up after 31 minutes (the job
+  itself may still be running server-side). The jobs dict is in-process:
+  finished records beyond the newest ~200 are dropped, and a finished job
+  keeps only its log tail.
+- Campaign job queue (ticket 02): a mutating job submitted while the
+  campaign already has one queued/running answers 202 with
+  `{"job_id", "queued": true, "queue_position": N}` (N = how many jobs must
+  finish first; `queued: false, queue_position: 0` = nothing ahead — though
+  an externally held lock, e.g. a CLI process, is reported as position 1)
+  and a per-campaign FIFO worker drains them strictly in order. The confirm
+  gates do not move: `confirm: true` is given at submit time, so a queued
+  week already carries the DM's spend approval. Queue routes:
+  `GET /api/campaign/{name}/jobs` → `{"campaign","running":job|null,
+  "queued":[job...],"running_estimate":{median_s,low_s,high_s,samples,
+  roster}|null}` (the strip the UI polls); `POST /api/jobs/{id}/cancel`
+  dequeues a QUEUED job → 200 with the record (status `cancelled`); a
+  running/finished job is `409 {"error": "job ... is not queued — ..."}`,
+  an unknown id 404.
+- Auto-accept (ticket 02): `POST .../lore/entries`,
+  `POST .../lore/pages/missing`, and `POST .../simulation/goal-review`
+  accept an opt-in `"auto_accept": bool` (default false): the job then
+  approves its own staged bundle through the same approve/accept path the
+  UI uses, and the publication carries `auto: true` in the transaction
+  manifest, in the receipt, and as "(auto-accepted)" in the snapshot
+  message. Error-level verification findings block the auto-accept and
+  leave the bundle pending, as today; the job result says
+  `"auto_accept": "approved"|"blocked"|"error"`.
+  `POST .../simulation/week` takes `"auto_accept"` as a StrictBool default
+  OFF (publish the week without reading it — loud checkbox only).
+  `session_effects` / `project_changes` are never auto-accepted (they are
+  synchronous routes encoding DM rulings).
+- Wait estimates (ticket 02): finished job durations roll into
+  `<campaign>/.studio-jobs/history.json` (git-ignored, beside the
+  transactions dir; median of the last ~6 runs, roster-scaled for
+  weeks/forecasts, clamped). A 409 that cannot be queued — the shared
+  engine home busy, or a short interactive writer racing a job — appends
+  `" Blocked by: <what is running> — typically <low>-<high> (an estimate
+  from past runs; the job log is the source of truth)"` to its error, or
+  admits "no duration history yet" when nothing has finished. Estimates
+  are labeled as estimates; the job log remains the source of truth.
 - Engine invocation (D3): subprocess with **list-form args, never `shell=True`**
   (the parent path contains `&`). Pattern: `[sys.executable, "-X", "utf8",
   "src/thing.py", ...]` with `cwd=<engine root>`. Node engines:
@@ -36,20 +74,22 @@ change — never let them drift.
   `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` — port = the
   bound port; the bare no-port forms are accepted too (DNS-rebinding
   protection). `STUDIO_EXTRA_HOSTS` (comma-separated) extends the list.
-- Per-campaign mutation lock (hardening): one mutating job at a time per
-  campaign. The long jobs — `POST .../simulation/week`, `POST .../world`,
-  `POST .../maps/cities`, `POST .../maps/sites`, `POST .../lore/entries`,
-  `POST .../maps/world-map` — take the lock at submit time and answer
-  `409 {"error": "another job is already modifying this campaign"}` while it
-  is held. Every SHORT interactive writer — review approve/delete, proposal
-  accept/discard, `POST .../simulation/session`, knowledge writes
-  (record/supersede/reconcile/reveal/revoke), publication resolve, snapshot
-  retry, sandbox create — takes the same lock non-blocking: under contention
-  it answers `409 {"error": "<action> cannot run right now: another job is
-  already modifying this campaign (a week run?) — retry when it finishes.
-  Nothing was changed."}` instead of pinning the HTTP request behind a
-  30-minute week (a browser timeout on the way would turn the would-be
-  success into an error).
+- Per-campaign mutation lock (hardening, amended by ticket 02): one
+  mutating job at a time per campaign. The long jobs — `POST
+  .../simulation/week`, `POST .../world`, `POST .../maps/cities`,
+  `POST .../maps/sites`, `POST .../lore/entries`, `POST .../maps/world-map`
+  — no longer fast-fail while the lock is held: they QUEUE (see the
+  campaign job queue above) and the per-campaign worker takes the lock when
+  the job's turn comes. Every SHORT interactive writer — review
+  approve/delete, proposal accept/discard, `POST .../simulation/session`,
+  knowledge writes (record/supersede/reconcile/reveal/revoke), publication
+  resolve, snapshot retry, sandbox create — takes the same lock
+  non-blocking: under contention it answers `409 {"error": "<action> cannot
+  run right now: another job is already modifying this campaign Blocked by:
+  <what is running> — typically <how long, an estimate> — retry when it
+  finishes. Nothing was changed."}` instead of pinning the HTTP request
+  behind a 30-minute week (a browser timeout on the way would turn the
+  would-be success into an error).
 - Shared engine home (hardening): the simulator's
   `agentic-simulator/world/state.yaml` is ONE scratch file across campaigns.
   A second, process-wide lock (`engines.ENGINE_LOCK`) serializes every

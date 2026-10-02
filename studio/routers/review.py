@@ -26,8 +26,13 @@ Repeated submissions return the recorded result (receipts) instead of
 applying twice. Git snapshot outcomes are reported in the response, not
 just logged.
 
-All mutations run under the SHARED per-campaign lock (spine.campaign_lock,
-blocking — an in-flight week/generation job finishes first).
+All mutations run under the per-campaign lock, taken NON-blocking
+(spine.lock_nowait via campaign_lock_nowait — an in-flight week/generation
+job finishes first; under contention the request fast-fails 409 with a
+wait estimate instead of pinning the browser to a half-hour run). The
+approve core (approve_items) is lock-agnostic: the route takes the lock,
+and an auto-accepting lore job calls it under the lock it already holds
+(ticket 02).
 """
 
 import hashlib
@@ -451,139 +456,155 @@ def post_approve(name: str, body: ReviewBody):
     with campaign_lock_nowait(name, "approving the review items"):
         # fast-fail, not blocking (rationale in campaign_lock_nowait): a
         # blocking approve pins the request for up to a half-hour week run
-        ensure_publishable_409(name)
-        prior = _prior_result(name, body, "approve", "")
+        return approve_items(name, d, body)
+
+
+def approve_items(name: str, d, body: ReviewBody, *,
+                  auto: bool = False) -> dict:
+    """The approve flow proper — the CALLER holds the campaign lock (the
+    route takes it via campaign_lock_nowait; an auto-accepting job runs
+    under the lock it already holds, ticket 02). Same publication
+    transactions, receipts and snapshots as the manual path; with auto=True
+    the publication record carries "auto": true. Raises HTTPException on
+    the same conditions as before."""
+    ensure_publishable_409(name)
+    prior = _prior_result(name, body, "approve", "")
+    if prior:
+        return prior
+    path, inside = _pending_file(d, body.file)
+    try:
+        key = _idempotency_key(name, body, "approve",
+                               publication.file_revision(path))
+        prior = publication.receipt(name, key)
         if prior:
-            return prior
-        path, inside = _pending_file(d, body.file)
-        try:
-            key = _idempotency_key(name, body, "approve",
-                                   publication.file_revision(path))
-            prior = publication.receipt(name, key)
-            if prior:
-                return {**prior, "idempotent": True}
-            doc = _load_pending(path, inside)
-            chosen_idx = _select(doc, body)
-            chosen = [dict(doc["entries"][k]) for k in chosen_idx]
-            pages = [e for e in chosen if isinstance(e.get("page"), dict)]
-            entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
+            return {**prior, "idempotent": True}
+        doc = _load_pending(path, inside)
+        chosen_idx = _select(doc, body)
+        chosen = [dict(doc["entries"][k]) for k in chosen_idx]
+        pages = [e for e in chosen if isinstance(e.get("page"), dict)]
+        entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
 
-            writes: list[dict] = []
-            base: dict = {}
-            if body.expected_revision:
-                base[inside] = body.expected_revision
-            # a generated draft pins what its generator read (source files'
-            # byte revisions + directory fingerprints); a stale source
-            # refuses the whole approval so the DM regenerates instead of
-            # approving prose derived from superseded canon
-            for rel, rev in (doc.get("base_revisions") or {}).items():
-                base[str(rel)] = str(rev)
-            for rel, fp in (doc.get("input_fingerprints") or {}).items():
-                try:
-                    fp_dir = publication._safe_target(d, str(rel))
-                except publication.PublicationError as e:
-                    # input_fingerprints is hand-editable; a traversal in it
-                    # must refuse, never probe directories outside the vault
-                    raise HTTPException(status_code=422, detail=str(e))
-                current = publication.fingerprint_dir(fp_dir)
-                if current != fp:
-                    raise publication.RevisionConflict(
-                        f"{rel} membership changed since this draft was "
-                        f"generated (a page was created or deleted)")
+        writes: list[dict] = []
+        base: dict = {}
+        if body.expected_revision:
+            base[inside] = body.expected_revision
+        # a generated draft pins what its generator read (source files'
+        # byte revisions + directory fingerprints); a stale source
+        # refuses the whole approval so the DM regenerates instead of
+        # approving prose derived from superseded canon
+        for rel, rev in (doc.get("base_revisions") or {}).items():
+            base[str(rel)] = str(rev)
+        for rel, fp in (doc.get("input_fingerprints") or {}).items():
+            try:
+                fp_dir = publication._safe_target(d, str(rel))
+            except publication.PublicationError as e:
+                # input_fingerprints is hand-editable; a traversal in it
+                # must refuse, never probe directories outside the vault
+                raise HTTPException(status_code=422, detail=str(e))
+            current = publication.fingerprint_dir(fp_dir)
+            if current != fp:
+                raise publication.RevisionConflict(
+                    f"{rel} membership changed since this draft was "
+                    f"generated (a page was created or deleted)")
 
-            written, skipped, stubbed = 0, 0, 0
-            for e in pages:
+        written, skipped, stubbed = 0, 0, 0
+        for e in pages:
+            try:
+                rel = _page_rel(e)
+            except spine.CampaignError:
+                skipped += 1  # a title no filename can be made from:
+                continue      # the draft is discarded, the hand wins
+            if (d / rel).exists():
+                skipped += 1  # the hand page wins, the draft is discarded
+                continue
+            rel_written, text = _page_write(name, e)
+            writes.append({"path": rel_written, "text": text})
+            base[rel_written] = publication.ABSENT  # create-only, race-safe
+            written += 1
+        new_timeline = None
+        if entries:
+            new_timeline = _append_approved(d, entries)
+            writes.append({
+                "path": "lore/timeline.yaml",
+                "text": timeline.dump(new_timeline)})
+            for e in entries:
                 try:
-                    rel = _page_rel(e)
+                    stubs = _stub_writes(name, e)
                 except spine.CampaignError:
-                    skipped += 1  # a title no filename can be made from:
-                    continue      # the draft is discarded, the hand wins
-                if (d / rel).exists():
-                    skipped += 1  # the hand page wins, the draft is discarded
-                    continue
-                rel_written, text = _page_write(name, e)
-                writes.append({"path": rel_written, "text": text})
-                base[rel_written] = publication.ABSENT  # create-only, race-safe
-                written += 1
-            new_timeline = None
-            if entries:
-                new_timeline = _append_approved(d, entries)
-                writes.append({
-                    "path": "lore/timeline.yaml",
-                    "text": timeline.dump(new_timeline)})
-                for e in entries:
-                    try:
-                        stubs = _stub_writes(name, e)
-                    except spine.CampaignError:
-                        stubs = []
-                    for rel, text in stubs:
-                        if (d / rel).exists() \
-                                or any(w["path"] == rel for w in writes):
-                            continue  # a hand page or this batch's own
-                                      # page draft wins — never double-write
-                        writes.append({"path": rel, "text": text})
-                        base[rel] = publication.ABSENT
-                        stubbed += 1
-            keep = [e for k, e in enumerate(doc["entries"])
-                    if k not in set(chosen_idx)]
-            if keep:
-                out_doc = {k: v for k, v in doc.items() if k != "entries"}
-                # provenance must carry forward across what THIS approval
-                # changed (it rewrites timeline.yaml and stubs pinned pages)
-                # — left stale, the next approve 409s against a base
-                # revision this batch moved. The draft records the POST-write
-                # revision; base keeps the pre-write pin, checked against
-                # current disk now.
-                pinned = dict(out_doc.get("base_revisions") or {})
-                for w in writes:
-                    rel = w["path"]
-                    if rel in pinned and not w.get("delete"):
-                        pinned[rel] = publication.revision_of_bytes(w["text"])
-                out_doc["base_revisions"] = pinned
-                fps = dict(out_doc.get("input_fingerprints") or {})
-                for rel in fps:
-                    prefix = rel.rstrip("/") + "/"
-                    if any(w["path"].startswith(prefix) for w in writes):
-                        fps[rel] = publication.fingerprint_dir_after(
-                            d, rel, writes)
-                out_doc["input_fingerprints"] = fps
-                out_doc["entries"] = keep
-                writes.append({
-                    "path": inside,
-                    "text": spine.dump_yaml(out_doc)})
-            else:
-                writes.append({"path": inside, "delete": True})
+                    stubs = []
+                for rel, text in stubs:
+                    if (d / rel).exists() \
+                            or any(w["path"] == rel for w in writes):
+                        continue  # a hand page or this batch's own
+                                  # page draft wins — never double-write
+                    writes.append({"path": rel, "text": text})
+                    base[rel] = publication.ABSENT
+                    stubbed += 1
+        keep = [e for k, e in enumerate(doc["entries"])
+                if k not in set(chosen_idx)]
+        if keep:
+            out_doc = {k: v for k, v in doc.items() if k != "entries"}
+            # provenance must carry forward across what THIS approval
+            # changed (it rewrites timeline.yaml and stubs pinned pages)
+            # — left stale, the next approve 409s against a base
+            # revision this batch moved. The draft records the POST-write
+            # revision; base keeps the pre-write pin, checked against
+            # current disk now.
+            pinned = dict(out_doc.get("base_revisions") or {})
+            for w in writes:
+                rel = w["path"]
+                if rel in pinned and not w.get("delete"):
+                    pinned[rel] = publication.revision_of_bytes(w["text"])
+            out_doc["base_revisions"] = pinned
+            fps = dict(out_doc.get("input_fingerprints") or {})
+            for rel in fps:
+                prefix = rel.rstrip("/") + "/"
+                if any(w["path"].startswith(prefix) for w in writes):
+                    fps[rel] = publication.fingerprint_dir_after(
+                        d, rel, writes)
+            out_doc["input_fingerprints"] = fps
+            out_doc["entries"] = keep
+            writes.append({
+                "path": inside,
+                "text": spine.dump_yaml(out_doc)})
+        else:
+            writes.append({"path": inside, "delete": True})
 
-            pub = publication.publish(
-                name, writes,
-                operation=f"approve {len(chosen)} pending entries",
-                base_revisions=base, idempotency_key=key)
-        except publication.RevisionConflict as e:
-            raise _revision_conflict_409(e)
-        except publication.PublicationConflictError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        except HTTPException:
-            raise  # deliberate 4xx from _select/_append_approved etc.
-        except Exception as e:  # noqa: BLE001 — mid-flight publication failure
-            raise publication_500("approval", e)
+        pub = publication.publish(
+            name, writes,
+            operation=f"approve {len(chosen)} pending entries"
+                      + (" (auto-accepted)" if auto else ""),
+            base_revisions=base, idempotency_key=key, auto=auto)
+    except publication.RevisionConflict as e:
+        raise _revision_conflict_409(e)
+    except publication.PublicationConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise  # deliberate 4xx from _select/_append_approved etc.
+    except Exception as e:  # noqa: BLE001 — mid-flight publication failure
+        raise publication_500("approval", e)
 
-        result = {"approved": len(chosen), "entries": len(entries),
-                  "pages": written, "pages_skipped": skipped, "stubs": stubbed,
-                  "transaction": pub["transaction"]}
-        if pub["state"] == "noop":
-            result["noop"] = True
-        publication.record_receipt(name, key, result)
-        msg = f"campaign/{name}: approve {len(chosen)} pending entries"
-        if written or skipped:
-            msg += f" (+{written} page(s)" + \
-                (f", {skipped} skipped" if skipped else "") + ")"
-        elif stubbed:
-            msg += f" (+{stubbed} stub page(s))"
-        result["snapshot"] = finalize_publication(
-            name, pub["transaction"], msg)
-        # "approved" counts everything chosen (entries + page drafts) so the
-        # pre-vault contract ("approved: N") still reads true
-        return result
+    result = {"approved": len(chosen), "entries": len(entries),
+              "pages": written, "pages_skipped": skipped, "stubs": stubbed,
+              "transaction": pub["transaction"]}
+    if auto:
+        result["auto"] = True
+    if pub["state"] == "noop":
+        result["noop"] = True
+    publication.record_receipt(name, key, result)
+    msg = f"campaign/{name}: approve {len(chosen)} pending entries"
+    if auto:
+        msg += " (auto-accepted)"
+    if written or skipped:
+        msg += f" (+{written} page(s)" + \
+            (f", {skipped} skipped" if skipped else "") + ")"
+    elif stubbed:
+        msg += f" (+{stubbed} stub page(s))"
+    result["snapshot"] = finalize_publication(
+        name, pub["transaction"], msg)
+    # "approved" counts everything chosen (entries + page drafts) so the
+    # pre-vault contract ("approved: N") still reads true
+    return result
 
 
 @router.post("/api/campaign/{name}/review/delete")

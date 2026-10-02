@@ -24,10 +24,11 @@ Site generation: the full documented battlemap chain — gen-<kind> → render
 (worlds/sites/<name> is battlemap.py's documented output location), then
 the artifact set is copied into maps/sites/<slug>/ (D4).
 
-Generation jobs are campaign MUTATIONS: each takes the per-campaign lock at
-submit time (routers/common.submit_campaign_job — 409 while another
-mutating job runs) and commits a canon snapshot on success
-("campaign/<name>: generate world / map city / map site ...").
+Generation jobs are campaign MUTATIONS: each goes through the campaign's
+FIFO job queue (routers/common.submit_campaign_job — 202 with a queue
+position while another mutating job runs, ticket 02) and commits a canon
+snapshot on success ("campaign/<name>: generate world / map city / map
+site ...").
 """
 
 import json

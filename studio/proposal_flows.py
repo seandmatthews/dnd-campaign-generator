@@ -49,162 +49,174 @@ class ProposalFlowError(Exception):
 
 
 def accept(name: str, pid: str) -> dict:
-    """Publish the WHOLE pending proposal. For a simulated_week that is
-    state + chronicles + timeline entries; for session_effects, the new
-    state (history events + validated resource/fact changes). One
-    transactional publication (publication.py), validated against the base
-    revisions recorded when the proposal was created — an external edit
-    between then and now is a 409, never a silent overwrite. Idempotent:
-    repeating the accept returns the recorded result."""
+    """Publish the WHOLE pending proposal (the route entry point): takes
+    the campaign lock fast-fail, then runs accept_locked."""
+    with _lock(name, "accepting the proposal"):
+        return accept_locked(name, pid)
+
+
+def accept_locked(name: str, pid: str, *, auto: bool = False) -> dict:
+    """The accept flow proper — the CALLER holds the campaign lock (the
+    route takes it fast-fail; an auto-accepting job runs under the lock it
+    already holds, ticket 02). With auto=True the publication record
+    carries "auto": true — the job itself is the approver. Idempotent,
+    transactional, revision-validated, exactly like the manual accept."""
     # a stable key for this exact accept: a repeat (double click, retry,
     # restart) returns the recorded result instead of applying twice
     key = hashlib.sha256(
         json.dumps(["accept-proposal", name, pid]).encode("utf-8")).hexdigest()
-    with _lock(name, "accepting the proposal"):
-        _ensure_publishable(name)
-        prior = publication.receipt_with_snapshot(name, key)
-        if prior:
-            # the crash window AFTER the receipt: publish landed, the status
-            # flip did not. Repair it from the receipt, or a proposal that
-            # is actually canon stays "pending" and blocks every new week.
-            try:
-                b = proposals.load(name, pid)
-                if b["manifest"].get("status") == "pending":
-                    proposals.set_status(name, pid, "accepted",
-                                         decided_note="status repaired from "
-                                                      "the accept receipt")
-                if b["manifest"].get("kind") == "session_changes":
-                    # reconstruct the draft/decision bookkeeping too: the
-                    # UI status is rebuilt from the receipt, never left
-                    # half-finished by a crash between publish and repair
-                    sessions.on_accepted(name, b["manifest"], b)
-            except proposals.ProposalError:
-                pass  # bundle gone or damaged: the receipt still answers
-            return {**prior, "idempotent": True}
+    _ensure_publishable(name)
+    prior = publication.receipt_with_snapshot(name, key)
+    if prior:
+        # the crash window AFTER the receipt: publish landed, the status
+        # flip did not. Repair it from the receipt, or a proposal that
+        # is actually canon stays "pending" and blocks every new week.
         try:
-            bundle = proposals.load(name, pid)
-        except proposals.ProposalError as e:
-            raise ProposalFlowError(404, str(e))
-        manifest = bundle["manifest"]
-        if manifest.get("status") != "pending":
-            raise ProposalFlowError(
-                409,
-                f"proposal {pid} is {manifest.get('status')!r}, "
-                "not pending — refresh and check its state")
-        prior_tx = publication.transaction_for_key(name, key)
-        if prior_tx is not None:
-            # the crash window: this accept was applied and then recovered
-            # by boot (receipt never written). The staged outcome IS the
-            # original result — finish the bookkeeping and answer once.
-            result = accept_result(manifest, bundle, prior_tx["transaction"])
-            publication.record_receipt(name, key, result)
-            proposals.set_status(name, pid, "accepted",
-                                 decided_note="published via crash recovery")
-            if manifest.get("kind") == "session_changes":
-                sessions.on_accepted(name, manifest, bundle)
-            snap = _finalize(name, prior_tx["transaction"],
-                             accept_message(name, manifest, None))
-            return {**result, "snapshot": snap, "idempotent": True}
-        d = spine.campaign_dir(name)
-
-        base = dict(manifest.get("base_revisions") or {})
-        writes = [{
-            "path": "simulation/state.yaml",
-            "text": bundle["state_text"],
-        }]
-        if manifest.get("kind") == "session_changes":
-            # the combined transaction: state after-image (effects already
-            # applied by the engine at prepare time) + the knowledge and
-            # disclosure after-images + the session decision record — one
-            # publication, one receipt, recover together
-            extra = bundle.get("extra") or {}
-            for key_, rel in (("knowledge", "simulation/knowledge.yaml"),
-                              ("disclosure",
-                               "simulation/party-knowledge.yaml")):
-                if extra.get(key_) is not None:
-                    writes.append({
-                        "path": rel,
-                        "text": spine.dump_yaml(extra[key_]),
-                    })
-            decision = extra.get("decision") or {}
-            writes.append({
-                "path": f"sessions/{manifest.get('session_id')}"
-                        f"/decisions/{pid}.yaml",
-                "text": sessions.decision_text(decision),
-            })
-            chron = None
-        elif manifest.get("kind") in STATE_ONLY_KINDS:
-            chron = None
-        else:
-            entries = bundle["entries"]
-            try:
-                tdoc, tentries = timeline.load(d)
-                new_timeline = timeline.append(tdoc, tentries, entries)
-            except timeline.TimelineConflict as e:
-                raise ProposalFlowError(409, str(e))
-            except timeline.TimelineBadFile as e:
-                raise ProposalFlowError(422, str(e))
-            writes.append({
-                "path": "lore/timeline.yaml",
-                "text": timeline.dump(new_timeline),
-            })
-            for fn in bundle["chronicles"]:
-                rel = f"simulation/chronicle/{fn}"
-                writes.append({"path": rel, "text": bundle["chronicles"][fn]})
-                base[rel] = publication.ABSENT  # create-only: a file that
-                # appeared in the meantime is an external edit -> conflict
-            chron = manifest.get("chronicle") \
-                or chronicle_meta_from_texts(bundle["chronicles"])
-        try:
-            pub = publication.publish(
-                name, writes, operation=accept_operation(manifest),
-                base_revisions=base, idempotency_key=key)
-        except publication.RevisionConflict as e:
-            raise ProposalFlowError(
-                409,
-                f"stale proposal: {e} — the campaign changed since "
-                f"this was generated. Discard it and prepare a fresh "
-                f"one from the new base. Nothing was written.")
-        except publication.PublicationConflictError as e:
-            raise ProposalFlowError(409, str(e))
-        except Exception as e:  # noqa: BLE001 — mid-flight failure
-            raise ProposalFlowError(
-                500,
-                f"the proposal could not be published ({e}) — the staged "
-                "transaction is kept and will be recovered automatically "
-                "when the studio restarts")
-
-        result = accept_result(manifest, bundle, pub["transaction"])
-        if pub["state"] == "noop":
-            result["noop"] = True
-        if manifest.get("kind") == "session_changes":
-            # canon landed: freeze the draft's selected suggestions and
-            # record the decision — best-effort; the receipt repairs it on
-            # idempotent replay
-            sessions.on_accepted(name, manifest, bundle)
+            b = proposals.load(name, pid)
+            if b["manifest"].get("status") == "pending":
+                proposals.set_status(name, pid, "accepted",
+                                     decided_note="status repaired from "
+                                                  "the accept receipt")
+            if b["manifest"].get("kind") == "session_changes":
+                # reconstruct the draft/decision bookkeeping too: the
+                # UI status is rebuilt from the receipt, never left
+                # half-finished by a crash between publish and repair
+                sessions.on_accepted(name, b["manifest"], b)
+        except proposals.ProposalError:
+            pass  # bundle gone or damaged: the receipt still answers
+        return {**prior, "idempotent": True}
+    try:
+        bundle = proposals.load(name, pid)
+    except proposals.ProposalError as e:
+        raise ProposalFlowError(404, str(e))
+    manifest = bundle["manifest"]
+    if manifest.get("status") != "pending":
+        raise ProposalFlowError(
+            409,
+            f"proposal {pid} is {manifest.get('status')!r}, "
+            "not pending — refresh and check its state")
+    prior_tx = publication.transaction_for_key(name, key)
+    if prior_tx is not None:
+        # the crash window: this accept was applied and then recovered
+        # by boot (receipt never written). The staged outcome IS the
+        # original result — finish the bookkeeping and answer once.
+        result = accept_result(manifest, bundle, prior_tx["transaction"])
         publication.record_receipt(name, key, result)
-        # the week HAS landed and the receipt is recorded: a set_status
-        # failure here must not surface as a 500 for a publish that
-        # succeeded — the receipt repairs the status on retry
+        proposals.set_status(name, pid, "accepted",
+                             decided_note="published via crash recovery")
+        if manifest.get("kind") == "session_changes":
+            sessions.on_accepted(name, manifest, bundle)
+        snap = _finalize(name, prior_tx["transaction"],
+                         accept_message(name, manifest, None))
+        return {**result, "snapshot": snap, "idempotent": True}
+    d = spine.campaign_dir(name)
+
+    base = dict(manifest.get("base_revisions") or {})
+    writes = [{
+        "path": "simulation/state.yaml",
+        "text": bundle["state_text"],
+    }]
+    if manifest.get("kind") == "session_changes":
+        # the combined transaction: state after-image (effects already
+        # applied by the engine at prepare time) + the knowledge and
+        # disclosure after-images + the session decision record — one
+        # publication, one receipt, recover together
+        extra = bundle.get("extra") or {}
+        for key_, rel in (("knowledge", "simulation/knowledge.yaml"),
+                          ("disclosure",
+                           "simulation/party-knowledge.yaml")):
+            if extra.get(key_) is not None:
+                writes.append({
+                    "path": rel,
+                    "text": spine.dump_yaml(extra[key_]),
+                })
+        decision = extra.get("decision") or {}
+        writes.append({
+            "path": f"sessions/{manifest.get('session_id')}"
+                    f"/decisions/{pid}.yaml",
+            "text": sessions.decision_text(decision),
+        })
+        chron = None
+    elif manifest.get("kind") in STATE_ONLY_KINDS:
+        chron = None
+    else:
+        entries = bundle["entries"]
         try:
-            proposals.set_status(name, pid, "accepted",
-                                 decided_note="published; see the receipt")
-        except proposals.ProposalError as e:
-            _log.error("accept of %s published but could not mark the "
-                       "bundle accepted (%s) — the receipt repairs it on "
-                       "retry", pid, e)
-            result["status_flip_failed"] = str(e)
-        msg = accept_message(name, manifest, chron)
-        # vault stage 4 advisory decoration after publication, as before
+            tdoc, tentries = timeline.load(d)
+            new_timeline = timeline.append(tdoc, tentries, entries)
+        except timeline.TimelineConflict as e:
+            raise ProposalFlowError(409, str(e))
+        except timeline.TimelineBadFile as e:
+            raise ProposalFlowError(422, str(e))
+        writes.append({
+            "path": "lore/timeline.yaml",
+            "text": timeline.dump(new_timeline),
+        })
         for fn in bundle["chronicles"]:
-            try:
-                if links.linkify_chronicle(name, fn):
-                    _log.info("linked lore names in chronicle/%s", fn)
-            except Exception as e:  # noqa: BLE001 — advisory, never blocking
-                _log.warning("chronicle linkify skipped for %s: %s", fn, e)
-        snap = _finalize(name, pub["transaction"], msg)
-        result["snapshot"] = snap
-        return result
+            rel = f"simulation/chronicle/{fn}"
+            writes.append({"path": rel, "text": bundle["chronicles"][fn]})
+            base[rel] = publication.ABSENT  # create-only: a file that
+            # appeared in the meantime is an external edit -> conflict
+        chron = manifest.get("chronicle") \
+            or chronicle_meta_from_texts(bundle["chronicles"])
+    try:
+        pub = publication.publish(
+            name, writes,
+            operation=accept_operation(manifest)
+                      + (" (auto-accepted)" if auto else ""),
+            base_revisions=base, idempotency_key=key, auto=auto)
+    except publication.RevisionConflict as e:
+        raise ProposalFlowError(
+            409,
+            f"stale proposal: {e} — the campaign changed since "
+            f"this was generated. Discard it and prepare a fresh "
+            f"one from the new base. Nothing was written.")
+    except publication.PublicationConflictError as e:
+        raise ProposalFlowError(409, str(e))
+    except Exception as e:  # noqa: BLE001 — mid-flight failure
+        raise ProposalFlowError(
+            500,
+            f"the proposal could not be published ({e}) — the staged "
+            "transaction is kept and will be recovered automatically "
+            "when the studio restarts")
+
+    result = accept_result(manifest, bundle, pub["transaction"])
+    if auto:
+        result["auto"] = True
+    if pub["state"] == "noop":
+        result["noop"] = True
+    if manifest.get("kind") == "session_changes":
+        # canon landed: freeze the draft's selected suggestions and
+        # record the decision — best-effort; the receipt repairs it on
+        # idempotent replay
+        sessions.on_accepted(name, manifest, bundle)
+    publication.record_receipt(name, key, result)
+    # the week HAS landed and the receipt is recorded: a set_status
+    # failure here must not surface as a 500 for a publish that
+    # succeeded — the receipt repairs the status on retry
+    try:
+        proposals.set_status(name, pid, "accepted",
+                             decided_note="published; see the receipt"
+                                          + (" (auto-accepted)" if auto
+                                             else ""))
+    except proposals.ProposalError as e:
+        _log.error("accept of %s published but could not mark the "
+                   "bundle accepted (%s) — the receipt repairs it on "
+                   "retry", pid, e)
+        result["status_flip_failed"] = str(e)
+    msg = accept_message(name, manifest, chron)
+    if auto:
+        msg += " (auto-accepted)"
+    # vault stage 4 advisory decoration after publication, as before
+    for fn in bundle["chronicles"]:
+        try:
+            if links.linkify_chronicle(name, fn):
+                _log.info("linked lore names in chronicle/%s", fn)
+        except Exception as e:  # noqa: BLE001 — advisory, never blocking
+            _log.warning("chronicle linkify skipped for %s: %s", fn, e)
+    snap = _finalize(name, pub["transaction"], msg)
+    result["snapshot"] = snap
+    return result
 
 
 def discard(name: str, pid: str) -> dict:

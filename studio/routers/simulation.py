@@ -39,6 +39,7 @@ from pathlib import Path
 import canon
 import engines
 import forecasts
+import jobs
 import llm_client
 import proposal_flows
 import proposals
@@ -49,6 +50,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, StrictBool, field_validator
 
 from routers.common import (
+    blocked_by_line,
+    blocking_findings,
     campaign_lock_nowait,
     ensure_publishable_409,
     require_campaign,
@@ -60,9 +63,40 @@ from routers.common import (
 router = APIRouter()
 
 
+def _auto_accept_proposal(name: str, pid: str, findings: list, log) -> dict:
+    """The auto-accept half of a staging job (ticket 02): the job itself
+    accepts the proposal it just staged, through the SAME accept path the
+    button uses (same publication transactions, receipts, snapshots),
+    recorded in the transaction as auto: true — the job is the approver.
+    Error-level findings in the bundle block it: the proposal stays
+    pending, as today. The caller already holds the campaign lock (the
+    staging job runs under it), which is why this is accept_locked. An
+    accept failure never fails the run: the staged proposal is the
+    deliverable, and the note says so."""
+    blockers = blocking_findings(findings)
+    if blockers:
+        log(f"auto-accept blocked: {len(blockers)} error-level finding(s) — "
+            "the proposal stays pending for review")
+        return {"auto_accept": "blocked", "blocking_findings": blockers}
+    log("auto-accepting the staged proposal (the job is the approver; "
+        "recorded as auto in the publication)")
+    try:
+        out = proposal_flows.accept_locked(name, pid, auto=True)
+    except proposal_flows.ProposalFlowError as e:
+        log(f"auto-accept failed — the proposal stays pending for review: "
+            f"{e.detail}")
+        return {"auto_accept": "error", "auto_accept_error": e.detail}
+    log("auto-accepted: the proposal is published (see the receipt)")
+    return {"auto_accept": "approved", "accept_result": out}
+
+
 class WeekBody(BaseModel):
     # StrictBool: the string "true" must not pass the expensive-button gate
     confirm: StrictBool
+    # opt-in auto-accept (ticket 02): publish the week without reading it
+    # first. StrictBool + default off — reading the chronicle is the point
+    # of the feature, so the checkbox is loud and the default is no.
+    auto_accept: StrictBool = False
     _confirm_is_true = strict_confirm(
         "this runs a real week: it spends API credits and advances the "
         "canon clock")
@@ -428,15 +462,22 @@ def post_week(name: str, body: WeekBody):
                    f"awaiting review ({pending.get('proposal_id')}) — accept "
                    f"or discard it before generating another")
     ensure_publishable_409(name)  # a parked conflict blocks campaign writes
-    # fast-fail courtesy: the engine home is shared across campaigns, and the
-    # job's blocking acquire would otherwise queue a second week behind a
-    # half-hour run from a different campaign with no signal at all
+    auto_accept = bool(body.auto_accept)
+    # fast-fail courtesy: the engine home is shared across campaigns, and
+    # the job's blocking acquire would otherwise queue a second week behind
+    # a half-hour run from a different campaign with no signal at all.
+    # This contention CANNOT join the queue (the queue is per-campaign; the
+    # engine home is global), so the 409 carries the honest wait estimate
+    # from the rolling history instead.
     if not engines.ENGINE_LOCK.acquire(timeout=1.0):
+        line = blocked_by_line(
+            jobs.running_jobs(kinds=("sim-week", "forecast")))
         raise HTTPException(
             status_code=409,
             detail="the engine home is busy — a week run is already in "
-                   "flight (one engine home, one week at a time)")
-    engines.ENGINE_LOCK.release()
+                   "flight (one engine home, one week at a time)"
+                   + (line + "." if line else ""))
+    engines.ENGINE_LOCK.release()  # probe only — the job takes it for real
 
     def job(log):
         # the pre-route check raced: re-check under the campaign lock this
@@ -455,7 +496,19 @@ def post_week(name: str, body: WeekBody):
         # Lock order: campaign lock (held by this job) outside, engine
         # lock inside — views/why take only the engine lock.
         with engines.engine_lock_logged(log, "a week run or forecast"):
-            return engines.run_week_proposal(name, d, log)
+            result = engines.run_week_proposal(name, d, log)
+        if auto_accept:
+            # loud, and only behind the explicit checkbox: publish the
+            # week without reading it first. The engine already refuses
+            # invalid candidates, git keeps the undo, and the receipt
+            # records the auto-accept.
+            log("AUTO-ACCEPT is ON: the week will be published the moment "
+                "it stages, without reading the chronicle first")
+            bundle = proposals.load(name, result["proposal_id"])
+            result.update(_auto_accept_proposal(
+                name, result["proposal_id"], bundle.get("findings") or [],
+                log))
+        return result
 
     return submit_campaign_job("sim-week", name, job)
 
@@ -824,6 +877,13 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
     }
 
 
+class GoalReviewBody(BaseModel):
+    """Opt-in auto-accept (ticket 02): the staged goal_updates proposal is
+    accepted by the job itself the moment it lands — unless an error-level
+    finding blocks it (then it stays pending, as today). Default off."""
+    auto_accept: bool = False
+
+
 # one bounded LLM pass + the effects CLI runs. complete()'s honest worst
 # case is 3 attempts x 300s x 3 passes (base + two length extensions) plus
 # backoff ~= 2700s: a slow-but-working provider must not get the tree
@@ -832,12 +892,13 @@ _GOAL_REVIEW_TIMEOUT = 2800
 
 
 @router.post("/api/campaign/{name}/simulation/goal-review", status_code=202)
-def post_goal_review(name: str):
+def post_goal_review(name: str, body: GoalReviewBody | None = None):
     """Goal review: the sim proposes faction goal updates grounded in the
     ledger (recorded weeks, rumors, canon deadlines), staged as a
     `goal_updates` proposal the DM reviews exactly like a week. Runs as a
     job (one bounded LLM pass in the engine); nothing changes until the
-    proposal is accepted."""
+    proposal is accepted — or auto-accepted (opt-in, ticket 02)."""
+    auto_accept = bool(body.auto_accept) if body is not None else False
     d = require_campaign(name)
     if not (d / "simulation" / "state.yaml").is_file():
         raise HTTPException(
@@ -963,9 +1024,13 @@ def post_goal_review(name: str):
         diff = proposals.diff_states(base_doc, after_doc, [])
         log(f"staged {len(found)} proposed goal update(s) ({pid}) — nothing "
             "in the campaign has changed; review, then accept or discard")
-        return {"proposal_id": pid, "status": "pending",
-                "kind": "goal_updates", "proposed": len(found),
-                "findings": list(findings), "staged": True, "diff": diff}
+        result = {"proposal_id": pid, "status": "pending",
+                  "kind": "goal_updates", "proposed": len(found),
+                  "findings": list(findings), "staged": True, "diff": diff}
+        if auto_accept:
+            result.update(_auto_accept_proposal(
+                name, pid, list(findings), log))
+        return result
 
     return submit_campaign_job("goal-review", name, job)
 
@@ -999,11 +1064,16 @@ def post_forecast(name: str, body: ForecastBody):
                    f"({active.get('forecast_id')}) — read it and discard it, "
                    f"or wait to re-forecast from a new canon week")
     ensure_publishable_409(name)
+    # same cross-campaign contention as the week: cannot join a per-
+    # campaign queue, so the 409 says what is running and how long it takes
     if not engines.ENGINE_LOCK.acquire(timeout=1.0):
+        line = blocked_by_line(
+            jobs.running_jobs(kinds=("sim-week", "forecast")))
         raise HTTPException(
             status_code=409,
             detail="the engine home is busy — a week run is already in "
-                   "flight (one engine home, one scratch state at a time)")
+                   "flight (one engine home, one scratch state at a time)"
+                   + (line + "." if line else ""))
     engines.ENGINE_LOCK.release()
 
     def job(log):

@@ -49,20 +49,62 @@
   // the caller can remember or decorate it. The button re-enables either
   // way unless reenable === false (callers that gate the button on their
   // own state re-enable in their own catch).
+  //
+  // Queue awareness (ticket 02): while the job sits in the campaign's FIFO
+  // queue, errBox shows a banner with its position and a Cancel button; the
+  // log gets one line per position change. Cancelling is a deliberate user
+  // act, so it ends the watch with a note, not an error panel.
   Studio.runJob = async function (o) {
     if (o.btn) o.btn.disabled = true;
     if (o.errBox) o.errBox.innerHTML = '';
     if (o.log && o.log.open) o.log.open();
+    let lastPosition = null;
+    const dropBanner = () => {
+      lastPosition = null;
+      if (o.errBox) o.errBox.innerHTML = '';
+    };
+    const onJob = (job) => {
+      if (!o.errBox) return;
+      if (job.status !== 'queued') {
+        if (lastPosition !== null) dropBanner();
+        return;
+      }
+      const pos = (job.position != null) ? job.position : 0;
+      if (pos === lastPosition) return;
+      lastPosition = pos;
+      const where = (pos === 0) ? 'next in line — it runs when the current job finishes'
+        : ('behind ' + pos + ' job' + (pos === 1 ? '' : 's') + ' — it runs when its turn comes');
+      if (o.log) o.log.push('— queued: ' + where + ' —');
+      o.errBox.innerHTML = '';
+      const banner = el(
+        '<div class="queue-banner" role="status"><span class="queue-text">Queued: ' +
+        esc(where) + '</span> <button type="button" class="btn queue-cancel">Cancel</button></div>');
+      banner.querySelector('.queue-cancel').addEventListener('click', () => {
+        const b = banner.querySelector('.queue-cancel');
+        b.disabled = true;
+        b.textContent = 'Cancelling…';
+        Studio.cancelJob(job.id).catch(() => {});
+      });
+      o.errBox.appendChild(banner);
+    };
     try {
       const resp = await api(o.path, { method: 'POST', body: o.body });
       if (!resp || !resp.job_id) throw { status: 0, error: 'Server returned no job_id' };
       const result = await pollJob(resp.job_id,
-        o.log ? (line) => o.log.push(line) : null, o.timeoutMs);
+        o.log ? (line) => o.log.push(line) : null, o.timeoutMs, onJob);
+      dropBanner();
       if (o.doneMsg) {
         toast(typeof o.doneMsg === 'function' ? o.doneMsg(result) : o.doneMsg, 'ok');
       }
       return result;
     } catch (err) {
+      dropBanner();
+      if (err && err.cancelled) {
+        if (o.errBox) o.errBox.innerHTML = '';
+        if (o.log) o.log.push('— cancelled before it started —');
+        toast('Job cancelled — it was still queued, nothing ran.', 'info');
+        return null;
+      }
       if (o.errBox) {
         o.errBox.innerHTML = '';
         o.errBox.appendChild(errorPanel(err));
@@ -112,7 +154,7 @@
     return data;
   }
 
-  function pollJob(id, onLog, timeoutMs) {
+  function pollJob(id, onLog, timeoutMs, onJob) {
     // A wedged job (engine killed, LLM hanging) must not tick forever: after
     // timeoutMs (default 31 min = the week job's 1800 s engine cap + slack)
     // polling gives up with a readable error. The job itself keeps running
@@ -163,10 +205,16 @@
           const merged = StudioLogTail.mergeLogTail(job.log_tail, logCursor);
           logCursor = merged.cursor;
           if (typeof onLog === 'function') merged.lines.forEach((line) => onLog(line));
+          if (typeof onJob === 'function') onJob(job);
           if (job.status === 'done') {
             finish(resolve, job.result);
           } else if (job.status === 'error') {
             finish(reject, { status: 500, error: job.error || 'Job failed' });
+          } else if (job.status === 'cancelled') {
+            // dequeued before it ever ran (ticket 02): not a failure — the
+            // caller (runJob) reads .cancelled and says so, quietly
+            finish(reject, { status: 0, cancelled: true,
+              error: 'Job cancelled — it was still queued and never ran' });
           }
         } catch (err) {
           finish(reject, err);
@@ -177,6 +225,61 @@
       const timer = setInterval(tick, 1000);
       tick();
     });
+  }
+
+  /* ---------- the campaign job queue (ticket 02) ---------- */
+
+  Studio.cancelJob = async function (jobId) {
+    return api('/api/jobs/' + encodeURIComponent(jobId) + '/cancel',
+      { method: 'POST' });
+  };
+
+  // The queue strip under the header: what is running (with its wait
+  // estimate) and what is queued, for the SELECTED campaign. A GM who
+  // reopened the app mid-evening sees the queue they left behind — and a
+  // 409's "Blocked by" line has a visible counterpart. Cheap: one small
+  // GET on a slow poll, only while a campaign is selected.
+  let queueStripTimer = null;
+  function renderQueueStrip(snap) {
+    const old = document.querySelector('.queue-strip');
+    const busy = snap && ((snap.running && snap.running.id) ||
+                          (snap.queued && snap.queued.length));
+    if (!busy) { if (old) old.remove(); return; }
+    const parts = [];
+    if (snap.running) {
+      parts.push('<strong>Running:</strong> ' + esc(snap.running.kind));
+      const est = snap.running_estimate;
+      if (est) parts.push(' <span class="muted">(' + esc(etaText(est)) + ')</span>');
+    }
+    (snap.queued || []).forEach((j) => {
+      const pos = (j.position != null) ? j.position : '?';
+      parts.push('<strong>Queued:</strong> ' + esc(j.kind) +
+        ' <span class="muted">(position ' + esc(String(pos)) + ')</span>');
+    });
+    if (old) { old.remove(); }
+    const strip = el('<div class="queue-strip" role="status">' +
+      '<div class="queue-strip-inner">' + parts.join(' &middot; ') + '</div></div>');
+    const header = document.querySelector('.app-header');
+    if (header) header.insertAdjacentElement('afterend', strip);
+  }
+
+  function etaText(est) {
+    // "typically 8-15 minutes" — the same phrasing the 409s carry; the
+    // estimate label is server-computed, the UI only renders it
+    const fmt = (s) => (s < 120 ? Math.max(1, Math.round(s)) + ' s'
+      : Math.round(s / 60) + ' min');
+    const lo = est.low_s, hi = est.high_s;
+    if (typeof lo !== 'number' || typeof hi !== 'number') return 'an estimate is not available yet';
+    return 'typically ' + (fmt(lo) === fmt(hi) ? fmt(lo) : fmt(lo) + '-' + fmt(hi)) +
+      ' — an estimate';
+  }
+
+  function pollQueueStrip() {
+    const camp = Studio.state.campaign;
+    if (!camp) { renderQueueStrip(null); return; }
+    api('/api/campaign/' + encodeURIComponent(camp) + '/jobs')
+      .then(renderQueueStrip)
+      .catch(() => { renderQueueStrip(null); });
   }
 
   /* ---------- history snapshot recovery ---------- */
@@ -783,6 +886,10 @@
     // tab now would wipe it with 'No campaign selected' advice that cannot
     // work while the server is down
     checkSetup(); // fire-and-forget: the strip appears only if setup is incomplete
+    // the job-queue strip (ticket 02): a slow poll while a campaign is
+    // selected — what is running, what is queued, and the honest wait
+    queueStripTimer = setInterval(pollQueueStrip, 5000);
+    pollQueueStrip();
   }
 
   /* ---------- exports ---------- */

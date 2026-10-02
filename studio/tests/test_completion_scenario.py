@@ -47,8 +47,10 @@ def _facts(client, tmp_spine_root):
 
 def _campaign_bytes(tmp_spine_root):
     """Canon bytes only: the campaign's live files — not the scratch engine
-    home, recovery payloads, proposal staging, or git internals."""
-    skip = {"engine-home", ".studio-transactions", ".git", "proposals"}
+    home, recovery payloads, job-duration history, proposal staging, or git
+    internals."""
+    skip = {"engine-home", ".studio-transactions", ".studio-jobs", ".git",
+            "proposals"}
     return {p.relative_to(tmp_spine_root).as_posix(): p.read_bytes()
             for p in sorted(tmp_spine_root.rglob("*")) if p.is_file()
             and not (skip & set(p.parts))}

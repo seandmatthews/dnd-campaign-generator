@@ -172,6 +172,17 @@ class CampaignLock:
                     return False
                 time.sleep(0.05)
 
+    def locked(self) -> bool:
+        """Whether the in-process lock is held RIGHT NOW (best-effort,
+        unlocked-on-failure probe). The queue uses it at submit time to
+        answer "will this job start immediately?" honestly — the holder
+        may be a CLI process about to release, so the answer is a probe
+        reading, not a promise."""
+        if self._local.acquire(False):
+            self._local.release()
+            return False
+        return True
+
     def release(self) -> None:
         try:
             fh, self._fh = self._fh, None

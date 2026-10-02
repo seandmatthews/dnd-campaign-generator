@@ -310,6 +310,7 @@ def transactions(name: str) -> list[dict]:
                 "conflicts": list(m.get("conflicts") or []),
                 "snapshot": m.get("snapshot"),
                 "idempotency_key": m.get("idempotency_key"),
+                "auto": bool(m.get("auto")),
             })
     return out
 
@@ -361,7 +362,8 @@ def ensure_publishable(name: str) -> None:
 
 def publish(name: str, writes: list[dict], *, operation: str,
             base_revisions: dict | None = None,
-            idempotency_key: str | None = None) -> dict:
+            idempotency_key: str | None = None,
+            auto: bool = False) -> dict:
     """Publish a set of file changes transactionally.
 
     writes: [{"path": campaign-rel posix path, "text": str}, ...] and
@@ -370,6 +372,9 @@ def publish(name: str, writes: list[dict], *, operation: str,
             viewed — re-checked here, under the campaign lock, immediately
             before the first live write. Mismatch -> RevisionConflict, no
             writes at all.
+    auto: True when a job approved this publication itself (auto-accept,
+            ticket 02) — recorded in the manifest as "auto": true so every
+            auto-approval is identifiable in the publication record.
 
     Caller holds the campaign lock. Returns
     {"state": "published"|"noop", "transaction": tx_id|None}."""
@@ -432,6 +437,10 @@ def publish(name: str, writes: list[dict], *, operation: str,
         "conflicts": [],
         "snapshot": None,
     }
+    if auto:
+        # the job-as-approver marker: a publication record that says
+        # "no human read this before it landed" stays greppable forever
+        manifest["auto"] = True
     # manifest before anything else: an OSError during image staging must
     # not leave a manifest-less orphan that transactions() and recovery
     # both skip forever
