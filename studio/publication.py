@@ -641,7 +641,11 @@ def receipt(name: str, key: str) -> dict | None:
 def receipt_with_snapshot(name: str, key: str) -> dict | None:
     """receipt(), with the snapshot backfilled from the recorded transaction
     when the receipt predates that field — the complete idempotent-repeat
-    answer, shared by the proposal accept flow and review approvals."""
+    answer for the PROPOSAL accept flow (proposal_flows), its only caller.
+    Review approvals (routers/review) read publication.receipt directly
+    over their own idempotency keys — two receipt flows by design, since
+    they approve different things; this helper is not shared with them
+    (ticket 16 corrected the docstring that claimed it was)."""
     prior = receipt(name, key)
     if prior is None:
         return None

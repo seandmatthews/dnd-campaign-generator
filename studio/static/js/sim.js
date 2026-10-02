@@ -1007,7 +1007,7 @@
           '<button type="button" class="btn btn-primary forecast-run-btn">Run the forecast</button>' +
           '<span class="muted form-note">Costs one real week of API credits ' +
             'per projected week — and one week of engine time: ' +
-            '10&ndash;20 minutes for a 2-week forecast, roster-dependent.</span>' +
+            S.DURATIONS.band(2) + ' for a 2-week forecast, roster-dependent.</span>' +
         '</div>' +
         '<pre class="log-tail hidden forecast-log"></pre>' +
         '<div class="forecast-run-error"></div>' +
@@ -1024,7 +1024,8 @@
       const ok = await S.confirmRun(
         'Run a ' + n + '-week forecast? The engine runs ' + n + ' real week' +
         (n === 1 ? '' : 's') + ' on scratch data — about ' + n + 'x a week' +
-        '\'' + 's API spend and roughly ' + n + '0 minutes at the keyboard. ' +
+        '\'' + 's API spend and roughly ' + S.DURATIONS.approx(n) +
+        ' at the keyboard. ' +
         'Nothing lands in canon; the projection is for ' +
         'your eyes, then you discard it.'
       );
@@ -1889,7 +1890,7 @@
         '<h3 class="panel-title">Generate week ' + S.esc(String(nextWeek)) + '</h3>' +
         '<div class="inline-form">' +
           '<button type="button" class="btn btn-primary run-week-btn">Propose week ' + S.esc(String(nextWeek)) + '</button>' +
-          '<span class="muted form-note">Runs the live scheduler, factions and dice against scratch data and stages a proposal — the campaign changes only when you accept it. The week runs faction-by-faction: expect 10–20 minutes, roster-dependent.</span>' +
+          '<span class="muted form-note">Runs the live scheduler, factions and dice against scratch data and stages a proposal — the campaign changes only when you accept it. The week runs faction-by-faction: expect ' + S.DURATIONS.weekRun + ', roster-dependent.</span>' +
         '</div>' +
         '<label class="field auto-accept-field">' +
           '<input type="checkbox" class="input week-auto-accept">' +
@@ -1910,7 +1911,7 @@
       const auto = autoChk && autoChk.checked;
       const ok = await S.confirmRun(
         'This runs a real week against scratch data — it spends API credits ' +
-        'and takes 10–20 minutes with a full roster. ' +
+        'and takes ' + S.DURATIONS.weekRun + ' with a full roster. ' +
         'The campaign changes only if you accept the proposal afterwards.' +
         (auto ? ' AUTO-ACCEPT IS ON: the week publishes itself the moment it stages, without reading it first.' : '')
       );

@@ -39,3 +39,22 @@ button where rumors render).
 - [x] Recorded rumor-facts show their chronicle as `source_file` and
       reconcile normally after chronicle edits.
 - [x] Fast-tier test for the prefill payload shape.
+
+## Implementation notes (2026-10-02, amended by ticket 16)
+
+Two deviations from the proposal's wording, both deliberate:
+
+- **Where the second button lives.** The spec said "the Simulation tab,
+  and in the chronicle reader's rumor list" — but the CANON chronicle
+  reader renders markdown only; it has no rumor rows. The second button
+  lives on the PROPOSAL panel's proposed rumors (every rumor row that
+  renders anywhere — the rumors board and the proposed-week panel —
+  carries one). Its source resolves against canon chronicles only, so a
+  not-yet-accepted week prefills with no `source_file` rather than a
+  staged path the record route would reject.
+- **"Text = the rumor verbatim."** The prefill is `displayClaim`: the
+  ledger-suffix-stripped claim ("… — succeeded (contested vs mint),
+  margin +2" is bookkeeping about the week, not part of the rumor people
+  repeat). Deliberate, mirrors the rumors board's display strip, and
+  pinned by `test_handoff.cjs`; the DM shapes the wording before
+  recording either way.

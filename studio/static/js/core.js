@@ -893,6 +893,21 @@
   }
 
   /* ---------- exports ---------- */
+  // Honest durations, single-sourced (ticket 01 wrote the copy; ticket 16
+  // gave it one home): every NUMBER the UI shows about how long something
+  // takes reads from here, so a re-measured estimate is updated once.
+  // 'a few minutes' stays prose in place — it carries no number that can
+  // contradict another string. TUTORIAL.md mirrors these in prose.
+  Studio.DURATIONS = {
+    minutesPerWeek: 10,   // the honest midpoint; the band is half-to-full
+    band: function (weeks) {
+      return Math.round(weeks * 5) + '\u2013' + (weeks * 10) + ' minutes';
+    },
+    approx: function (weeks) {
+      return (weeks * 10) + ' minutes';
+    },
+    weekRun: '10\u201320 minutes'  // one live week, roster-dependent
+  };
   Studio.esc = esc;
   Studio.el = el;
   Studio.fmtInt = fmtInt;

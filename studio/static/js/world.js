@@ -671,7 +671,11 @@
           '<div class="inline-form">' +
             '<code class="lore-path">campaigns/' + S.esc(S.state.campaign || '') +
               '/lore/</code>' +
-            '<button type="button" class="btn lore-copy">Copy path</button>' +
+            // disabled until the resolved ABSOLUTE path arrives: copying
+            // early would hand out the relative prefix the note below
+            // promises not to (ticket 16)
+            '<button type="button" class="btn lore-copy" disabled ' +
+              'title="Resolving the folder path\u2026">Copy path</button>' +
             '<a class="btn btn-primary lore-open hidden" ' +
               'rel="noopener">Open in Obsidian</a>' +
             '<a class="btn lore-get" target="_blank" rel="noopener" ' +
@@ -687,6 +691,7 @@
     );
     const pathEl = card.querySelector('.lore-path');
     const openLink = card.querySelector('.lore-open');
+    const copyBtn = card.querySelector('.lore-copy');
     const errBox = card.querySelector('.form-error');
 
     card.querySelector('.authoring-dismiss').addEventListener('click', () => {
@@ -695,7 +700,7 @@
       card.remove();
     });
 
-    card.querySelector('.lore-copy').addEventListener('click', async () => {
+    copyBtn.addEventListener('click', async () => {
       const text = pathEl.textContent || '';
       try {
         await navigator.clipboard.writeText(text);
@@ -709,17 +714,25 @@
     // browser only knows the campaign name
     S.api(S.campUrl('/lore/path')).then((p) => {
       if (!card.isConnected) return;
-      if (p && p.path) pathEl.textContent = String(p.path);
+      if (p && p.path) {
+        pathEl.textContent = String(p.path);
+        // the note promises the FULL folder path: enable copying only
+        // once that is what the element actually holds
+        copyBtn.disabled = false;
+        copyBtn.removeAttribute('title');
+      }
       if (p && p.obsidian_uri) {
         openLink.href = String(p.obsidian_uri); // property set: never parsed as markup
         openLink.classList.remove('hidden');
       }
     }).catch((err) => {
       if (!card.isConnected) return;
+      copyBtn.disabled = true;
+      copyBtn.title = 'The full path could not be resolved';
       errBox.innerHTML = '';
       errBox.appendChild(S.errorPanel(err,
         'The resolved folder path could not be loaded — the relative ' +
-        'path above still holds under the studio checkout.'));
+        'path shown above still holds under the studio checkout.'));
     });
     return card;
   }
