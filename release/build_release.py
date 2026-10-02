@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the one-file Windows release of Campaign Studio.
+r"""Build the one-file Windows release of Campaign Studio.
 
 Output: release/dist/CampaignStudio-<version>.exe — a single
 self-extracting installer (7-Zip's 7zSD stub + 7z payload + config,
@@ -61,6 +61,12 @@ APP_VERSION = re.search(
     r'^version\s*=\s*"([^"]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"), re.M
 ).group(1)
 PORT_STAGE, PORT_SFX = 8791, 8793
+# Second granularity on purpose: install.cmd's fast path compares VERSION
+# byte-for-byte, and two rebuilds within one minute at %H%M granularity
+# produced identical bytes — the second exe then skipped mirroring a
+# CHANGED payload. With seconds, only the same exe (or a rebuild inside
+# the same second, payload and stamp both identical) takes the fast path.
+STAMP_FMT = "%Y%m%d%H%M%S"
 
 # Never copied into the bundle, at any depth (name-based, per copy call).
 IGNORE_BASE = [".git", ".venv", "__pycache__", "*.pyc", ".pytest_cache"]
@@ -210,8 +216,8 @@ def build_stage(node_zip):
     shutil.copy2(TEMPLATES / "README.txt", STAGE / "README.txt")
     # Build stamp included: install.cmd's fast path compares this file
     # byte-for-byte, so every rebuild is an update — no version bump to
-    # remember when re-sharing.
-    stamp = time.strftime("%Y%m%d%H%M")
+    # remember when re-sharing. STAMP_FMT carries seconds; see its note.
+    stamp = time.strftime(STAMP_FMT)
     (STAGE / "VERSION").write_text(f"{APP_VERSION}+{stamp}", encoding="ascii")
 
 

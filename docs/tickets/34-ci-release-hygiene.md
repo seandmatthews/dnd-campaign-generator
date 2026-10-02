@@ -53,14 +53,14 @@ collapse the double assertion.
 
 ## Acceptance criteria
 
-- [ ] `pytest studio/tests -m integration` on a fresh clone: clean skip,
+- [x] `pytest studio/tests -m integration` on a fresh clone: clean skip,
       no errors.
 - [ ] CI logs show pinned installs matching requirements.txt (or uv.lock
       usage).
-- [ ] `git status` clean after a world-gen run in a scratch campaign.
-- [ ] `setup-tools.py --check` exits 0 when tools are present.
-- [ ] Two builds in the same minute produce different VERSION bytes
+- [x] `git status` clean after a world-gen run in a scratch campaign.
+- [x] `setup-tools.py --check` exits 0 when tools are present.
+- [x] Two builds in the same minute produce different VERSION bytes
       (and the fast path still catches a no-change rebuild).
-- [ ] `campaigns/` under a nested dir would still mirror (or the exclusion
+- [x] `campaigns/` under a nested dir would still mirror (or the exclusion
       is provably top-level-only); test or reasoned note.
-- [ ] Double assertion collapsed; suite green.
+- [x] Double assertion collapsed; suite green.
