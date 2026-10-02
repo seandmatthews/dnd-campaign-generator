@@ -41,6 +41,43 @@ consumed).
 | 15 | [Simdesign hardening](15-simdesign-hardening.md) | P3 |
 | 16 | [Docs & copy consistency sweep](16-docs-and-copy-consistency.md) | P3 |
 
+## Batch 3 — the 2026-10-02 full review + followup (17–34)
+
+A nine-lane full-codebase review at `eff1282` (report:
+`docs/reviews/2026-10-02-full-code-review.md` — 1 P1, 9 P2s, 51 P3s) plus a
+five-finding followup pass by a second reviewer
+(`docs/reviews/2026-10-02-followup.md`, all five independently confirmed in
+the report's addendum). All 66 findings are covered below, grouped by
+module/fix coherence so each ticket is one lane-sized, independently
+mergeable piece — finding IDs are cross-referenced inside every ticket.
+Tickets 32–33 live in the separate `table-companion/` repo (own commits).
+
+| # | ticket | priority |
+|---|---|---|
+| 17 | [Kill CRLF-doubling in the engine-copy seam](17-crlf-canonical-newline-seam.md) | P1 (canon corruption) |
+| 18 | [Engine hand-edit tolerance](18-engine-hand-edit-tolerance.md) | P2 |
+| 19 | [effects.py batch semantics](19-effects-batch-semantics.md) | P2 |
+| 20 | [Replay/resolve honesty](20-replay-resolve-honesty.md) | P3 |
+| 21 | [simdesign reply robustness](21-simdesign-reply-robustness.md) | P2, small |
+| 22 | [Page surgery completion](22-page-surgery-completion.md) | P2 |
+| 23 | [Degradation honesty (quests/prep/briefing)](23-degradation-honesty.md) | P2 |
+| 24 | [Submission gates must survive the queue](24-submission-gates-queue.md) | P1/P2 borderline |
+| 25 | [Router error mapping & input gates](25-router-error-mapping.md) | P3 |
+| 26 | [Lock & flag hygiene II](26-lock-flag-hygiene-2.md) | P3 |
+| 27 | [Export/restore trust boundary](27-export-restore-trust.md) | P3 |
+| 28 | [Publication & review edge cases](28-publication-review-edges.md) | P3 |
+| 29 | [Session-staging UI correctness](29-session-staging-ui.md) | P2 |
+| 30 | [Frontend failure surfaces & dead affordances](30-frontend-failure-surfaces.md) | P2 |
+| 31 | [dnd-mapping polish](31-mapping-polish.md) | P2 |
+| 32 | [table-companion hub robustness](32-table-companion-hub-robustness.md) | P2 (separate repo) |
+| 33 | [table-companion join/reject + client types](33-table-companion-join-client.md) | P3 (separate repo) |
+| 34 | [CI, release & repo hygiene](34-ci-release-hygiene.md) | P3 |
+
+Suggested order: 17 first (silent canon corruption), then 22/24 (the two
+silent-wrong-write and gate classes), then the P2 tail, P3s last. Ticket 20
+and 24 each contain one explicit GM ruling (resolve overextension semantics;
+same-campaign engine queuing vs documented 409).
+
 ## Explicit non-goals (rulings, not backlog)
 
 - **No in-app lore editor. Ruled out 2026-10-01.** The answer to "where do I
