@@ -29,6 +29,7 @@ import pathlib
 import re
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -47,6 +48,12 @@ class DesignError(Exception):
 PREMISE_MAX = 600          # the create form's premise cap (one tension, one line)
 _REQUEST_PREMISE_MAX = 2000  # the input paragraph cap (same as world-options)
 _GEO_TEXT_CAP = 6000       # the geography grounding is fed whole, capped
+_PLACES_MAX = 12           # the DM-named grounding list (each name <=120)
+_PLACE_NAME_MAX = 120
+# the re-ask quotes the validator's words back to the model; those words
+# embed model-authored strings (faction names), so the quote is CLAMPED —
+# a hostile reply must not author its own re-ask prompt at length
+_REASK_QUOTE_MAX = 400
 
 _ETHOS = (
     "Ground every faction in the premise and the grounding places. Slop is "
@@ -145,17 +152,17 @@ def _validate_premise(raw) -> str:
     return premise
 
 
-def _faction_index(factions: list) -> dict:
-    """slug -> (name, id) for matching a project/secret's `faction` field."""
-    return {spine.slugify(f["name"]): (f["name"], f["id"])
-            for f in factions}
-
-
 def _match_faction(ref, factions: list):
-    """A model `faction` reference -> the validated faction doc, or None."""
+    """A model `faction` reference -> the validated faction doc, or None.
+    Name-slug only: the designed factions do not exist yet, so the model
+    has never seen an id — and validate_faction_docs mints UNDERSCORE ids
+    while spine.slugify makes HYPHEN slugs, so an id arm could never
+    match anyway (ticket 15 removed the dead one)."""
     ref = spine.slugify(ref)
+    if not ref:
+        return None
     for f in factions:
-        if ref and ref in (spine.slugify(f["name"]), f.get("id", "")):
+        if ref == spine.slugify(f["name"]):
             return f
     return None
 
@@ -354,6 +361,16 @@ def design_simulation(campaign: str, premise: str, places=None, log=None):
     campaign_dir = spine.require_campaign(campaign)
     log = log or (lambda line: None)
     places = [str(p or "").strip() for p in (places or []) if str(p or "").strip()]
+    if len(places) > _PLACES_MAX:
+        raise FedOrRefused(
+            f"name at most {_PLACES_MAX} grounding places (got "
+            f"{len(places)}) — the grounding is for names the factions "
+            "anchor to, not the whole gazetteer")
+    too_long = next((p for p in places if len(p) > _PLACE_NAME_MAX), None)
+    if too_long is not None:
+        raise FedOrRefused(
+            f"a place name must be under {_PLACE_NAME_MAX} characters — "
+            f"{too_long[:60]!r}… is not a name a faction anchors to")
     premise = (premise or "").strip()
     if not premise:
         raise FedOrRefused(
@@ -366,8 +383,25 @@ def design_simulation(campaign: str, premise: str, places=None, log=None):
     geo_path = campaign_dir / "world" / "geography.yaml"
     geo_text = ""
     if geo_path.is_file():
-        geo_text = geo_path.read_text(encoding="utf-8",
-                                      errors="replace")[:_GEO_TEXT_CAP]
+        # brief retry, like spine._safe_load: a Windows sharing violation
+        # while the Maps pipeline replaces the file is worth two more
+        # reads; a persistently unreadable world is a clean refusal, not
+        # a 500 (ticket 15)
+        last_err = None
+        for attempt in range(3):
+            try:
+                geo_text = geo_path.read_text(
+                    encoding="utf-8", errors="replace")[:_GEO_TEXT_CAP]
+                last_err = None
+                break
+            except OSError as e:
+                last_err = e
+                time.sleep(0.05 * (attempt + 1))
+        if last_err is not None:
+            raise FedOrRefused(
+                f"world/geography.yaml could not be read ({last_err}) — "
+                "retry in a moment (the Maps pipeline may be replacing "
+                "it)")
         log(f"fed: world/geography.yaml ({len(geo_text.splitlines())} lines)")
     elif not places:
         raise FedOrRefused(
@@ -392,13 +426,19 @@ def design_simulation(campaign: str, premise: str, places=None, log=None):
             break
         except ValueError as e:
             # the validator's words are the diagnosis: feed them back once,
-            # then surface them (never a bare "failed validation")
+            # then surface them (never a bare "failed validation"). The
+            # quote is CLAMPED — the validator's messages embed
+            # model-authored strings, and a hostile reply must not author
+            # its own re-ask prompt at length (ticket 15)
             if attempt == 2:
                 raise DesignError(
                     "the model's suggestion failed validation twice: "
                     f"{e}") from e
-            log(f"validation failed: {e}")
-            prompt = (f"Your previous reply failed validation:\n  {e}\n\n"
+            words = str(e)
+            if len(words) > _REASK_QUOTE_MAX:
+                words = words[:_REASK_QUOTE_MAX] + " …(clamped)"
+            log(f"validation failed: {words}")
+            prompt = (f"Your previous reply failed validation:\n  {words}\n\n"
                       "Fix those problems and reply again with the "
                       "corrected JSON object ONLY.\n\n" + prompt)
     log(f"designed {len(design['factions'])} faction(s), "

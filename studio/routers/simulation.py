@@ -364,7 +364,14 @@ def post_simulation_design(name: str, body: DesignBody):
     is not touched — Create stays the accept, on the unchanged free path.
     Secrets come back separately as proposed DM-only knowledge drafts and
     never ride in the faction docs. Fed-or-refused: with no world file and
-    no named places there is nothing to ground the design in (422)."""
+    no named places there is nothing to ground the design in (422).
+
+    Synchronous BY DESIGN (ticket 15's recorded decision): the pass takes
+    no lock, writes nothing, and holds one threadpool thread — the form
+    disables its buttons client-side and a wedged provider costs the DM a
+    closed tab, nothing else. Converting it to a queue job would buy a
+    cancellable wait at the cost of the design living in a job record;
+    deferred until a real provider actually wedges someone."""
     require_campaign(name)
     try:
         return simdesign.design_simulation(name, body.premise, body.places)

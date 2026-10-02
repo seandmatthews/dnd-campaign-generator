@@ -8,6 +8,7 @@ projects, per the CLI-equivalence rule.
 """
 
 import json
+from pathlib import Path
 
 import llm_client
 import simdesign
@@ -385,3 +386,111 @@ def test_cli_design_usage_error_exit_2(tmp_spine_root, monkeypatch, capsys):
     _fake_llm(monkeypatch, [])
     rc = simdesign.main([CAMP, "--premise", PREMISE])  # no --design
     assert rc == 2
+
+
+# ----------------------------------------------- ticket 15: hardening
+
+
+def test_unparseable_json_reask_then_502(tmp_spine_root, client,
+                                          monkeypatch):
+    """A reply with no JSON object takes the same re-ask path as schema
+    failures: two complete() calls at most, then a 502 quoting the
+    diagnosis — never a raw exception."""
+    _fresh(tmp_spine_root)
+    calls = _fake_llm(monkeypatch, [
+        "Sure! Here is a lovely design in prose, no JSON at all.",
+        "Also prose, sorry.",
+    ])
+    r = client.post(DESIGN_URL,
+                    json={"premise": PREMISE, "places": ["Provis"]})
+    assert r.status_code == 502, r.text
+    assert "unusable reply" in r.json()["error"]
+    assert len(calls) == 2, "the unparseable reply must be re-asked once"
+
+
+def test_overlong_request_premise_is_refused(tmp_spine_root, client):
+    """The input paragraph cap is a 422 before any spend (the empty
+    premise arm was covered; the length arm was not)."""
+    _fresh(tmp_spine_root)
+    r = client.post(DESIGN_URL,
+                    json={"premise": "x" * 2001, "places": ["Provis"]})
+    assert r.status_code == 422, r.text
+    assert "2000" in r.json()["error"]
+
+
+def test_places_list_is_capped(tmp_spine_root, client, monkeypatch):
+    """A pasted gazetteer inflates every prompt attempt for a meter that
+    counts calls, not tokens — the route refuses it up front, naming the
+    cap; so does an overlong name."""
+    _fresh(tmp_spine_root)
+    calls = _fake_llm(monkeypatch, [])
+    r = client.post(DESIGN_URL,
+                    json={"premise": PREMISE,
+                          "places": [f"Place {i}" for i in range(13)]})
+    assert r.status_code == 422 and "at most 12" in r.json()["error"]
+    r = client.post(DESIGN_URL,
+                    json={"premise": PREMISE,
+                          "places": ["Provis", "x" * 121]})
+    assert r.status_code == 422 and "under 120 characters" in r.json()["error"]
+    assert calls == [], "a refusal must not spend a call"
+
+
+def test_unreadable_geography_refuses_cleanly(tmp_spine_root, client,
+                                              monkeypatch):
+    """A geography.yaml the process cannot read (the Maps pipeline
+    swapping it) is a readable 422 after the retries, never a 500 — and
+    the retry actually retried."""
+    _fresh(tmp_spine_root)
+    geo = tmp_spine_root / CAMP / "world" / "geography.yaml"
+    real_read = Path.read_text
+    attempts = []
+
+    def flaky(self, *a, **k):
+        if self == geo:
+            attempts.append(1)
+            if len(attempts) < 3:
+                raise OSError("sharing violation")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    # a valid reply, so the pass succeeds once the read retried through
+    _fake_llm(monkeypatch, [])
+    monkeypatch.setattr(
+        llm_client, "complete",
+        lambda prompt, **k: json.dumps(DESIGN_DOC))
+    r = client.post(DESIGN_URL, json={"premise": PREMISE})
+    assert r.status_code == 200, r.text
+    assert len(attempts) == 3, "the read must retry before failing"
+
+    # and a persistently unreadable world refuses (422), never 500
+    def always_fail(self, *a, **k):
+        if self == geo:
+            raise PermissionError("locked")
+        return real_read(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", always_fail)
+    r = client.post(DESIGN_URL, json={"premise": PREMISE})
+    assert r.status_code == 422, r.text
+    assert "could not be read" in r.json()["error"]
+
+
+def test_reask_quotes_are_clamped(tmp_spine_root, monkeypatch):
+    """The re-ask prompt clamps the validator's words: those words embed
+    model-authored strings, and a hostile reply must not author its own
+    re-ask at length."""
+    _fresh(tmp_spine_root)
+    calls = _fake_llm(monkeypatch, [
+        # first reply: a faction NAME that is an essay — it lands in the
+        # validator's message, which the re-ask must clamp
+        json.dumps({**DESIGN_DOC,
+                    "factions": [
+                        {**DESIGN_DOC["factions"][0],
+                         "name": "INJECT " + "x" * 2000},
+                        DESIGN_DOC["factions"][1]]}),
+        json.dumps(DESIGN_DOC),
+    ])
+    out = simdesign.design_simulation(CAMP, PREMISE, places=["Provis"])
+    assert out["design"]["factions"][0]["name"] == "The Bridge Wardens"
+    assert len(calls) == 2
+    re_ask = calls[1]
+    assert "INJECT" not in re_ask or         len(re_ask) < len(calls[0]) + simdesign._REASK_QUOTE_MAX + 200
