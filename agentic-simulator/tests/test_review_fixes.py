@@ -160,6 +160,60 @@ def test_case_variant_place_id_gets_a_did_you_mean():
     assert errors and any("did you mean 'ruravaqan'" in e for e in errors)
 
 
+# ------------------------------------------------------- ticket 12
+# rumor element-shape guards: the hand-edit shapes that used to escape as
+# AttributeError/TypeError mid-week must be refused at validation with a
+# diagnostic (docs/tickets/12-engine-shape-guards-complete.md)
+
+
+def _rumor_state(**overrides):
+    state = fresh_state()
+    rumor = {
+        "id": "rum-tithe", "claim": "The tithe doubled.",
+        "fidelity": "hearsay", "heard_by": ["wardens"],
+        "transmissions": [], "born_week": 2,
+    }
+    rumor.update(overrides)
+    state["rumors"] = [rumor]
+    return state
+
+
+def _refused(state, needle):
+    try:
+        validate_state(state)
+    except ValueError as e:
+        assert needle in str(e), f"{needle!r} not in: {e}"
+    else:
+        raise AssertionError(f"expected a ValueError naming {needle!r}")
+
+
+def test_non_mapping_transmission_is_refused_not_crashed():
+    # used to escape as AttributeError ('str' has no .get) — the guard
+    # dereferenced before its own isinstance check
+    _refused(_rumor_state(transmissions=["week 3"]),
+             "transmission 1 is not a mapping")
+
+
+def test_missing_transmission_fields_name_the_fields():
+    _refused(_rumor_state(transmissions=[{"week": 3}]),
+             "missing from, to, fidelity_before, fidelity_after")
+
+
+def test_explicit_null_quiet_is_refused_at_validation():
+    # `quiet:` with no value: the key is PRESENT with a null, which
+    # .get("quiet", []) returns as None — the mid-week TypeError shape
+    _refused(_rumor_state(quiet=None), "quiet must be a list")
+    _refused(_rumor_state(quiet="wardens"), "quiet must be a list")
+    # absent and a proper list are both fine
+    validate_state(_rumor_state())
+    validate_state(_rumor_state(quiet=["mint"]))
+
+
+def test_non_string_heard_by_entries_are_refused():
+    _refused(_rumor_state(heard_by=["wardens", 7]),
+             "heard_by entries must be non-empty faction ids")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

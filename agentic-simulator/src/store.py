@@ -250,19 +250,43 @@ def validate_state(state):
                 if not isinstance(r.get(k), list):
                     raise ValueError(f"rumor {i + 1} needs {k} as a list, "
                                      f"not {r.get(k)!r}")
+            for h in r["heard_by"]:
+                if not isinstance(h, str) or not h.strip():
+                    raise ValueError(f"rumor {i + 1} heard_by entries must "
+                                     f"be non-empty faction ids, not {h!r} "
+                                     "— the spread loop sorts them")
+            if "quiet" in r:
+                # rumors.spread does `f not in rumor.get("quiet", [])`: a
+                # hand-written null (the key PRESENT, value null — the
+                # default only applies when absent) must fail HERE, not
+                # as a TypeError mid-week (the disposition:/knows: rule)
+                quiet = r["quiet"]
+                if not isinstance(quiet, list) or \
+                        not all(isinstance(q, str) and q.strip()
+                                for q in quiet):
+                    raise ValueError(f"rumor {i + 1} quiet must be a list "
+                                     "of faction ids (or absent), not "
+                                     f"{quiet!r}")
             if not isinstance(r.get("born_week"), int) \
                     or isinstance(r.get("born_week"), bool):
                 raise ValueError(f"rumor {i + 1} needs an integer "
                                  f"born_week, not {r.get('born_week')!r}")
             for j, t in enumerate(r.get("transmissions")):
+                # shape FIRST: t.get must never run on a non-mapping (a
+                # stray string here used to escape as an AttributeError)
+                if not isinstance(t, dict):
+                    raise ValueError(
+                        f"rumor {i + 1} transmission {j + 1} is not a "
+                        f"mapping, not {t!r} — views.heard reads every "
+                        "field")
                 tmiss = [k for k in ("week", "from", "to",
                                      "fidelity_before", "fidelity_after")
                          if not str(t.get(k) or "").strip()]
-                if not isinstance(t, dict) or tmiss:
+                if tmiss:
                     raise ValueError(
                         f"rumor {i + 1} transmission {j + 1} is missing "
-                        f"{', '.join(tmiss) if isinstance(t, dict) else 'its mapping shape'}"
-                        " — views.heard reads every field")
+                        f"{', '.join(tmiss)} — views.heard reads every "
+                        "field")
 
 
 def save_state(state, path=None):
