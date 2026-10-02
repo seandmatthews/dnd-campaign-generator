@@ -2,8 +2,7 @@
 
 **Priority:** P1
 **Area:** `studio/routers/simulation.py`, `studio/sessions.py`, `studio/spine.py`
-**Found by:** 2026-10-02 full review P1-1 (independently reproduced twice — see
-`docs/reviews/2026-10-02-full-code-review.md`)
+**Found by:** 2026-10-02 full review P1-1 (independently reproduced twice)
 
 ## Problem
 

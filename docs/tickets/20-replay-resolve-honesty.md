@@ -39,10 +39,15 @@
   guard cover `StopIteration` (or look up actors without `next()`).
 - Gate project-mechanics comparison on `project_rule_version` exactly as
   the dice path gates on `rule_version`.
-- Resolve ruling needed (GM decision): either defenses don't overextend an
-  acting defender and uncontested proposals of contested defenders still
-  resolve (docstring wins), or the docstring is corrected to match the
-  code. Record the ruling in the docstring either way.
+- **Ruling (GM, 2026-10-02): option C — attacks degrade, never delete.** Keep
+  the −2 overextension penalty for an acting defender, but its own
+  non-attack proposal now ALSO resolves (as a normal uncontested action).
+  The beleaguered penalty applies consistently to ALL of the faction's
+  rolls that week (both defenses and its own action — one beleaguered
+  faction, one penalty). RULE_VERSION bumps 2 → 3 (old replays then report
+  "not comparable", which item 2 above must handle). Rationale: a committed
+  action must produce an outcome — silent loss is the bug class this whole
+  batch fixes; suppression-by-dogpile stays the sabotage system's job.
 
 ## Acceptance criteria
 

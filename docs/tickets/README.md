@@ -43,13 +43,15 @@ consumed).
 
 ## Batch 3 — the 2026-10-02 full review + followup (17–34)
 
-A nine-lane full-codebase review at `eff1282` (report:
-`docs/reviews/2026-10-02-full-code-review.md` — 1 P1, 9 P2s, 51 P3s) plus a
-five-finding followup pass by a second reviewer
-(`docs/reviews/2026-10-02-followup.md`, all five independently confirmed in
-the report's addendum). All 66 findings are covered below, grouped by
+A nine-lane full-codebase review at `eff1282` (1 P1, 9 P2s, 51 P3s) plus a
+five-finding followup pass by a second reviewer (all five independently
+confirmed). Every finding of both reviews is covered below, grouped by
 module/fix coherence so each ticket is one lane-sized, independently
-mergeable piece — finding IDs are cross-referenced inside every ticket.
+mergeable piece — the finding IDs (P1/P2/P3/R) are cross-referenced inside
+every ticket and are internal to this batch. The review documents themselves
+were fully converted into these tickets and then deleted (2026-10-02); the
+tickets are the record. Earlier reviews (2026-09-30, 2026-10-01) contained
+only already-fixed findings and were deleted without tickets.
 Tickets 32–33 live in the separate `table-companion/` repo (own commits).
 
 | # | ticket | priority |

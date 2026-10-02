@@ -43,8 +43,14 @@ review addendum)
   `engine_lock_logged`/the flag). If the holder is this campaign, skip the
   409 and let the job queue — the in-job re-checks (pending proposal,
   active forecast) already guard correctness. Cross-campaign keeps today's
-  honest 409 + estimate. Alternative ruling: keep the 409 always and fix
-  the comments to claim it — decide and record.
+  honest 409 + estimate.
+
+**Ruling (GM, 2026-10-02):** same-campaign requests JOIN the queue — the
+user wants to queue as many weeks back-to-back as they like (week 1, then
+2, then 3…), with auto-accept as the "it all goes into canon" gate (the
+existing explicit opt-in per submission; without it the queue still stops
+at each proposal for review, by design). No queue-depth cap. Forecasts
+queue the same way. Cross-campaign 409 unchanged.
 
 ## Acceptance criteria
 
