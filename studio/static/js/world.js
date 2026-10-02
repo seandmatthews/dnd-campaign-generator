@@ -318,7 +318,7 @@
     const card = S.el(
       '<section class="panel panel-card">' +
         '<h3 class="panel-title">Generate backstory</h3>' +
-        '<p class="panel-note">Constrained to geography + existing lore; output is staged as pending, never auto-applied.</p>' +
+        '<p class="panel-note">One metered LLM call: a few minutes, then the entries wait in Review. Constrained to geography + existing lore; output is staged as pending, never auto-applied.</p>' +
         '<div class="form-block">' +
           '<form class="inline-form">' +
             '<label class="field grow"><span class="field-label">Focus</span>' +
@@ -348,7 +348,8 @@
       if (btn.disabled) return;
       const ok = await S.confirmRun(
         'Generate pending backstory entries with the LLM? This spends API ' +
-        'credits; the entries land in Review — nothing is applied directly.'
+        'credits and runs a few minutes; the entries land in Review — ' +
+        'nothing is applied directly.'
       );
       if (!ok) return;
       resultBox.classList.add('hidden');
@@ -500,7 +501,8 @@
         '<h3 class="panel-title">Write the missing pages</h3>' +
         '<p class="panel-note">Dangling wiki-links are generation targets: the ' +
           'pages that mention the name are the grounding, and drafts land in ' +
-          'Review &mdash; never applied directly.</p>' +
+          'Review &mdash; never applied directly. One metered call per page: ' +
+          'a few minutes for a typical run.</p>' +
         '<div class="form-block">' +
           '<div class="missing-targets"><p class="muted">Checking the lore&hellip;</p></div>' +
           '<div class="inline-form">' +

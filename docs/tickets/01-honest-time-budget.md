@@ -35,6 +35,6 @@ while the GM reads what came back — say so, per step:
 
 ## Acceptance criteria
 
-- [ ] No document or help text claims a full campaign in 30 minutes.
-- [ ] Each long step states its expected duration before it starts.
-- [ ] The framing is "compressed hours," not "quick setup."
+- [x] No document or help text claims a full campaign in 30 minutes.
+- [x] Each long step states its expected duration before it starts.
+- [x] The framing is "compressed hours," not "quick setup."

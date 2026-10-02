@@ -67,7 +67,8 @@
               'placeholder="entity page the city map belongs to"></label>' +
           '<button type="submit" class="btn btn-primary">Map it</button>' +
         '</form>' +
-        '<p class="muted form-note">The place defaults to the burg itself; edit it to ' +
+        '<p class="muted form-note">Headless map generator: a few minutes, ' +
+          'log streaming below. The place defaults to the burg itself; edit it to ' +
           'attach the map to another entity page. The map&rsquo;s companion note ' +
           'links the two (&ldquo;everything about this place&rdquo; finds it).</p>' +
         '<pre class="log-tail hidden"></pre>' +
@@ -141,7 +142,8 @@
               'placeholder="e.g. the Docks — a new name becomes a dangling link"></label>' +
           '<button type="submit" class="btn btn-primary">Generate scene</button>' +
         '</form>' +
-        '<p class="muted form-note">battlemap gen &rarr; render &rarr; PNG (sharp) &rarr; UVTT wrap. The .uvtt drops straight into Foundry (walls, doors and lights live).</p>' +
+        '<p class="muted form-note">battlemap gen &rarr; render &rarr; PNG (sharp) &rarr; UVTT wrap: ' +
+          'a headless run, a few minutes. The .uvtt drops straight into Foundry (walls, doors and lights live).</p>' +
         '<div class="site-result"></div>' +
         '<pre class="log-tail hidden"></pre>' +
         '<div class="form-error"></div>' +
@@ -386,7 +388,9 @@
           ? '<p class="muted form-note">This campaign already has a generated world. Regenerating ' +
             'replaces <code>world/source.*</code> and <code>world/geography.yaml</code> &mdash; existing ' +
             'city maps and lore keep naming the old world. Without force, the server refuses (409).</p>'
-          : '<p class="muted form-note">Type a seed, get a world: headless FMG runs the genesis pipeline, ' +
+          : '<p class="muted form-note">Type a seed, get a world: this runs a ' +
+            'headless map generator — expect a few minutes, its log streaming ' +
+            'below. FMG runs the genesis pipeline, ' +
             'import_fmg distills nations and settlements, and the world map renders from the dump.</p>') +
         '<pre class="log-tail hidden"></pre>' +
         '<div class="form-error"></div>' +
