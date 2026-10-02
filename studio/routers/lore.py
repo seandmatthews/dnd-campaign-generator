@@ -12,6 +12,8 @@ entries and attaching advisory findings; POST name is synchronous and needs
 a names-<culture>.txt seed list.
 """
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -60,6 +62,23 @@ def get_lore(name: str):
         "timeline": spine.load_timeline(name),
         "entities": spine.load_entities(name),
         "style": style,
+    }
+
+
+@router.get("/api/campaign/{name}/lore/path")
+def get_lore_path(name: str):
+    """The resolved lore folder and the obsidian:// deep link into it.
+
+    The browser only ever sees /api/... URLs — it cannot know the absolute
+    campaign path — so the resolved folder, and the obsidian://open?path=
+    URI URL-encoded from it, come from this one read-only GET. It is a
+    pointer for the DM's outside editor (Obsidian); there is no write here
+    and none will be (the no-in-app-editor ruling)."""
+    lore = require_campaign(name) / "lore"
+    path = str(lore.resolve())
+    return {
+        "path": path,
+        "obsidian_uri": "obsidian://open?path=" + quote(path, safe=""),
     }
 
 

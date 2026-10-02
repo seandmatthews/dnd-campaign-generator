@@ -49,12 +49,12 @@ then open the folder in Obsidian to edit").
 
 ## Acceptance criteria
 
-- [ ] World Building shows the authoring card (dismissible, remembered)
+- [x] World Building shows the authoring card (dismissible, remembered)
       with the exact lore path + copy button.
-- [ ] "Open in Obsidian" issues the `obsidian://open?path=` URI for the
+- [x] "Open in Obsidian" issues the `obsidian://open?path=` URI for the
       campaign folder.
-- [ ] "Get Obsidian" links to the official download page.
-- [ ] Review page-draft cards carry the one-line pointer.
-- [ ] No editing capability is added to the app (ruling above).
-- [ ] A test asserts the URI is built from the *resolved* campaign path
+- [x] "Get Obsidian" links to the official download page.
+- [x] Review page-draft cards carry the one-line pointer.
+- [x] No editing capability is added to the app (ruling above).
+- [x] A test asserts the URI is built from the *resolved* campaign path
       (spaces in `Documents\D&D` must survive URL encoding).
