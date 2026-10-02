@@ -163,6 +163,28 @@ def test_invalid_effects_change_nothing(client, tmp_spine_root):
         "/api/campaign/testvale/simulation/proposal").json()["proposal"] is None
 
 
+def test_padded_scalars_normalize_through_the_engine(client, tmp_spine_root):
+    # stray whitespace in a quoted value (hand-written record or an
+    # LLM-extracted suggestion) must apply to the REAL key: the engine's
+    # validator and applier see identical, stripped strings, so nothing
+    # writes a `" goal "` key the audit event then lies about
+    r = _submit(client,
+                effects=[{"type": "set_field", "faction_id": "wardens",
+                          "field": " goal ", "after": " A quieter watch. ",
+                          "reason": "The watch keeps its head down."}],
+                week=5)
+    assert r.status_code == 200, r.text
+    r = _accept(client, r.json()["proposal_id"])
+    assert r.status_code == 200, r.text
+    state = _state(tmp_spine_root)
+    wardens = _mint(state)
+    assert wardens["goal"] == "A quieter watch."
+    assert " goal " not in wardens
+    evs = [e for e in state["events"]
+           if e.get("text") == "The watch keeps its head down."]
+    assert len(evs) == 1 and evs[0]["week"] == 5
+
+
 def test_session_accept_validates_base_revision(client, tmp_spine_root):
     # an external state edit between submission and acceptance conflicts
     r = _submit(client, effects=[{"type": "set_resource",

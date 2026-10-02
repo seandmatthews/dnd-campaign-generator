@@ -41,6 +41,14 @@ for deduplication. Reaching a project's target through set_project_progress
 invokes the SAME completion pass a weekly tick uses (projects.py) — never
 a second completion algorithm; `completed` is unreachable directly.
 
+Normalization is part of that contract: the validator and the applier see
+identical strings (a padded `field: " goal "` applies to `goal`, never
+writes a `" goal "` key), every stored week is a non-negative int (the
+record's week coerces a digit string, and a weekless record dates to the
+clock — a stored `week: null` event refuses the next --live), and an id
+duplicated WITHIN one batch refuses the whole batch naming each colliding
+effect — ids from previous records keep deduplicating.
+
 This module is the SHARED application code: ingest.py's pending files and
 the studio's session proposals both land here, and the studio drives it
 through this CLI (never by importing across projects):
@@ -95,12 +103,37 @@ def _stale(expected, where, current):
             f"but {where} is {current!r}")
 
 
+def _s(value):
+    """The ONE string form of a scalar this module touches: str() coerced,
+    ends stripped. validate_effect and _apply_one must see identical
+    strings — the validator used to strip while the applier wrote the raw
+    value, so `field: " goal "` validated clean and then wrote a
+    `" goal "` key while the audit event claimed the change."""
+    return str(value or "").strip()
+
+
+def coerce_week(value):
+    """A week arriving from hand-edited YAML, normalized: a non-negative
+    int passes, a digit string ('8', ' 8 ') becomes the int it names
+    (quoting a scalar is a YAML habit, not a different week); anything
+    else reads as None for the caller to refuse — a `week: null` or
+    string-dated event passes this module and then validate_state refuses
+    the next --live outright, so nothing unreadable is ever stored."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
 def _validate_project_effect(effect, state):
     """The two project effect types: keyed on project_id (not faction),
     refused outright on terminal projects — corrections reopen nothing."""
     errs = []
     import projects as _projects
-    pid = str(effect.get("project_id") or "").strip()
+    pid = _s(effect.get("project_id"))
     project = _projects.find_project(state, pid)
     if project is None:
         return [f"unknown project_id {pid!r}"]
@@ -129,7 +162,7 @@ def _validate_project_effect(effect, state):
                 return [_stale(expected, f"{pid} progress",
                                project.get("progress", 0))]
     else:  # set_project_status
-        after = str(after or "").strip()
+        after = _s(after)
         if after not in PROJECT_STATUS_AFTER:
             return [(f"after {after!r} is not one of "
                      f"{', '.join(PROJECT_STATUS_AFTER)} — completion is "
@@ -156,8 +189,8 @@ def validate_effect(effect, state):
     errs = []
     if not isinstance(effect, dict):
         return ["effect is not a mapping"]
-    eid = str(effect.get("id") or "").strip()
-    etype = str(effect.get("type") or "").strip()
+    eid = _s(effect.get("id"))
+    etype = _s(effect.get("type"))
     if not eid:
         errs.append("missing id (a stable id is what makes re-approval safe)")
     week = effect.get("week")
@@ -170,17 +203,17 @@ def validate_effect(effect, state):
     if etype not in EFFECT_TYPES:
         errs.append(f"unknown type {etype!r} (use one of {', '.join(EFFECT_TYPES)})")
         return errs
-    fid = str(effect.get("faction_id") or "").strip()
+    fid = _s(effect.get("faction_id"))
     faction = faction_map(state).get(fid)
     if faction is None:
         errs.append(f"unknown faction_id {fid!r}")
         return errs  # preconditions below need the faction
     if etype == "set_resource":
-        resource = str(effect.get("resource") or "").strip()
+        resource = _s(effect.get("resource"))
         if resource not in RESOURCE_KEYS:
             errs.append(f"unknown resource {resource!r} "
                         f"(use one of {', '.join(RESOURCE_KEYS)})")
-        after = str(effect.get("after") or "").strip()
+        after = _s(effect.get("after"))
         if after not in RESOURCE_LEVELS:
             errs.append(f"after {after!r} is not a resource level "
                         f"(use one of {', '.join(RESOURCE_LEVELS)})")
@@ -190,11 +223,11 @@ def validate_effect(effect, state):
             if str(expected) != str(current):
                 errs.append(_stale(expected, f"{fid}.{resource}", current))
     else:  # set_field
-        field = str(effect.get("field") or "").strip()
+        field = _s(effect.get("field"))
         if field not in FIELD_KEYS:
             errs.append(f"unknown field {field!r} (use one of "
                         f"{', '.join(FIELD_KEYS)})")
-        after = str(effect.get("after") or "").strip()
+        after = _s(effect.get("after"))
         if not after:
             errs.append("set_field needs non-empty after text")
         expected = effect.get("expected_before")
@@ -202,17 +235,20 @@ def validate_effect(effect, state):
             current = faction.get(field)
             if str(expected) != str(current or ""):
                 errs.append(_stale(expected, f"{fid}.{field}", current))
-    if not str(effect.get("reason") or "").strip():
+    if not _s(effect.get("reason")):
         errs.append("missing reason (the event's text — why did this happen?)")
     return errs
 
 
 def _apply_one(state, effect, week):
     """Mutate state for one already-validated effect: the value change plus
-    exactly one sourced event. Returns the event."""
+    exactly one sourced event. Returns the event. Every string written is
+    the stripped one validation saw (_s) — a padded `field: " goal "` used
+    to validate clean and then write a `" goal "` key."""
     import projects as _projects
+    eid = _s(effect.get("id"))
     if effect["type"] in PROJECT_EFFECT_TYPES:
-        pid = effect["project_id"]
+        pid = _s(effect.get("project_id"))
         project = _projects.find_project(state, pid)
         owner = project.get("faction_id")
         if effect["type"] == "set_project_progress":
@@ -222,7 +258,7 @@ def _apply_one(state, effect, week):
                       f"(target {project.get('target')})")
         else:
             before = project.get("status", "active")
-            project["status"] = str(effect["after"])
+            project["status"] = _s(effect["after"])
             project.pop("completion_blocked", None)
             detail = f"status {before} -> {project['status']}"
         ev = {
@@ -230,40 +266,40 @@ def _apply_one(state, effect, week):
             "actor": owner,
             "project_id": pid,
             "text": f"{effect['reason']} ({detail})",
-            "effect": str(effect["id"]),
+            "effect": eid,
         }
         if effect.get("source"):
             ev["source"] = str(effect["source"])
         state.setdefault("events", []).append(ev)
         state.setdefault("meta", {}).setdefault("applied_effects", []) \
-            .append(str(effect["id"]))
+            .append(eid)
         # routes through the shared completion pass (see module docstring)
         _projects.completion_pass(state, week)
         return ev
     # the SAME identity rules as validation: faction_map keys are str(id),
     # so a numeric id in a hand-edited state resolves identically on both
     # sides of the check/apply contract
-    faction = faction_map(state).get(str(effect["faction_id"]))
+    faction = faction_map(state).get(_s(effect.get("faction_id")))
     if faction is None:  # unreachable when validation gates the batch
         raise LookupError(f"faction {effect['faction_id']!r} vanished "
                           "between validation and application")
     fid = str(faction["id"])
     if effect["type"] == "set_resource":
-        faction.setdefault("resources", {})[effect["resource"]] = \
-            str(effect["after"])
+        faction.setdefault("resources", {})[_s(effect["resource"])] = \
+            _s(effect["after"])
     else:
-        faction[effect["field"]] = str(effect["after"])
+        faction[_s(effect["field"])] = _s(effect["after"])
     ev = {
         "week": week,
         "actor": fid,
         "text": str(effect["reason"]).strip(),
-        "effect": str(effect["id"]),
+        "effect": eid,
     }
     if effect.get("source"):
         ev["source"] = str(effect["source"])
     state.setdefault("events", []).append(ev)
     state.setdefault("meta", {}).setdefault("applied_effects", []) \
-        .append(str(effect["id"]))
+        .append(eid)
     return ev
 
 
@@ -278,6 +314,21 @@ def _effect_week(effect, week, state):
     return 0
 
 
+def _describe(effect):
+    """One refusal-friendly name for an effect: what it does and to whom.
+    Two effects sharing an id must EACH be named in the refusal, not just
+    the id they collide on."""
+    etype = _s(effect.get("type")) or "untyped effect"
+    if etype in PROJECT_EFFECT_TYPES:
+        return f"{etype} on {_s(effect.get('project_id')) or '?'}"
+    target = _s(effect.get("faction_id")) or "?"
+    if etype == "set_resource":
+        target += f".{_s(effect.get('resource')) or '?'}"
+    elif etype == "set_field":
+        target += f".{_s(effect.get('field')) or '?'}"
+    return f"{etype} on {target}"
+
+
 def apply_effects(state, effects, week=None):
     """All-or-nothing over an EVOLVING candidate: each effect is validated
     against the state its predecessors in the batch produced (a completion
@@ -285,23 +336,39 @@ def apply_effects(state, effects, week=None):
     second write to the same resource sees the first's result), and the
     real state is mutated only after the whole batch validates. Already-
     applied ids are skipped (dedup), so re-applying a session record
-    changes nothing twice. Returns (applied_count, errors). Nothing is
-    written here — the caller owns saving (ingest.apply, the CLI's
-    --apply, or the studio's publication path)."""
+    changes nothing twice; an id duplicated WITHIN one batch refuses the
+    whole batch naming each colliding effect. Returns (applied_count,
+    errors). Nothing is written here — the caller owns saving
+    (ingest.apply, the CLI's --apply, or the studio's publication path)."""
     known_ids = set(state.get("meta", {}).get("applied_effects") or [])
     errors = []
     todo = []
+    batch = {}  # id -> [(position, effect)] within THIS batch
     for i, effect in enumerate(effects or []):
         if not isinstance(effect, dict):
             errors.append(f"effect {i + 1}: not a mapping")
             continue
-        if str(effect.get("id")) in known_ids:
+        eid = _s(effect.get("id"))  # .get: validate_effect's "missing id"
+        # refusal must be reachable — a bare ["id"] here KeyErrors first
+        # and the DM sees a traceback, not the message
+        if eid in known_ids:
             continue  # dedup first: an applied effect must not fail on a
             # stale precondition — its own application changed the value
+        if eid:  # empty ids are validate_effect's to refuse, not ours
+            batch.setdefault(eid, []).append((i + 1, effect))
         todo.append(effect)
-        known_ids.add(str(effect.get("id")))  # .get: validate_effect's
-        # "missing id" refusal must be reachable — a bare ["id"] here
-        # KeyErrors first and the DM sees a traceback, not the message
+    # one id names one change: an id duplicated WITHIN a batch used to be
+    # treated as dedup — the second effect silently never landed while the
+    # DM believed they had approved it. Ids seen in a PREVIOUS record keep
+    # deduping above (re-approval stays a no-op).
+    for eid, occurrences in batch.items():
+        if len(occurrences) > 1:
+            named = ", ".join(f"effect {pos} ({_describe(eff)})"
+                              for pos, eff in occurrences)
+            errors.append(
+                f"effect id {eid!r} appears {len(occurrences)} times in "
+                f"this batch: {named} — one id names one change; give each "
+                "effect its own id")
     if errors:
         return 0, errors
     import copy as _copy
@@ -332,12 +399,28 @@ def apply_session_record(record, state):
     validated effects. All-or-nothing across both. Returns
     (events_added, effects_applied, errors). Effects land FIRST so a
     history bullet that merely restates an effect's reason dedups against
-    the effect's audit event instead of recording it twice."""
+    the effect's audit event instead of recording it twice. The record's
+    week resolves once up front (digit strings coerce, a missing week
+    dates to the clock) and every stored event carries it — never None."""
     if not isinstance(record, dict):
         return 0, 0, ["session record is not a mapping"]
-    week = record.get("week")
     source = str(record.get("source") or "").strip() or None
     errors = []
+    # the record's week, resolved once and used everywhere: a digit string
+    # is the int it names; a MISSING week dates to the clock — the same
+    # default the studio path applies through sessions.create — because a
+    # weekless record used to store `week: null` events, which pass here
+    # and then refuse the next --live outright
+    raw_week = record.get("week")
+    if raw_week is None:
+        clock = ((state.get("meta") or {}).get("clock") or {}).get("week")
+        week = clock if isinstance(clock, int) \
+            and not isinstance(clock, bool) else 0
+    else:
+        week = coerce_week(raw_week)
+        if week is None:
+            errors.append(f"record week {raw_week!r} is not a non-negative "
+                          "integer (a digit string like '8' is coerced)")
     # validate everything up front (against the pre-application state)
     known = {f["id"] for f in state.get("factions", [])} | {"world"}
     place_ids = {p["id"] for p in places_of(state or {})}
@@ -351,6 +434,13 @@ def apply_session_record(record, state):
             errors.append(f"event {i + 1}: unknown actor {actor!r}")
         elif not text:
             errors.append(f"event {i + 1}: empty text")
+        # per-event weeks get the same read as the record's: coerce a digit
+        # string, refuse anything else unreadable — never store it
+        ev_week = ev.get("week")
+        if ev_week is not None and coerce_week(ev_week) is None:
+            errors.append(f"event {i + 1}: week {ev_week!r} is not a "
+                          "non-negative integer (a digit string like '8' "
+                          "is coerced)")
         # explicit event locations: the WHERE is stored with the event at
         # creation, never inferred from the actor's current place later —
         # the faction may have moved, or acted remotely
@@ -393,7 +483,10 @@ def apply_session_record(record, state):
     for ev in record.get("events") or []:
         actor = str(ev.get("actor") or "world")
         text = str(ev["text"]).strip()
-        ev_week = ev.get("week") if ev.get("week") is not None else week
+        # validated above: every explicit event week coerces, a missing one
+        # takes the record's resolved week — never None
+        ev_week = coerce_week(ev.get("week")) \
+            if ev.get("week") is not None else week
         if event_exists(state, ev_week, actor, text):
             continue  # already on record (incl. an effect's audit event)
         entry = {"week": ev_week, "actor": actor, "text": text}

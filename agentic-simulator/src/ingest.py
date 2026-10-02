@@ -136,16 +136,25 @@ def apply(pending, state_path):
     Bumps nothing else — the clock belongs to tick.py / the DM.
     A pending week that is not the clock's next week is applied to the week
     it claims (the DM's file is authoritative) but warns loudly — stale
-    files land in past weeks the scheduler no longer looks at."""
+    files land in past weeks the scheduler no longer looks at. The week
+    itself is normalized through effects.coerce_week: a digit string
+    ('8') is the int it names, a missing week dates the record to the
+    clock, anything else non-integer is refused with a finding."""
     state = load_state(state_path)
     week = pending.get("week")
+    # a quoted 'week: "8"' dates the file the same as a bare 8: coerce once
+    # so the staleness warning compares ints (it used to fire on a week
+    # that only LOOKED different because it was a string). An unreadable
+    # week passes through raw — effects.apply_session_record refuses it
+    # with a finding naming it, and a missing week dates to the clock.
+    coerced = effects.coerce_week(week)
     next_week = state["meta"]["clock"]["week"] + 1
-    if week is not None and week != next_week:
-        print(f"warning: pending file is dated week {week}, but the next week "
-              f"to simulate is {next_week} — these events land in week {week}, "
-              f"which the scheduler reads only for history")
+    if coerced is not None and coerced != next_week:
+        print(f"warning: pending file is dated week {coerced}, but the next "
+              f"week to simulate is {next_week} — these events land in week "
+              f"{coerced}, which the scheduler reads only for history")
     record = {
-        "week": week,
+        "week": coerced if coerced is not None else week,
         "events": pending.get("proposals") or [],
         "effects": pending.get("effects") or [],
     }

@@ -51,13 +51,13 @@ Three validation/normalization gaps in the session-record batch path:
 
 ## Acceptance criteria
 
-- [ ] Padded-value repro: `field: " goal "` / `after: " high "` either
+- [x] Padded-value repro: `field: " goal "` / `after: " high "` either
       refuses with a finding or applies to `goal`/`coin` normalized — never
       writes `faction[" goal "]`; the state still passes validate_state
       after apply.
-- [ ] Record with no `week` and with `week: "8"`: defined behavior (error
+- [x] Record with no `week` and with `week: "8"`: defined behavior (error
       or coerced), never `week: null` in stored history events; resulting
       state passes validate_state.
-- [ ] Two same-id effects in one batch → whole batch refused, both named;
+- [x] Two same-id effects in one batch → whole batch refused, both named;
       same id across two records still dedups (existing tests keep
       passing).
