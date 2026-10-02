@@ -168,6 +168,55 @@ def test_visibility_validation(client, tmp_spine_root):
     assert r.status_code == 422
 
 
+def test_rumor_fact_records_chronicle_source_week_and_reconciles(
+        client, tmp_spine_root):
+    """Ticket 08: a rumor told to the party records through the UNCHANGED
+    record route with its chronicle as source_file — so a later chronicle
+    edit stales it and reconcile clears the staleness exactly like any
+    sourced fact. The week rides along as provenance; a non-numeric week
+    is a 422, not a silently mangled record."""
+    chron = (tmp_spine_root / "testvale" / "simulation" / "chronicle"
+             / "0003-the-ash-crossing.md")
+    text = chron.read_text(encoding="utf-8")
+    r = _add(client,
+             text="Ferry poles doubled in price the week the bridge burned.",
+             visibility="public",
+             source_file="simulation/chronicle/0003-the-ash-crossing.md",
+             week=3)
+    assert r.status_code == 200, r.text
+    fact = r.json()["fact"]
+    assert fact["week"] == 3
+    assert fact["source_file"] == \
+        "simulation/chronicle/0003-the-ash-crossing.md"
+
+    # the point of the chronicle provenance: an Obsidian edit to the
+    # chronicle stales the recorded rumor-fact ...
+    chron.write_text(text + "\nA line the DM has not reviewed.\n",
+                     encoding="utf-8")
+    facts = client.get("/api/campaign/testvale/knowledge").json()["facts"]
+    row = next(f for f in facts if f["id"] == fact["id"])
+    assert row["stale"] is True
+    assert row["source_file"] == fact["source_file"]
+
+    # ... and reconcile clears it through the unchanged route
+    r = client.post(f"/api/campaign/testvale/knowledge/{fact['id']}/reconcile")
+    assert r.status_code == 200, r.text
+    facts = client.get("/api/campaign/testvale/knowledge").json()["facts"]
+    assert not next(f for f in facts if f["id"] == fact["id"])["stale"]
+
+    # the two-step rule survives: revealing the recorded fact is its own,
+    # unchanged decision on the unchanged route
+    r = client.post(f"/api/campaign/testvale/knowledge/{fact['id']}/reveal",
+                    json={"week": 4})
+    assert r.status_code == 200, r.text
+    disclosure = client.get("/api/campaign/testvale/disclosure").json()
+    assert any(x["fact_id"] == fact["id"] for x in disclosure["revealed"])
+
+    # the week is typed: a malformed one is refused before anything writes
+    r = _add(client, text="x", visibility="public", week="three")
+    assert r.status_code == 422
+
+
 def test_knowledge_requires_simulation_state(client, spine_root):
     # spine_root's testvale HAS a state; use the no-simulation path via a
     # campaign whose state.yaml is absent — the fixture has none such, so

@@ -32,10 +32,10 @@ button where rumors render).
 
 ## Acceptance criteria
 
-- [ ] Rumor rows carry a "Tell the party" affordance that pre-fills the
+- [x] Rumor rows carry a "Tell the party" affordance that pre-fills the
       knowledge form with text/visibility/source/week.
-- [ ] Submission goes through the unchanged record → reveal path (no new
+- [x] Submission goes through the unchanged record → reveal path (no new
       write route).
-- [ ] Recorded rumor-facts show their chronicle as `source_file` and
+- [x] Recorded rumor-facts show their chronicle as `source_file` and
       reconcile normally after chronicle edits.
-- [ ] Fast-tier test for the prefill payload shape.
+- [x] Fast-tier test for the prefill payload shape.

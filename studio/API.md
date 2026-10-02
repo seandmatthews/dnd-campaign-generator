@@ -546,7 +546,11 @@ shapes in this document true.
   revision. The compiled state always carries the APPROVED text; a changed
   source never silently substitutes new wording.
 - `POST /api/campaign/{name}/knowledge` `{text, visibility, source_file?,
-  subjects?, id?}` → upsert + compile (transactional, revision-checked).
+  subjects?, week?, id?}` → upsert + compile (transactional,
+  revision-checked). `week` is optional provenance (e.g. the week whose
+  chronicle a rumor-fact came from — the "Tell the party" prefill on the
+  Simulation tab parks `{text, visibility, source_file, week}` for this
+  form; recording and revealing stay separate decisions).
   422 on unknown faction ids in the visibility list (a typo must not hide
   or leak a fact). 409 while a publication conflict is parked. Lands as a
   history snapshot like every canon change — `snapshot` in the response
@@ -699,9 +703,9 @@ markdown renderer shows the display text; Obsidian gets the real links.
 ## Frontend contract (C, M0)
 
 One page (guardrail 6). `index.html` loads, in order, plain scripts
-(no modules, no build): `js/esc.js, js/logtail.js, js/core.js, js/maps.js,
-js/world.js, js/sim.js, js/knowledge.js, js/review.js` (`esc.js`/`logtail.js`
-are UMD and
+(no modules, no build): `js/esc.js, js/logtail.js, js/core.js, js/handoff.js,
+js/maps.js, js/world.js, js/sim.js, js/knowledge.js, js/review.js`
+(`esc.js`/`logtail.js`/`handoff.js` are UMD and
 double as CommonJS modules for the Node suites `studio/tests/js/`).
 
 `js/core.js` defines `window.Studio`:

@@ -114,7 +114,7 @@ def apply_fact_records(name: str, doc: dict, faction_ids: set,
     calling several independent save functions).
 
     Each record: {text, visibility, subjects?, place_ids?, source_file?,
-    supersedes_fact_id?}. An unknown supersedes_fact_id raises
+    week?, supersedes_fact_id?}. An unknown supersedes_fact_id raises
     KnowledgeError; superseding flips the old record to superseded on the
     SAME doc (one store write when the caller saves). created_facts maps
     the record's index to the new fact dict, so a caller can resolve
@@ -135,7 +135,8 @@ def apply_fact_records(name: str, doc: dict, faction_ids: set,
                              visibility=rec.get("visibility"),
                              subjects=rec.get("subjects"),
                              place_ids=rec.get("place_ids"),
-                             source_file=rec.get("source_file") or "")
+                             source_file=rec.get("source_file") or "",
+                             week=rec.get("week"))
         if old is not None:
             old["status"] = "superseded"
             old["superseded_by"] = fact["id"]
@@ -146,7 +147,7 @@ def apply_fact_records(name: str, doc: dict, faction_ids: set,
 def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
                   text, visibility, source_file: str = "", subjects=None,
                   source_revision: str | None = None,
-                  place_ids=None) -> dict:
+                  week=None, place_ids=None) -> dict:
     """upsert's validation + mutation on a caller-owned (unsaved) doc.
     Shared by upsert (direct save) and the transactional record/supersede
     flows (the save rides the publication that also commits the compiled
@@ -165,6 +166,11 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
         doc["facts"].append(fact)
     fact["text"] = text
     fact["visibility"] = vis
+    if week is not None:
+        # provenance week (e.g. the chronicle week a rumor-fact came from);
+        # display metadata only — the engine contract (compile_state_section)
+        # never sees it
+        fact["week"] = int(week)
     if subjects is not None:
         fact["subjects"] = [str(s) for s in subjects]
     if place_ids is not None:
@@ -199,7 +205,8 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
 
 def upsert(name: str, *, fact_id: str | None = None, text: str,
            visibility, source_file: str = "", subjects=None,
-           source_revision: str | None = None, place_ids=None) -> dict:
+           source_revision: str | None = None, week=None,
+           place_ids=None) -> dict:
     """Create or update one fact, saving the store directly. Creating
     records the source file's CURRENT revision as approved (when a source
     file is given); updates that change text/visibility re-approve against
@@ -212,29 +219,32 @@ def upsert(name: str, *, fact_id: str | None = None, text: str,
     fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
                          visibility=visibility, source_file=source_file,
                          subjects=subjects, source_revision=source_revision,
-                         place_ids=place_ids)
+                         week=week, place_ids=place_ids)
     _save(name, doc)
     return fact
 
 
 def supersede(name: str, old_id: str, *, text: str, visibility,
-              source_file: str = "", subjects=None, place_ids=None) -> dict:
+              source_file: str = "", subjects=None, place_ids=None,
+              week=None) -> dict:
     """Approve a corrected fact and flip the old one to superseded (kept
     for provenance, never compiled again). Direct-save variant; the
-    studio's route uses supersede_fact_tx. place_ids/subjects omitted in
-    the correction body carry forward from the old fact — a typo fix must
-    not silently strip the fact's place associations or subjects."""
+    studio's route uses supersede_fact_tx. place_ids/subjects/week omitted
+    in the correction body carry forward from the old fact — a typo fix
+    must not silently strip the fact's place associations, subjects, or
+    provenance week."""
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
     if old is None:
         raise KnowledgeError(f"no such fact: {old_id}")
     subjects = old.get("subjects") if subjects is None else subjects
     place_ids = old.get("place_ids") if place_ids is None else place_ids
+    week = old.get("week") if week is None else week
     state = spine.load_state(name)
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     new = _apply_upsert(name, doc, faction_ids, text=text,
                         visibility=visibility, source_file=source_file,
-                        subjects=subjects, place_ids=place_ids)
+                        subjects=subjects, place_ids=place_ids, week=week)
     # _apply_upsert mutated OUR doc — mark the old record on the same
     # object, one save, no lost-update window
     old["status"] = "superseded"
@@ -257,7 +267,7 @@ def _input_base_revisions(name: str) -> dict:
 
 def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
                    visibility, source_file: str = "", subjects=None,
-                   place_ids=None) -> tuple:
+                   week=None, place_ids=None) -> tuple:
     """Record a fact AND compile the visible slice in ONE publication
     transaction: the store save and the compiled state commit are two
     writes of the same publish — a crash leaves neither or both, never a
@@ -270,7 +280,7 @@ def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     fact = _apply_upsert(name, doc, faction_ids, fact_id=fact_id, text=text,
                          visibility=visibility, source_file=source_file,
-                         subjects=subjects, place_ids=place_ids)
+                         subjects=subjects, week=week, place_ids=place_ids)
     return fact, _publish_store_and_state(name, doc, state,
                                           operation="record knowledge fact",
                                           base_revisions=base)
@@ -278,11 +288,11 @@ def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
 
 def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
                       source_file: str = "", subjects=None,
-                      place_ids=None) -> tuple:
+                      place_ids=None, week=None) -> tuple:
     """supersede + compile in one publication transaction (same reasoning
-    as record_fact_tx). place_ids/subjects omitted in the correction body
-    carry forward from the old fact (see supersede). Returns (new fact,
-    publication result)."""
+    as record_fact_tx). place_ids/subjects/week omitted in the correction
+    body carry forward from the old fact (see supersede). Returns
+    (new fact, publication result)."""
     base = _input_base_revisions(name)
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
@@ -290,11 +300,12 @@ def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
         raise KnowledgeError(f"no such fact: {old_id}")
     subjects = old.get("subjects") if subjects is None else subjects
     place_ids = old.get("place_ids") if place_ids is None else place_ids
+    week = old.get("week") if week is None else week
     state = spine.load_state(name)
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
     new = _apply_upsert(name, doc, faction_ids, text=text,
                         visibility=visibility, source_file=source_file,
-                        subjects=subjects, place_ids=place_ids)
+                        subjects=subjects, place_ids=place_ids, week=week)
     old["status"] = "superseded"
     old["superseded_by"] = new["id"]
     return new, _publish_store_and_state(
