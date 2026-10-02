@@ -1317,6 +1317,13 @@ textarea.input:focus-visible {
   margin: 0.4rem 0;
   background: var(--paper-dim);
 }
+/* an effect row whose "Now" was reset (or blocked at submit) because the
+   kind of change switched under a picked value — the reset is visible,
+   never silent (ticket 29) */
+.session-effect.session-effect-changed {
+  outline: 2px dashed #a4431f;
+  outline-offset: 2px;
+}
 
 /* ---------- print: a chronicle should print cleanly ---------- */
 
@@ -1552,6 +1559,9 @@ li.quest-row.quest-overdue .quest-name { color: var(--oxblood-dark); }
 .ssn-append { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
 .ssn-card { padding: 10px 12px; }
 .ssn-card-blocked { border-left: 3px solid #a4431f; }
+/* a card whose id the open draft no longer knows (stale multi-tab
+   render) — the save aborts on it (ticket 29) */
+.ssn-card-foreign { border-left: 3px solid #b23; }
 .ssn-card-accepted { opacity: 0.65; }
 .ssn-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
 .ssn-select { display: flex; align-items: center; gap: 6px; margin: 0; }

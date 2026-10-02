@@ -1049,6 +1049,74 @@
 
   /* ----- record-a-session form (Phase 3: history + structured effects) ----- */
 
+  const EFFECT_LEVELS = ['none', 'low', 'medium', 'high'];
+  // what the "Now" (after) control offers for each kind, single-sourced:
+  // a resource row picks from the four grades, a project-progress row from
+  // the 0-8 counter, facts and project statuses are free text
+  const EFFECT_AFTER = {
+    set_resource: { tag: 'select', options: EFFECT_LEVELS, value: 'none' },
+    set_project_progress: {
+      tag: 'select',
+      options: ['0', '1', '2', '3', '4', '5', '6', '7', '8'],
+      value: '0'
+    },
+    set_field: { tag: 'input', options: null, value: '',
+                 placeholder: 'the new value' },
+    set_project_status: { tag: 'input', options: null, value: '',
+                          placeholder: 'active | paused | abandoned' }
+  };
+
+  function sameOptions(a, b) {
+    const x = Array.isArray(a) ? a : [];
+    const y = Array.isArray(b) ? b : [];
+    return x.length === y.length && x.every((o, i) => String(o) === String(y[i]));
+  }
+
+  /* Pure — the "Now" control a kind must render, given what the row shows
+     now ({tag: 'select'|'input', options?: [...], value?, placeholder?},
+     or null for a not-yet-rendered row). Returns {rebuild, control,
+     reset}: rebuild is false when the kind's option set is already on
+     screen (the DM's selection stays put); otherwise control is what to
+     render ({tag, options, value, placeholder}) and reset flags that a
+     stale user value was discarded — the row must show it changed, never
+     carry a word from the old kind into the new one (ticket 29). Pinned
+     by studio/tests/js/test_sessions_staging.cjs. */
+  S.effectAfterControl = function (kind, current) {
+    const spec = EFFECT_AFTER[kind];
+    if (!spec) return { rebuild: false, control: current, reset: false };
+    if (current && current.tag === spec.tag &&
+        (spec.tag === 'input'
+          ? String(current.placeholder || '') === String(spec.placeholder || '')
+          : sameOptions(current.options, spec.options))) {
+      return { rebuild: false, control: current, reset: false };
+    }
+    return {
+      rebuild: true,
+      control: {
+        tag: spec.tag,
+        options: spec.options ? spec.options.slice() : null,
+        value: spec.value,
+        placeholder: spec.placeholder
+      },
+      reset: !!(current && String(current.value || '') !== '' &&
+                String(current.value) !== String(spec.value))
+    };
+  };
+
+  /* Pure — the after value a kind may submit, or null when the value does
+     not belong to the kind (a resource word on a project-progress row, a
+     0-8 counter as a resource level). The submit gate blocks on null —
+     coercion is how 'high' once became progress 0. Free-text kinds pass
+     their string through as-is. Pinned by
+     studio/tests/js/test_sessions_staging.cjs. */
+  S.effectAfterValue = function (kind, value) {
+    const spec = EFFECT_AFTER[kind];
+    if (!spec) return null;
+    const v = String(value == null ? '' : value);
+    if (spec.tag === 'input') return v;
+    return spec.options.indexOf(v) !== -1 ? v : null;
+  };
+
   function effectRow(factions, projects) {
     const opts = factions.map((f) =>
       '<option value="' + S.esc(String(f.id)) + '">' + S.esc(f.name || f.id) + '</option>').join('');
@@ -1127,7 +1195,6 @@
       const fieldWrap = row.querySelector('.e-field-wrap');
       const factionWrap = row.querySelector('.e-faction-wrap');
       const projectWrap = row.querySelector('.e-project-wrap');
-      const LEVELS = ['none', 'low', 'medium', 'high'];
       function sync() {
         const t = typeSel.value;
         const isField = t === 'set_field';
@@ -1138,26 +1205,40 @@
         factionWrap.classList.toggle('hidden', isProject);
         projectWrap.classList.toggle('hidden', !isProject);
         const afterEl = row.querySelector('.e-after');
-        if (isField || t === 'set_project_status') {
-          if (afterEl.tagName === 'SELECT') {
-            const input = document.createElement('input');
-            input.type = 'text'; input.className = 'input e-after';
-            input.placeholder = isField ? 'the new value' : 'active | paused | abandoned';
-            afterEl.replaceWith(input);
-          }
-        } else if (afterEl.tagName === 'INPUT' || !afterEl.options.length) {
-          // the template ships an empty select — a fresh row must get its
-          // levels here, not only when toggling back from set_field
-          const sel = document.createElement('select');
-          sel.className = 'input e-after';
-          sel.innerHTML = (t === 'set_project_progress')
-            ? '<option value="0">0</option><option value="1">1</option>' +
-              '<option value="2">2</option><option value="3">3</option>' +
-              '<option value="4">4</option><option value="5">5</option>' +
-              '<option value="6">6</option><option value="7">7</option>' +
-              '<option value="8">8</option>'
-            : LEVELS.map((l) => '<option>' + l + '</option>').join('');
-          afterEl.replaceWith(sel);
+        // what the row shows now, in the state machine's shape: the
+        // template ships an EMPTY select — a fresh row must get its
+        // options here too, not only when toggling from another kind
+        const current = (afterEl.tagName === 'SELECT')
+          ? { tag: 'select',
+              options: Array.prototype.map.call(afterEl.options, (o) => o.value),
+              value: afterEl.value }
+          : { tag: 'input', placeholder: afterEl.placeholder || '',
+              value: afterEl.value };
+        const plan = S.effectAfterControl(t, current);
+        if (!plan.rebuild) return;
+        let next;
+        if (plan.control.tag === 'input') {
+          next = document.createElement('input');
+          next.type = 'text';
+          next.placeholder = plan.control.placeholder || '';
+        } else {
+          next = document.createElement('select');
+          next.innerHTML = plan.control.options.map((o) =>
+            '<option value="' + S.esc(o) + '">' + S.esc(o) + '</option>').join('');
+        }
+        next.className = 'input e-after';
+        next.value = plan.control.value;
+        afterEl.replaceWith(next);
+        if (plan.reset) {
+          // the new kind's options displaced a value the DM had picked:
+          // the reset to the kind's default must be visible, not silent
+          row.classList.add('session-effect-changed');
+          row.title = 'The kind of change switched — "Now" was reset to ' +
+            'this kind\u2019s default. Re-check it.';
+          next.addEventListener('change', () => {
+            row.classList.remove('session-effect-changed');
+            row.title = '';
+          }, { once: true });
         }
       }
       typeSel.addEventListener('change', sync);
@@ -1177,19 +1258,24 @@
           const m = ln.match(/^([A-Za-z0-9_]+)\s*:\s*(.+)$/);
           return m ? { actor: m[1], text: m[2].trim() } : { actor: 'world', text: ln };
         });
-      const effects = Array.from(host.querySelectorAll('.session-effect')).map((row) => {
+      const effectRows = Array.from(host.querySelectorAll('.session-effect'));
+      const effects = effectRows.map((row) => {
         const t = row.querySelector('.e-type').value;
         const isField = t === 'set_field';
         const isProject = t === 'set_project_progress' ||
                           t === 'set_project_status';
+        const after = S.effectAfterValue(t, row.querySelector('.e-after').value);
+        if (after === null) return null; // value foreign to the kind
         const base = {
           type: t,
-          after: row.querySelector('.e-after').value,
+          after: after,
           reason: row.querySelector('.e-reason').value.trim()
         };
         if (isProject) {
           base.project_id = row.querySelector('.e-project').value;
-          if (t === 'set_project_progress') base.after = Number(base.after) || 0;
+          // the gate above guarantees a 0-8 option string, so the counter
+          // converts exactly — never Number(word) || 0
+          if (t === 'set_project_progress') base.after = Number(after);
         } else {
           base.faction_id = row.querySelector('.e-faction').value;
           if (isField) base.field = row.querySelector('.e-field').value;
@@ -1199,6 +1285,16 @@
         if (was) base.expected_before = was;
         return base;
       });
+      const badAt = effects.indexOf(null);
+      if (badAt !== -1) {
+        // a stale "Now" value must never ride into a staged effect: the
+        // engine would take 'high' as progress 0 (engine-valid, silent)
+        // or 422 on a number as a resource level
+        effectRows[badAt].classList.add('session-effect-changed');
+        S.toast('Effect ' + (badAt + 1) + ': the "Now" value does not fit ' +
+          'that kind of change — pick one from its list first.', 'error');
+        return;
+      }
       if (!source) { S.toast('Name the source — e.g. session:session-08.', 'error'); return; }
       if (!events.length && !effects.length) {
         S.toast('Nothing to record: add history lines or an effect.', 'error');

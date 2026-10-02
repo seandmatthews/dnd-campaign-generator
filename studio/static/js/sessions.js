@@ -46,6 +46,53 @@
     return out;
   };
 
+  /* Pure — plan the draft PUT from the panel's cards BEFORE anything is
+     sent (ticket 29): every card serializes in DOM order, because the
+     server mints ids for new suggestions positionally and
+     prepareSelection resolves checked cards by that same position — the
+     body and the minting stay aligned only while one body entry maps to
+     one card. A card whose data-id the draft no longer knows is FOREIGN
+     (a stale multi-tab render): the plan comes back {foreign: [ids],
+     suggestions: null} and the save must abort with a visible error.
+     The old silent skip dropped the card and shifted every later card's
+     position against the minted ids. Cards look like
+     {id, selected, fresh, edits: {field: value}, confirmed: {…},
+     visibility} — exactly what the DOM query builds. Pinned by
+     studio/tests/js/test_sessions_staging.cjs. */
+  S.draftSavePlan = function (cards, suggestions) {
+    const known = {};
+    (suggestions || []).forEach(function (s) {
+      if (s && s.id) known[s.id] = s;
+    });
+    const foreign = [];
+    (cards || []).forEach(function (c) {
+      if (c && c.id && !known[c.id] && foreign.indexOf(c.id) === -1) {
+        foreign.push(c.id);
+      }
+    });
+    if (foreign.length) return { foreign: foreign, suggestions: null };
+    return {
+      foreign: [],
+      suggestions: (cards || []).map(function (c) {
+        c = c || {};
+        // an existing card keeps its stored shape; a card without an id
+        // is new material (the server mints the id) starting from the
+        // blank suggestion it was authored from
+        const upd = JSON.parse(JSON.stringify(known[c.id] || c.fresh || {}));
+        upd.id = c.id || null;
+        upd.selected = !!c.selected;
+        Object.keys(c.edits || {}).forEach(function (f) {
+          upd[f] = c.edits[f];
+        });
+        if (c.confirmed && Object.keys(c.confirmed).length) {
+          upd.confirmed = Object.assign({}, upd.confirmed, c.confirmed);
+        }
+        if (c.visibility !== undefined) upd.visibility = c.visibility;
+        return upd;
+      })
+    };
+  };
+
   function pill(text, cls) {
     return '<span class="pill ' + (cls || 'pill-kind') + '">' + S.esc(text) + '</span>';
   }
@@ -370,39 +417,53 @@
     // save edits + selections (and any NEW cards) as one draft revision
     async function saveDraft() {
       if (!draft) throw { error: 'no draft to save' };
-      const sugs = [];
+      const cards = [];
       panel.querySelectorAll('.ssn-card').forEach((cardEl) => {
         const check = cardEl.querySelector('.ssn-check');
-        const id = check.getAttribute('data-id');
-        const orig = id ? (draft.suggestions || []).find((x) => x.id === id)
-          : null;
-        if (id && !orig) return;
-        // a card without an id is new material: the server mints the id
-        const upd = JSON.parse(JSON.stringify(orig || cardEl.__new || {}));
-        upd.id = id || null;
-        upd.selected = check.checked;
+        const card = {
+          id: check.getAttribute('data-id') || null,
+          selected: check.checked,
+          // a card without an id is new material: the server mints the id
+          fresh: cardEl.__new || null,
+          edits: {},
+          confirmed: {},
+          visibility: undefined
+        };
         cardEl.querySelectorAll('.ssn-edit').forEach((inp) => {
-          const f = inp.getAttribute('data-field');
-          upd[f] = inp.value;
+          card.edits[inp.getAttribute('data-field')] = inp.value;
         });
         const grade = cardEl.querySelector('.ssn-confirm-grade');
-        if (grade) {
-          upd.confirmed = Object.assign({}, upd.confirmed,
-            { resource_grade: grade.checked });
-        }
+        if (grade) card.confirmed.resource_grade = grade.checked;
         const vis = cardEl.querySelector('.ssn-confirm-vis');
-        if (vis) {
-          upd.confirmed = Object.assign({}, upd.confirmed,
-            { knowledge_visibility: vis.checked });
-        }
+        if (vis) card.confirmed.knowledge_visibility = vis.checked;
         const visSel = cardEl.querySelector('.ssn-vis');
-        if (visSel) upd.visibility = visSel.value;
-        sugs.push(upd);
+        if (visSel) card.visibility = visSel.value;
+        cards.push(card);
       });
+      const plan = S.draftSavePlan(cards, draft.suggestions);
+      if (plan.foreign.length) {
+        // a card this draft no longer knows (stale multi-tab render):
+        // the PUT must not go out around it — the silent skip shifted
+        // every later card's position against the server's minted ids
+        // (ticket 29). Flag the cards, tell the DM, save nothing.
+        panel.querySelectorAll('.ssn-card').forEach((cardEl) => {
+          const id = cardEl.querySelector('.ssn-check').getAttribute('data-id');
+          if (id && plan.foreign.indexOf(id) !== -1) {
+            cardEl.classList.add('ssn-card-foreign');
+          }
+        });
+        const msg = 'Card ' + plan.foreign.join(', ') + ' is no longer in ' +
+          'this draft — it changed in another tab. Reopen the session to ' +
+          'resync; nothing was saved.';
+        S.toast(msg, 'error');
+        // keepView: the prepare handler must not re-render over the
+        // highlighted cards
+        throw { error: msg, keepView: true };
+      }
       return S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
         '/drafts/' + encodeURIComponent(draft.draft_id), {
         method: 'PUT',
-        body: { suggestions: sugs, expected_revision: draft.revision }
+        body: { suggestions: plan.suggestions, expected_revision: draft.revision }
       });
     }
 
@@ -447,7 +508,10 @@
         S.showTab('sim');
       } catch (err) {
         errBox.textContent = (err && err.error) || 'Prepare failed.';
-        if (err && err.status === 409 && /awaiting review/.test(err.error || '')) {
+        if (err && err.keepView) {
+          // already surfaced (toast + highlighted cards) — a re-render
+          // would wipe the rows the DM needs to see
+        } else if (err && err.status === 409 && /awaiting review/.test(err.error || '')) {
           S.toast('A proposal is already pending — review it on the Simulation tab.', 'info');
         } else {
           S.showTab('sessions'); // re-render: validations changed
