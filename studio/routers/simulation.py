@@ -664,7 +664,12 @@ def post_session(name: str, body: SessionBody):
             state_path = d / "simulation" / "state.yaml"
             state_text, base_revision = proposal_flows.capture_state(state_path)
         copy_path = tmp_dir / "state-copy.yaml"
-        copy_path.write_text(state_text, encoding="utf-8")
+        # EXACT bytes: text mode would re-translate \n and turn the CRLF a
+        # Windows state.yaml carries into \r\r\n — YAML folds one break in
+        # a plain scalar to a space but two to a literal newline, so every
+        # dumper-wrapped value (width 100) would silently mutate in what
+        # the engine parses (and accept would publish that corruption)
+        copy_path.write_bytes(state_text.encode("utf-8"))
 
         rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/effects.py",
                                    "--check", str(record_path),
@@ -827,7 +832,10 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
             state_path = d / "simulation" / "state.yaml"
             state_text, base_revision = proposal_flows.capture_state(state_path)
         copy_path = tmp_dir / "state-copy.yaml"
-        copy_path.write_text(state_text, encoding="utf-8")
+        # EXACT bytes — same rule as the session flow: the copy must be
+        # byte-identical to what was captured, or CRLF doubling mutates
+        # every wrapped scalar the engine validates against
+        copy_path.write_bytes(state_text.encode("utf-8"))
         changes_path = tmp_dir / "changes.yaml"
         changes_path.write_text(
             spine.dump_yaml({"operations": operations}), encoding="utf-8")
@@ -938,7 +946,9 @@ def post_goal_review(name: str, body: GoalReviewBody | None = None):
         tmp_dir = Path(tempfile.mkdtemp(prefix="studio-goals-"))
         try:
             copy_path = tmp_dir / "state.yaml"
-            copy_path.write_text(state_text, encoding="utf-8")
+            # EXACT bytes — same rule as the session flow: the copy must
+            # be byte-identical to what was captured (no CRLF doubling)
+            copy_path.write_bytes(state_text.encode("utf-8"))
             updates_path = tmp_dir / "goal-updates.yaml"
             log("asking the engine to propose goal updates from the ledger "
                 "(one bounded LLM pass)")

@@ -54,15 +54,15 @@ the hazard; page writes use `write_bytes`) — these five sites missed it.
 
 ## Acceptance criteria
 
-- [ ] A regression test at the SEAM, not the unit: build a state.yaml with
+- [x] A regression test at the SEAM, not the unit: build a state.yaml with
       CRLF on disk containing wrapped plain scalars (premise > 100 chars);
       run the session-effects staging path against a faked engine apply;
       assert the engine's parsed copy has values equal to the canon parse
       (no `\n` where a space was) — and assert the same for all four flows
       or one shared helper if the flows converge.
-- [ ] `write_text_atomic` with `\r\n`-carrying input writes those bytes
+- [x] `write_text_atomic` with `\r\n`-carrying input writes those bytes
       exactly once (no `\r\r\n` on disk) — unit test.
-- [ ] No `write_text` on captured-state text remains (grep the four sites);
+- [x] No `write_text` on captured-state text remains (grep the four sites);
       canon before/after an accept shows only the intended diff.
-- [ ] Ticket 10's byte-preservation tests still pass unchanged (page writes
+- [x] Ticket 10's byte-preservation tests still pass unchanged (page writes
       were already `write_bytes` — they must be untouched by this fix).

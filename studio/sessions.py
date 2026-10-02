@@ -875,7 +875,11 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
         after_text = None
         if effects or events:
             copy_path = tmp_dir / "state-copy.yaml"
-            copy_path.write_text(state_text, encoding="utf-8")
+            # EXACT bytes: text mode would re-translate \n and double the
+            # CRLF a Windows state.yaml carries into \r\r\n — every wrapped
+            # scalar the engine parses would silently mutate (and accept
+            # would publish the corruption into canon)
+            copy_path.write_bytes(state_text.encode("utf-8"))
             record = {"source": f"session:{session_id}",
                       "week": event_week,
                       "events": events,
