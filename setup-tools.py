@@ -19,7 +19,10 @@ What it sets up (all under dnd-mapping/tools/, which is git-ignored):
 Installs are plain `npm install` (npm ships with Node; both upstreams keep
 a package-lock.json, so installs are reproducible). No pnpm anywhere —
 pnpm's symlinked store was the source of the junction-breaks-when-moved
-fragility the doctor used to have to repair. Engines invoke binaries as
+fragility the doctor used to have to repair. That contract is checked, not
+assumed: --check (and setup) detect a pnpm-shaped tree (a .pnpm store,
+.modules.yaml or pnpm-lock.yaml) even when every marker file is present,
+and setup removes it for a clean npm reinstall. Engines invoke binaries as
 `node node_modules/<pkg>/...` directly, so the package manager is needed
 only here and in doctor --fix.
 
@@ -74,6 +77,41 @@ def _run(cmd, cwd=None, env_extra=None, check=True):
 
 def _have(name):
     return shutil.which(name) is not None
+
+
+# ------------------------------------------------------- the npm-only contract
+
+# pnpm leftovers that void the movability invariant (npm's flat
+# node_modules has no junctions). Presence-only guardrails — marker files
+# like node_modules/sharp/package.json — cannot see these: a pnpm install
+# has every marker AND symlinks everything into node_modules/.pnpm.
+PNPM_ARTIFACTS = ("node_modules/.pnpm", "node_modules/.modules.yaml",
+                  "pnpm-lock.yaml")
+
+
+def pnpm_drift(tree):
+    """The pnpm artifacts found in `tree` ([] when npm-shaped). A cheap
+    presence check — no npm run, no lockfile parse."""
+    found = []
+    for rel in PNPM_ARTIFACTS:
+        p = tree / rel
+        if p.exists() or p.is_symlink():
+            found.append(rel)
+    return found
+
+
+def remove_pnpm_install(tree):
+    """Delete a pnpm-shaped install so the next `npm install` starts from a
+    clean slate (npm over a symlinked store keeps the junctions in place —
+    found 2026-10-02: both tool trees had quietly drifted to pnpm)."""
+    nm = tree / "node_modules"
+    if nm.is_symlink() or nm.is_file():
+        nm.unlink()
+    elif nm.is_dir():
+        shutil.rmtree(nm)
+    lock = tree / "pnpm-lock.yaml"
+    if lock.is_symlink() or lock.exists():
+        lock.unlink()
 
 
 # ------------------------------------------------------------- the steps
@@ -148,18 +186,21 @@ def settle_apply():
 
 
 STEPS = [
-    ("Fantasy-Map-Generator (world gen)", fmg_done, fmg_apply),
-    ("settlemaker (cities + rasterizer)", settle_done, settle_apply),
+    ("Fantasy-Map-Generator (world gen)", "Fantasy-Map-Generator",
+     fmg_done, fmg_apply),
+    ("settlemaker (cities + rasterizer)", "settlemaker",
+     settle_done, settle_apply),
 ]
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--check", action="store_true",
-                    help="report readiness only; exit 1 if anything is missing")
+                    help="report readiness only; exit 1 if anything is missing "
+                         "(a pnpm-shaped tool tree counts as missing)")
     ap.add_argument("--force", action="store_true",
                     help="re-apply patches and re-run installs even if a step looks done")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     print(f"setup-tools: tools live under {TOOLS}\n")
 
@@ -176,7 +217,21 @@ def main():
     print("prerequisites: git and node (with npm) present")
 
     incomplete = []
-    for label, done, apply_step in STEPS:
+    for label, dirname, done, apply_step in STEPS:
+        tree = TOOLS / dirname
+        drift = pnpm_drift(tree)
+        if drift:
+            # markers can all be present and the tree still pnpm-shaped:
+            # the contract is checked, not assumed
+            if args.check:
+                print(f"[pnpm]     {label}: installed with pnpm "
+                      f"({', '.join(drift)}) — the npm-only movability "
+                      f"contract is void")
+                incomplete.append(label)
+                continue
+            print(f"[reinstall] {label}: pnpm install detected "
+                  f"({', '.join(drift)}) — removing it for a clean npm install")
+            remove_pnpm_install(tree)
         if done():
             print(f"[done]     {label}")
             if args.force and not args.check:

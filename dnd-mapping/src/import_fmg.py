@@ -129,36 +129,59 @@ def slugify(name):
 RIVER_LIMIT = 40
 RIVER_NEAR = 5.0  # map units on the FMG grid (maps are typically 1280x720)
 RIVER_SETTLEMENTS_CAP = 6
+NEIGHBORS_CAP = 6  # declared in output as neighbors_note when it bites
+
+
+def _cell_centers(pack):
+    """[ (x, y) centroid per cell id ] from either export shape, or None
+    when the export carries no usable graph arrays. Columnar headless
+    dumps keep cells.v / vertices.p as parallel arrays (position == id);
+    browser full JSON exports expand both into per-object lists — the same
+    two shapes _cell_biome supports. (Found 2026-10-02: only the columnar
+    shape was recognized, so browser exports grounded every river with
+    zero settlements while the summary claimed missing graph arrays.)"""
+    cells, vertices = pack.get("cells"), pack.get("vertices")
+    if isinstance(cells, dict) and isinstance(vertices, dict):
+        cells_v, verts_p = cells.get("v"), vertices.get("p")
+        if not (isinstance(cells_v, list) and isinstance(verts_p, list)
+                and cells_v and verts_p):
+            return None
+        vlists = enumerate(cells_v)
+        pts = dict(enumerate(verts_p))
+    elif isinstance(cells, list) and isinstance(vertices, list):
+        vlists = [(c.get("i"), c.get("v")) for c in cells
+                  if isinstance(c, dict)]
+        pts = {v.get("i"): v.get("p") for v in vertices
+               if isinstance(v, dict)}
+    else:
+        return None
+    centers: dict[int, tuple] = {}
+    for cid, vlist in vlists:
+        if not isinstance(cid, int) or not isinstance(vlist, list):
+            continue
+        xy = [pts[j] for j in vlist if isinstance(j, int) and j in pts]
+        if xy:
+            centers[cid] = (sum(p[0] for p in xy) / len(xy),
+                            sum(p[1] for p in xy) / len(xy))
+    if not centers:
+        return None
+    return [centers.get(i) for i in range(max(centers) + 1)]
 
 
 def _has_graph_arrays(pack):
     """True when the export carries the graph arrays the settlement
-    grounding needs (full JSON exports do; .map-section imports never)."""
-    cells = pack.get("cells")
-    vertices = pack.get("vertices")
-    cells_v = cells.get("v") if isinstance(cells, dict) else None
-    verts_p = vertices.get("p") if isinstance(vertices, dict) else None
-    return bool(cells_v and verts_p)
+    grounding needs, in either shape (see _cell_centers). Full JSON
+    exports do — columnar or per-object lists; .map-section imports
+    never."""
+    return _cell_centers(pack) is not None
 
 
 def _river_settlements(pack, burgs, rivers):
     """{river_index: [burg dicts within RIVER_NEAR of the course]}. Needs
     the graph arrays (see _has_graph_arrays); otherwise {}."""
-    if not _has_graph_arrays(pack):
+    centers = _cell_centers(pack)
+    if centers is None:
         return {}
-    cells = pack.get("cells")
-    vertices = pack.get("vertices")
-    cells_v = cells["v"]
-    verts_p = vertices["p"]
-    centers = []
-    for vlist in cells_v:
-        pts = [verts_p[j] for j in vlist if isinstance(j, int)
-               and 0 <= j < len(verts_p)]
-        if pts:
-            centers.append((sum(p[0] for p in pts) / len(pts),
-                            sum(p[1] for p in pts) / len(pts)))
-        else:
-            centers.append(None)
     near_limit = RIVER_NEAR * RIVER_NEAR
     out: dict[int, list] = {}
     for b in burgs:
@@ -328,6 +351,10 @@ def summarize(info, pack, settings=None):
         lat = latitude(capital.get("y")) if capital and latitude else None
         if lat is not None:
             entry["latitude"] = lat
+        neighbor_names = [
+            state_by_id[n]["name"]
+            for n in s.get("neighbors", []) if n in state_by_id
+        ]
         entry.update({
             "form_of_government": s.get("formName"),
             "burgs": len(own),
@@ -339,12 +366,14 @@ def summarize(info, pack, settings=None):
             "urban_population_thousands": round(
                 sum(b.get("population", 0) for b in own), 1
             ),
-            "neighbors": [
-                state_by_id[n]["name"]
-                for n in s.get("neighbors", []) if n in state_by_id
-            ][:6],
+            "neighbors": neighbor_names[:NEIGHBORS_CAP],
             "color": s.get("color"),
         })
+        # the cap is declared when it bites, never silent (house rule; the
+        # same pattern as the river settlements_note below)
+        if len(neighbor_names) > NEIGHBORS_CAP:
+            entry["neighbors_note"] = (
+                f"top {NEIGHBORS_CAP} of {len(neighbor_names)} neighbors")
         nations.append(entry)
 
     settlements = sorted(burgs, key=lambda b: -(b.get("population", 0)))[:15]
@@ -417,11 +446,13 @@ def summarize(info, pack, settings=None):
             "major_landmasses": len(features),
             "rivers": len(rivers_all),
             # distinguish "no settlements computed" (.map section import,
-            # no graph arrays) from "rivers with truly none nearby"
+            # no graph arrays in either shape) from "rivers with truly
+            # none nearby" — the reason names what was actually missing
             "river_settlements": ("nearby settlements per river, most "
                                   "populous first"
                                   if _has_graph_arrays(pack) else
-                                  "not computed — export lacks graph arrays"),
+                                  "not computed — no usable cells/vertices "
+                                  "graph arrays (.map imports carry none)"),
         },
         "nations": nations,
         "cultures": [{

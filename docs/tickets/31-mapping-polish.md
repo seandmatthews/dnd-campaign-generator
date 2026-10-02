@@ -48,11 +48,11 @@
 
 ## Acceptance criteria
 
-- [ ] Importing `candidate-5-full.json` computes river settlements; the
+- [x] Importing `candidate-5-full.json` computes river settlements; the
       summary no longer claims missing graph arrays for list-shaped
       exports.
-- [ ] A state with 7+ neighbors either lists them all or declares the cap
+- [x] A state with 7+ neighbors either lists them all or declares the cap
       in the output (test).
-- [ ] The wrap-stage error names the real filename.
-- [ ] `setup-tools.py --check` fails on a pnpm-shaped tree; the live trees
+- [x] The wrap-stage error names the real filename.
+- [x] `setup-tools.py --check` fails on a pnpm-shaped tree; the live trees
       pass it.
