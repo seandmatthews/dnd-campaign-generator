@@ -57,12 +57,12 @@ remaining holes in `_set_frontmatter_scalars` / `_changed_page_text` /
 
 ## Acceptance criteria
 
-- [ ] R3 repro page: status flip either applies and re-parses to `active`
+- [x] R3 repro page: status flip either applies and re-parses to `active`
       byte-verified, or refuses with a finding — never writes `active "`.
-- [ ] R4 repro page: comment, blank-valued `given_by:`, and body trailing
+- [x] R4 repro page: comment, blank-valued `given_by:`, and body trailing
       whitespace all survive a scalar change byte-for-byte.
-- [ ] Mixed-endings page: unchanged lines keep their original endings
+- [x] Mixed-endings page: unchanged lines keep their original endings
       (count-based dominance test).
-- [ ] `name: "Shop #5"` → rewritten line parses to exactly the new value.
-- [ ] associate with `expected_revision` on a map with params.yaml: no
+- [x] `name: "Shop #5"` → rewritten line parses to exactly the new value.
+- [x] associate with `expected_revision` on a map with params.yaml: no
       false 409; stale params revision still 409s (test).

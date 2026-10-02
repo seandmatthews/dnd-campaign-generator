@@ -21,6 +21,7 @@ the route (manifest records the snapshot)."""
 import json
 
 import briefing
+import places
 import quests
 import pytest
 import spine
@@ -589,3 +590,73 @@ def test_status_flips_round_trip_like_hand_edits(camp):
     # and the read model still sees the page (the surgery parses back)
     record = quests.load(camp)["by_page"]["The Trolls Tithe"]
     assert record["status"] == "resolved"
+
+
+# --------------------------------- ticket 22: page surgery completion (R3/R4)
+
+# R3: a quoted scalar whose closing quote sits two lines down — valid YAML
+# (parses 'hooked '), but not line-local. Rewriting only the first line
+# used to leave the dangling '"' folding into the NEW value
+# ('active "') — a silent wrong-write the read model degraded to hooked.
+_MULTILINE_QUOTED_STATUS = (
+    "---\n"
+    "kind: quest\n"
+    "name: The Toll Road\n"
+    "status: \"hooked\n"
+    "  \"\n"
+    "---\n"
+    "\n"
+    "Villagers pay twice.\n"
+)
+
+
+def test_status_flip_on_multiline_quoted_value_never_leaves_a_dangling_quote(
+        camp):
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "The Toll Road.md"
+    page.write_bytes(_MULTILINE_QUOTED_STATUS.encode("utf-8"))
+    out = quests.set_status(camp, "The Toll Road", "active")
+    assert out["state"] == "published"
+    after = page.read_bytes().decode("utf-8")
+    # the change is not line-local, so the write re-serializes — and the
+    # re-serialized page re-parses to EXACTLY the asked-for status
+    assert after == ("---\nkind: quest\nname: The Toll Road\n"
+                     "status: active\n---\n\nVillagers pay twice.\n")
+    meta, _body = places._frontmatter_of(after)
+    assert meta["status"] == "active"
+    # the read model agrees (the R3 symptom was: API said active, the
+    # panel silently kept showing hooked)
+    record = quests.load(camp)["by_page"]["The Toll Road"]
+    assert record["status"] == "active"
+
+
+# R4: a top-level comment line used to fail the surgery pre-scan and route
+# the whole write to the lossy rebuild, which drops comments, blank-valued
+# keys and body edge whitespace in one routine status flip.
+_COMMENTED_QUEST = (
+    "---\n"
+    "kind: quest\n"
+    "name: The Quiet Ledger\n"
+    "status: hooked\n"
+    "# Keep the timer secret.\n"
+    "given_by:\n"
+    "---\n"
+    "\n"
+    "  An indent opens the ledger.  \n"
+)
+
+
+def test_status_flip_keeps_comments_blank_keys_and_body_whitespace(camp):
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "The Quiet Ledger.md"
+    page.write_bytes(_COMMENTED_QUEST.encode("utf-8"))
+    out = quests.set_status(camp, "The Quiet Ledger", "active")
+    assert out["state"] == "published"
+    after = page.read_bytes().decode("utf-8")
+    # a comment line is safe unchanged bytes: only the status line changes
+    expected = _COMMENTED_QUEST.replace("status: hooked",
+                                        "status: active")
+    assert after == expected
+    assert "# Keep the timer secret." in after
+    assert "\ngiven_by:\n" in after
+    assert "  An indent opens the ledger.  \n" in after
