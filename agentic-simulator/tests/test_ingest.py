@@ -264,6 +264,43 @@ def test_apply_warns_when_the_pending_week_is_not_next():
     print("  stale week: applies as dated but warns loudly  OK")
 
 
+def test_quoted_pending_week_dates_like_the_bare_int():
+    # a quoted 'week: "5"' is the DM's week 5, not a different value: it
+    # applies at 5 without tripping the staleness warning for being a
+    # string; an unreadable week refuses the file; a missing week dates
+    # the record to the clock instead of storing `week: null` events
+    clock = STATE["meta"]["clock"]["week"]
+    with tempfile.TemporaryDirectory() as d:
+        path = temp_state_copy(d)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            n = apply({"week": str(clock + 1),
+                       "proposals": [{"actor": "world",
+                                      "text": "Quoted week."}]}, path)
+        assert n == 1, "a quoted next-week applies like the bare int"
+        assert "warning:" not in buf.getvalue(), \
+            "the same week as a string must not look stale"
+        after = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert after["events"][-1]["week"] == clock + 1
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            n = apply({"week": "eight",
+                       "proposals": [{"actor": "world",
+                                      "text": "Never lands."}]}, path)
+        assert n == -1, "an unreadable week refuses the whole file"
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            n = apply({"week": None,
+                       "proposals": [{"actor": "world",
+                                      "text": "Weekless."}]}, path)
+        assert n == 1
+        after = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert after["events"][-1]["week"] == clock, \
+            "a weekless pending file dates to the clock, never null"
+    print("  week handling: quoted coerces, unreadable refuses, missing "
+          "dates to the clock  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_bullets_become_proposals_and_prose_is_ignored,
@@ -277,6 +314,7 @@ if __name__ == "__main__":
         test_apply_applies_structured_effects_through_the_validator,
         test_apply_refuses_an_invalid_effect_without_writing,
         test_apply_warns_when_the_pending_week_is_not_next,
+        test_quoted_pending_week_dates_like_the_bare_int,
         test_cli_state_flag_applies_into_target_and_leaves_default_alone,
         test_cli_state_flag_position_and_equals_form,
         test_cli_without_state_flag_targets_the_fixed_default,
