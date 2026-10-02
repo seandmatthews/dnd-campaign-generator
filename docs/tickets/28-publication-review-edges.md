@@ -39,9 +39,9 @@ field)
 
 ## Acceptance criteria
 
-- [ ] One approval containing "Ashen Order" + "ashen order": refused with
+- [x] One approval containing "Ashen Order" + "ashen order": refused with
       a named conflict (or provably written as two distinct files) — never
       one file with `pages: 2`.
-- [ ] Retry of a completed accept (transaction pruned) returns the same
+- [x] Retry of a completed accept (transaction pruned) returns the same
       response shape as the original, `snapshot` included (test drives the
       prune then the retry).
