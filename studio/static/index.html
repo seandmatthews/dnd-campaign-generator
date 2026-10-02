@@ -52,10 +52,12 @@
   <div id="toasts" aria-live="polite"></div>
   <div id="modal-root"></div>
 
-  <!-- Load order is part of the frontend contract: esc/logtail first, core, then tabs. -->
+  <!-- Load order is part of the frontend contract: esc/logtail first, core,
+       then the shared rumor→knowledge-form handoff, then tabs. -->
   <script src="js/esc.js"></script>
   <script src="js/logtail.js"></script>
   <script src="js/core.js"></script>
+  <script src="js/handoff.js"></script>
   <script src="js/maps.js"></script>
   <script src="js/world.js"></script>
   <script src="js/sim.js"></script>

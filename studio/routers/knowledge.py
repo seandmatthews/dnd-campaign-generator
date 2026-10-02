@@ -31,6 +31,8 @@ class FactBody(BaseModel):
     visibility: str | list[str]  # "dm_only" | "public" | [faction ids]
     source_file: str = ""
     subjects: list[str] | None = None
+    # provenance week (e.g. the week whose chronicle a rumor-fact came from)
+    week: int | None = None
     # place ids this fact is about (place-centered-campaign-view.md)
     place_ids: list[str] | None = None
     id: str | None = None        # present = update the existing fact
@@ -85,7 +87,7 @@ def post_knowledge(name: str, body: FactBody):
                 name, fact_id=body.id, text=body.text,
                 visibility=body.visibility,
                 source_file=body.source_file or "", subjects=body.subjects,
-                place_ids=body.place_ids)
+                week=body.week, place_ids=body.place_ids)
             snap = finalize_publication(
                 name, pub["transaction"],
                 f"campaign/{name}: record fact {fact['id']}")

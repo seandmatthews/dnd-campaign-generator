@@ -4,6 +4,7 @@
 (function () {
   'use strict';
   const S = window.Studio;
+  const Handoff = window.StudioHandoff; // rumor → knowledge-form prefill
 
   /* ----- project card state for the delegated action handlers -----
      Every re-render (accepts, staging, job polls) rebuilds the faction and
@@ -117,21 +118,28 @@
     return 'hearsay'; // conservative default: never overstate reliability
   }
 
-  /* the ledger suffix: week actions are recorded as
-     "<action> — succeeded (contested vs mint), margin +0" — the outcome is
-     bookkeeping about the week, not part of the rumor people repeat. Strip
-     it for DISPLAY only; the raw state keeps the full text. */
-  function displayClaim(text) {
-    return String(text == null ? '' : text).replace(/ — (succeeded|failed)\b.*$/, '');
+  /* the ledger suffix is stripped for display (and for the "Tell the party"
+     handoff) by StudioHandoff.displayClaim — see js/handoff.js: the outcome
+     is bookkeeping about the week, not part of the rumor people repeat. The
+     raw state keeps the full text. */
+
+  function tellTheParty(prefill) {
+    if (!prefill) {
+      S.toast('This rumor has no claim to tell.', 'error');
+      return;
+    }
+    S.state.factPrefill = prefill;
+    S.toast('Knowledge form prefilled — edit the wording, record it, and ' +
+      'revealing it to the party stays its own step.', 'info');
+    S.showTab('knowledge');
   }
 
-  function rumorItem(r) {
+  function rumorItem(r, chronicles) {
     const rawClaim = r.claim || r.text || r.rumor || '(no claim)';
-    const claim = displayClaim(rawClaim) || String(rawClaim);
+    const claim = Handoff.displayClaim(rawClaim) || String(rawClaim);
     const rawFid = r.fidelity || r.grade || r.state || '';
     const grade = fidelityGrade(rawFid);
-    const born = (r.born_week != null) ? r.born_week
-      : ((r.born != null) ? r.born : ((r.week != null) ? r.week : null));
+    const born = Handoff.rumorWeek(r);
     const hb = r.heard_by;
     let heard = null;
     if (Array.isArray(hb)) heard = hb.length;
@@ -160,7 +168,7 @@
 
     const badgeText = String(rawFid || grade);
     const stripped = claim !== String(rawClaim);
-    return S.el(
+    const li = S.el(
       '<li class="rumor-entry">' +
         '<span class="pill fidelity fidelity-' + grade + '" title="grade: ' + grade + '">' +
           S.esc(badgeText) + '</span>' +
@@ -171,6 +179,14 @@
         chainHtml +
       '</li>'
     );
+    // "Tell the party": park the prefill payload and let the Knowledge
+    // tab's record form consume it — recording and revealing stay two steps
+    const tell = S.el('<button type="button" class="btn rumor-tell" ' +
+      'title="Pre-fill the Knowledge form from this rumor (text, public, ' +
+      'chronicle source, week)">Tell the party</button>');
+    tell.addEventListener('click', () => tellTheParty(Handoff.rumorHandoff(r, chronicles)));
+    li.appendChild(tell);
+    return li;
   }
 
   /* ----- events ----- */
@@ -554,7 +570,7 @@
     return rows.join('');
   }
 
-  function proposalPanel(root, pid) {
+  function proposalPanel(root, pid, chronicles) {
     const panel = S.el(
       '<section class="panel proposal-panel">' +
         '<h3 class="panel-title">Loading the proposed week…</h3>' +
@@ -711,7 +727,9 @@
               : '') +
             (rums.length
               ? '<details class="proposal-rumors"><summary>Proposed rumors (' + rums.length + ')</summary><ul class="rumor-list">' +
-                  rums.map((r) => '<li class="rumor-entry"><span class="rumor-claim">' + S.esc(r.claim || '') + '</span></li>').join('') +
+                  rums.map((r) => '<li class="rumor-entry"><span class="rumor-claim">' + S.esc(r.claim || '') + '</span>' +
+                    '<button type="button" class="btn rumor-tell" ' +
+                    'title="Pre-fill the Knowledge form from this rumor (text, public, chronicle source, week)">Tell the party</button></li>').join('') +
                 '</ul></details>'
               : '') +
             (chron
@@ -733,6 +751,19 @@
       // no chronicle block instead of dropping the whole panel into catch
       const chronNode = chron && panel.querySelector('.chronicle');
       if (chronNode) chronNode.innerHTML = S.md(chron.markdown || '');
+
+      // proposed rumors can be told too: the week is the proposal's, and
+      // source_file resolves against CANON chronicles only — until the week
+      // is accepted the prefill simply carries no source (never a staged
+      // file the record route would refuse)
+      panel.querySelectorAll('.proposal-rumors .rumor-tell').forEach((btn, i) => {
+        const r = rums[i];
+        if (!r) return;
+        btn.addEventListener('click', () => tellTheParty(
+          Handoff.rumorHandoff(
+            { claim: r.claim, born_week: (isGoals || isProjects) ? null : p.proposed_week },
+            chronicles)));
+      });
 
       const errBox = panel.querySelector('.proposal-error');
       const acceptBtn = panel.querySelector('.proposal-accept');
@@ -1629,7 +1660,7 @@
 
     /* the pending proposal leads the tab: nothing else has moved */
     if (sim && sim.pending_proposal) {
-      proposalPanel(root, sim.pending_proposal);
+      proposalPanel(root, sim.pending_proposal, chronicles);
     }
 
     /* an active forecast reads as "where this is heading": right below the
@@ -1678,7 +1709,7 @@
       rumorBody.appendChild(S.emptyState('No rumors in circulation.'));
     } else {
       const list = S.el('<ul class="rumor-list"></ul>');
-      rumors.forEach((r) => list.appendChild(rumorItem(r)));
+      rumors.forEach((r) => list.appendChild(rumorItem(r, chronicles)));
       rumorBody.appendChild(list);
     }
     root.appendChild(rumorPanel);

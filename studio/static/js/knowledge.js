@@ -220,6 +220,9 @@
       '</article>');
     card.querySelector('.fact-display-text').textContent = String(fact.text || '');
     const meta = [];
+    if (fact.week != null) {
+      meta.push('week ' + String(fact.week));
+    }
     if (Array.isArray(fact.subjects) && fact.subjects.length) {
       meta.push('subjects: ' + fact.subjects.join(', '));
     }
@@ -235,6 +238,36 @@
   }
 
   /* ---------- panels ---------- */
+
+  /* A "Tell the party" click on the Simulation tab parks a prefill payload
+     ({text, visibility, source_file, week} — see js/handoff.js) and switches
+     here. Fill the record form from it, say what happened AND what did not
+     (recording is not revealing), then consume it: a later plain visit must
+     not find a stale prefill. Submission stays the unchanged record flow. */
+  function applyFactPrefill(panel, visScope) {
+    const pre = S.state.factPrefill;
+    if (!pre) return;
+    delete S.state.factPrefill;
+    const form = panel.querySelector('.fact-form');
+    if (!form) return;
+    form.querySelector('.fact-text').value = String(pre.text || '');
+    if (pre.visibility) {
+      // set + fire: visibilityFields's change listener keeps the faction
+      // checkbox box in step with the mode
+      const mode = visScope.querySelector('.vis-mode');
+      mode.value = String(pre.visibility);
+      mode.dispatchEvent(new Event('change'));
+    }
+    form.querySelector('.fact-source').value = String(pre.source_file || '');
+    form.querySelector('.fact-week').value =
+      (pre.week == null || pre.week === '') ? '' : String(pre.week);
+    const note = S.el('<p class="panel-note fact-prefill-note"></p>');
+    note.textContent = 'Prefilled from a rumor' +
+      (pre.week != null ? ' (week ' + String(pre.week) + ')' : '') +
+      ' — edit the wording if you want, then Record. Revealing it to the ' +
+      'party is still its own step.';
+    form.insertAdjacentElement('beforebegin', note);
+  }
 
   async function factsPanel(factions) {
     const panel = S.el(
@@ -253,6 +286,8 @@
           '<label class="field"><span class="field-label">Source file (optional — changes make it stale)</span>' +
             '<input type="text" class="input fact-source" autocomplete="off" spellcheck="false" ' +
               'placeholder="e.g. lore/entities/the-harbor-master.md"></label>' +
+          '<label class="field field-narrow"><span class="field-label">Week (optional — e.g. the week whose chronicle a rumor came from)</span>' +
+            '<input type="number" class="input fact-week" min="1" autocomplete="off"></label>' +
           '<label class="field"><span class="field-label">Subjects (optional, comma-separated)</span>' +
             '<input type="text" class="input fact-subjects" autocomplete="off" spellcheck="false"></label>' +
           '<div class="inline-form">' +
@@ -285,6 +320,8 @@
       errBox.innerHTML = '';
       const subjects = form.querySelector('.fact-subjects').value
         .split(',').map((s) => s.trim()).filter(Boolean);
+      const weekRaw = form.querySelector('.fact-week').value.trim();
+      const weekNum = Number(weekRaw);
       try {
         await S.api(S.campUrl('/knowledge'), {
           method: 'POST',
@@ -292,6 +329,7 @@
             text: form.querySelector('.fact-text').value,
             visibility: readVisibility(visScope),
             source_file: form.querySelector('.fact-source').value.trim(),
+            week: (weekRaw !== '' && Number.isFinite(weekNum)) ? weekNum : null,
             subjects: subjects.length ? subjects : null
           }
         });
@@ -301,6 +339,8 @@
         errBox.appendChild(S.errorPanel(err));
       }
     });
+
+    applyFactPrefill(panel, visScope);
 
     let data;
     let disclosure;
