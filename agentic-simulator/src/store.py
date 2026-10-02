@@ -5,14 +5,19 @@ replaces had diverged in signature only. `load_state(path=None)` /
 `save_state(state, path=None)`: omit the path for the engine's own
 world/state.yaml; ingest passes its --state target explicitly.
 
-save_state writes tmp + os.replace: a crash or kill mid-write used to
-truncate world/state.yaml in place — for the standalone workflow that file
-is the single source of truth, so the write itself must be atomic.
+save_state writes a per-writer UNIQUE tmp + os.replace: a crash or kill
+mid-write used to truncate world/state.yaml in place — for the standalone
+workflow that file is the single source of truth, so the write itself must
+be atomic — and two writers sharing one fixed tmp name could land a
+half-written file (one writer's replace consuming the other's tmp
+mid-write), so the tmp is minted fresh per call (mkstemp).
 """
 
+import contextlib
 import os
 import pathlib
 import re
+import tempfile
 import time
 
 import yaml
@@ -30,6 +35,112 @@ LEVEL_INDEX = {g: i for i, g in enumerate(RESOURCE_LEVELS)}
 # Rumor fidelity grades in decay order — rumors.spread indexes into this
 # ladder, so a hand-invented grade must be refused, not decayed from.
 RUMOR_FIDELITY = ("eyewitness", "reliable", "hearsay", "dead")
+
+# ------------------------------------------------- engine-home cross-process
+# The home (world/) is ONE scratch shared by the studio's week/forecast
+# jobs — which copy a campaign state in, run this engine, and diff the
+# outputs back out — and this repo's standalone CLIs (tick.py --live,
+# effects.py --apply, ingest.py --apply). Two writers interleave
+# state.yaml last-writer-wins and can leak a foreign chronicle into a
+# studio proposal, so the studio takes a cross-process lock file over the
+# home for its whole engine job (studio/spine.py try_file_lock, taken in
+# studio/engines.py engine_lock_logged) and marks the engine processes it
+# launches with STUDIO_ENGINE_HOME_HELD — those children must NOT re-take
+# the lock (they would deadlock on their own parent). Every other run of
+# the mains above is standalone: it claims the lock through
+# standalone_home_lock() and refuses with a readable message while a
+# studio job (or another standalone run) holds it.
+
+HOME_LOCK_FILE = ROOT / "world" / ".engine-home.lock"
+STUDIO_ENGINE_HOME_HELD = "STUDIO_ENGINE_HOME_HELD"
+
+try:
+    import fcntl as _fcntl
+    _FILE_LOCK = "posix"
+except ImportError:  # not POSIX
+    try:
+        import msvcrt as _msvcrt
+        _FILE_LOCK = "windows"
+    except ImportError:  # exotic platform: no cross-process exclusion
+        _FILE_LOCK = "none"
+
+
+class HomeLockBusy(RuntimeError):
+    """The shared engine home is held by another process (a studio week or
+    forecast job, or another standalone run) — the CLI must refuse without
+    touching the home. str(this) is the user-facing message."""
+
+
+@contextlib.contextmanager
+def standalone_home_lock():
+    """A standalone CLI's claim on the shared engine home: byte-lock the
+    lock file (Windows msvcrt / POSIX flock — the same dance the studio's
+    spine.CampaignLock performs) for the whole run. No-op when this
+    process is a studio child (STUDIO_ENGINE_HOME_HELD: the parent server
+    holds the lock) or the platform has no file locking. Raises
+    HomeLockBusy when another process holds the home — refuse, never
+    queue: a standalone run silently waiting out a half-hour studio week
+    is a surprise nobody asked for."""
+    if _FILE_LOCK == "none" or os.environ.get(STUDIO_ENGINE_HOME_HELD):
+        yield
+        return
+    try:
+        HOME_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(HOME_LOCK_FILE, "a+b")  # noqa: SIM115 — held for the run,
+        # unlocked and closed by the finally below
+    except OSError as e:
+        raise HomeLockBusy(
+            f"the engine home lock {HOME_LOCK_FILE} cannot be opened ({e})"
+            " — refusing rather than risk racing a studio run")
+    try:
+        try:
+            if _FILE_LOCK == "windows":
+                fh.seek(0)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+            else:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except OSError:
+            raise HomeLockBusy(
+                "the engine home is busy — another process (a studio week "
+                "or forecast job, or another standalone run) holds "
+                f"{HOME_LOCK_FILE}. Wait for it to finish before running "
+                "standalone against the shared home (world/).")
+        try:
+            yield
+        finally:
+            if _FILE_LOCK == "windows":
+                fh.seek(0)
+                _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+            else:
+                _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def home_lock_held() -> bool:
+    """Whether any process holds the engine-home lock (fresh-handle probe:
+    locking through a second handle fails while a first one holds the byte
+    range — including a holder inside this process)."""
+    if _FILE_LOCK == "none":
+        return False
+    try:
+        fh = open(HOME_LOCK_FILE, "a+b")  # noqa: SIM115 — probe: closed
+        # within this function
+    except OSError:
+        return False
+    try:
+        if _FILE_LOCK == "windows":
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+        else:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        fh.close()
 
 
 def split_argv(argv, *valued_flags):
@@ -361,18 +472,28 @@ def validate_state(state):
 
 def save_state(state, path=None):
     path = pathlib.Path(path or STATE_FILE)
-    tmp = path.with_name(path.name + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True, width=100)
-    # Windows raises PermissionError for an instant while a concurrent
-    # reader holds the destination; retry rather than lose the week to a
-    # sharing violation.
-    for attempt in range(3):
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == 2:
-                tmp.unlink(missing_ok=True)  # no litter, old state intact
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    # per-writer UNIQUE tmp (mkstemp): two writers sharing one fixed tmp
+    # name could land a half-written file — one writer's os.replace
+    # consuming the other's tmp mid-write (ticket 26). Same atomic
+    # replace contract as before, impossible to collide.
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".",
+                                    suffix=".tmp")
+    tmp = pathlib.Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.safe_dump(state, f, sort_keys=False, allow_unicode=True,
+                           width=100)
+        # Windows raises PermissionError for an instant while a concurrent
+        # reader holds the destination; retry rather than lose the week to a
+        # sharing violation.
+        for attempt in range(3):
+            try:
+                os.replace(tmp, path)
+                return
+            except PermissionError:
+                if attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        tmp.unlink(missing_ok=True)  # no litter on any exit (a successful
+        # replace already consumed the tmp; missing_ok makes that a no-op)

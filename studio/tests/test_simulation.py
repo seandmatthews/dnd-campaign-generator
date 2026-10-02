@@ -88,7 +88,8 @@ def test_week_job_happy_path_proposal_not_copy_out(
     is never copied back into the campaign directly."""
     calls = {}
 
-    def fake_tick(engine_root, script, *args, timeout=600, on_line=None):
+    def fake_tick(engine_root, script, *args, timeout=600, on_line=None,
+                  env=None):
         calls["cwd"] = engine_root
         calls["args"] = (script,) + args
         # engine "wrote" its fixed home state + a new chronicle

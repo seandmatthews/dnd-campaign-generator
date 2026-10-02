@@ -23,7 +23,8 @@ def _fake_tick_series(engine_root, start_week=3):
     collide)."""
     calls = {"n": 0}
 
-    def run(engine_root_, script, *args, timeout=600, on_line=None):
+    def run(engine_root_, script, *args, timeout=600, on_line=None,
+                env=None):
         assert (script,) + args == ("src/tick.py", "--live")
         calls["n"] += 1
         world = engine_root_ / "world"
@@ -62,11 +63,12 @@ def _run_forecast(client, monkeypatch, tmp_spine_root, weeks=2,
                   start_week=3, fail_on_call=None):
     run, calls = _fake_tick_series(None, start_week=start_week)
 
-    def dispatch(engine_root_, script, *args, timeout=600, on_line=None):
+    def dispatch(engine_root_, script, *args, timeout=600, on_line=None,
+                 env=None):
         if fail_on_call is not None and calls["n"] + 1 == fail_on_call:
             return 1, ["tick exploded mid-forecast"]
         return run(engine_root_, script, *args, timeout=timeout,
-                   on_line=on_line)
+                   on_line=on_line, env=env)
 
     monkeypatch.setattr(engines, "run_py", dispatch)
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",

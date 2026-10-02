@@ -71,6 +71,7 @@ The session record carries optional history bullets alongside effects:
 Exit codes: 0 applied/valid, 1 validation or IO error, 2 usage.
 """
 
+import contextlib
 import pathlib
 import sys
 
@@ -87,6 +88,7 @@ from store import (
 )
 from store import load_state as _store_load
 from store import save_state as _store_save
+from store import HomeLockBusy, standalone_home_lock
 
 FIELD_KEYS = ("goal", "kind", "secret", "species")
 EFFECT_TYPES = ("set_resource", "set_field",
@@ -535,7 +537,21 @@ def main(argv):
         print(f"valid: {events} history event(s), {applied} effect(s) "
               "would apply — nothing written")
         return 0
-    _store_save(state, state_path)
+    # --apply against the SHARED engine home (the default --state) claims
+    # the home's cross-process lock (ticket 26): a studio week/forecast job
+    # — or another standalone run — holding world/ means two writers
+    # interleaving state.yaml last-writer-wins. An explicit --state target
+    # is this caller's own file (the studio's session prep applies to a
+    # temp copy), nothing shared — no claim, no refusal.
+    applies_to_home = pathlib.Path(state_path).resolve() == \
+        pathlib.Path(STATE_FILE).resolve()
+    try:
+        with standalone_home_lock() if applies_to_home \
+                else contextlib.nullcontext():
+            _store_save(state, state_path)
+    except HomeLockBusy as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
     print(f"applied {events} history event(s), {applied} effect(s)")
     return 0
 

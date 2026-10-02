@@ -85,7 +85,8 @@ def test_build_week_entries_empty_week():
 # ------------------------------------------------------------ fake engine
 
 def _fake_tick(engine_root, events=WEEK4_EVENTS, week=4, rc=0):
-    def tick(engine_root_, script, *args, timeout=600, on_line=None):
+    def tick(engine_root_, script, *args, timeout=600, on_line=None,
+             env=None):
         assert (script,) + args == ("src/tick.py", "--live")
         world = engine_root_ / "world"
         world.mkdir(parents=True, exist_ok=True)
@@ -355,7 +356,8 @@ def test_failed_engine_leaves_no_approvable_bundle(
 
 def test_clock_not_advancing_is_generation_failure(
         client, tmp_spine_root, monkeypatch):
-    def stuck_tick(engine_root_, script, *args, timeout=600, on_line=None):
+    def stuck_tick(engine_root_, script, *args, timeout=600, on_line=None,
+                   env=None):
         world = engine_root_ / "world"
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(
@@ -376,7 +378,8 @@ def test_clock_not_advancing_is_generation_failure(
 
 def test_all_faction_calls_failed_is_generation_failure(
         client, tmp_spine_root, monkeypatch):
-    def failed_tick(engine_root, script, *args, timeout=600, on_line=None):
+    def failed_tick(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
         world = engine_root / "world"
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
@@ -403,7 +406,8 @@ def test_all_faction_calls_failed_is_generation_failure(
 
 def test_quiet_scheduler_held_week_is_a_valid_proposal(
         client, tmp_spine_root, monkeypatch):
-    def quiet_tick(engine_root, script, *args, timeout=600, on_line=None):
+    def quiet_tick(engine_root, script, *args, timeout=600, on_line=None,
+                   env=None):
         world = engine_root / "world"
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
@@ -463,7 +467,8 @@ def test_replay_trail_rides_with_the_proposal(
     path where the engine wrote a replay file and staging attaches it."""
     inner = _fake_tick(None)
 
-    def fake(engine_root_, script, *args, timeout=600, on_line=None):
+    def fake(engine_root_, script, *args, timeout=600, on_line=None,
+             env=None):
         rc, lines = inner(engine_root_, script, *args, timeout=timeout,
                           on_line=on_line)
         replay = engine_root_ / "world" / "replay" / "week-4.yaml"

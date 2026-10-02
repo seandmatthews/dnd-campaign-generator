@@ -170,7 +170,8 @@ def _advancing_tick(entered, release):
     chronicle — the shapes the studio's per-week validation expects. The
     first invocation blocks until released, so a REAL queued week can be
     caught mid-run holding the campaign lock AND the real engine lock."""
-    def tick(engine_root_, script, *args, timeout=600, on_line=None):
+    def tick(engine_root_, script, *args, timeout=600, on_line=None,
+             env=None):
         assert (script,) + args == ("src/tick.py", "--live")
         world = engine_root_ / "world"
         world.mkdir(parents=True, exist_ok=True)

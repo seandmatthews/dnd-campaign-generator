@@ -287,6 +287,79 @@ def lock_nowait(name: str, action: str, timeout: float = 0.0):
     return cm()
 
 
+def try_file_lock(path: Path):
+    """The cross-process half of CampaignLock as a standalone primitive: a
+    non-blocking byte-range lock over one file (the same Windows msvcrt /
+    POSIX flock dance CampaignLock performs), for shared resources that are
+    not campaigns — the engine's home (engines.py, ticket 26). Returns
+    (handle, held): handle is the locked open file (release it with
+    release_file_lock) unless another process holds the lock (held=True),
+    or the platform / filesystem offers no file locking, in which case both
+    are falsy — callers degrade to in-process exclusion exactly like a
+    CampaignLock whose lock file is unusable. Never blocks."""
+    if _FILE_LOCK == "none":
+        return None, False
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(path, "a+b")  # noqa: SIM115 — the caller holds the handle
+    except OSError as e:
+        _log.warning("file lock %s unusable (%s) — no cross-process "
+                     "exclusion over it", path, e)
+        return None, False
+    try:
+        if _FILE_LOCK == "windows":
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+        else:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None, True
+    return fh, False
+
+
+def release_file_lock(fh) -> None:
+    """Release a handle try_file_lock returned (a no-op on None)."""
+    if fh is None:
+        return
+    try:
+        if _FILE_LOCK == "windows":
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+        else:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+    finally:
+        fh.close()
+
+
+def file_lock_held(path: Path) -> bool:
+    """Whether ANY process holds the file lock — the fresh-handle probe
+    CampaignLock.locked uses (locking through a second handle fails while a
+    first one holds the byte range, including a holder inside this very
+    process). Platforms without file locking have no cross-process answer:
+    False is the only honest in-process one."""
+    if _FILE_LOCK == "none":
+        return False
+    try:
+        fh = open(path, "a+b")  # noqa: SIM115 — probe: closed within this
+        # function
+    except OSError:
+        return False
+    try:
+        if _FILE_LOCK == "windows":
+            fh.seek(0)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+            _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+        else:
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+            _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+    finally:
+        fh.close()
+
+
 def campaigns_root() -> Path:
     """The live campaigns root (reads the module global so tests can patch)."""
     return CAMPAIGNS_ROOT

@@ -132,7 +132,8 @@ def test_briefing_labels_pending_proposals_as_proposed(
     import engines
     from conftest import wait_for_job
 
-    def fake_tick(engine_root, script, *args, timeout=600, on_line=None):
+    def fake_tick(engine_root, script, *args, timeout=600, on_line=None,
+                  env=None):
         world = engine_root / "world"
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(

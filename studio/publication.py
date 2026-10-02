@@ -492,6 +492,13 @@ def _read_live(d: Path, rel: str) -> str:
 # ----------------------------------------------------------------- recovery
 
 
+# Boot waits this long for a campaign lock held by a separately launched
+# CLI mid-write (session_notes, places) — seconds at most; a holder past
+# this is wedged, and that campaign's recovery defers to the next boot
+# rather than hanging the server's startup behind it.
+RECOVERY_LOCK_WAIT_S = 60.0
+
+
 def recover_campaign(name: str) -> dict:
     """Boot-time repair for one campaign: roll open transactions forward.
 
@@ -500,11 +507,37 @@ def recover_campaign(name: str) -> dict:
     transaction parks as a conflict, live bytes untouched. Complete
     transactions whose history snapshot failed get one snapshot retry
     (pruned on success, retained otherwise). Never raises for one bad
-    transaction — it parks and the rest recover."""
+    transaction — it parks and the rest recover.
+
+    Ticket 26 decision — recovery takes the campaign lock: it rewrites
+    live files and snapshots history, the same writers the lock
+    disciplines. Boot is the cheap case (nothing else in this process
+    contends), and the historical lock-free version was only reachable
+    with two server processes on one campaigns root, which the one-port
+    bind already precludes — the lock closes even that. The wait is
+    bounded (RECOVERY_LOCK_WAIT_S): a campaign still locked after it is
+    left untouched, its transactions stay open, and the next boot
+    recovers them (reported as {"skipped": true})."""
     out = {"recovered": [], "conflicts": [], "pruned": [], "dropped": []}
     root = spine.campaign_dir(name) / TX_DIR_NAME
     if not root.is_dir():
         return out
+    lock = spine.campaign_lock(name)
+    if not lock.acquire(timeout=RECOVERY_LOCK_WAIT_S):
+        log.warning("campaign %s is locked by another writer — publication "
+                    "recovery skipped this boot; open transactions stay "
+                    "open for the next one", name)
+        out["skipped"] = True
+        return out
+    try:
+        return _recover_campaign_locked(name, root, out)
+    finally:
+        lock.release()
+
+
+def _recover_campaign_locked(name: str, root: Path, out: dict) -> dict:
+    """recover_campaign's roll-forward loop, run with the campaign lock
+    held (the caller acquired it)."""
     for tx_dir in sorted(root.iterdir()):
         if not tx_dir.is_dir() or tx_dir.name == "receipts":
             continue

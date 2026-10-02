@@ -176,11 +176,13 @@ def check_engines():
     While a week run is in flight the simulator probe is skipped: tick.py's
     parting save_state replaces state.yaml, and a concurrent reader can make
     that os.replace fail on Windows (sharing violation) — losing the whole
-    week after the spend. In flight is detected by the run flag (the crash
-    marker written at submit) OR the engine lock — the actual
-    mutual-exclusion invariant, held for the whole run — so a week in the
-    gap between flag write and lock acquire is still seen. The other
-    engines' homes are untouched by a week, so they still probe."""
+    week after the spend. In flight is detected by the run flag OR the
+    engine lock — the actual mutual-exclusion invariant, held for the whole
+    run. The flag is written only once the lock is held (ticket 26), so the
+    lock alone covers a live run; the flag still names the other case, a
+    crashed run whose lock died with the process but whose marker waits
+    for boot restore. The other engines' homes are untouched by a week, so
+    they still probe."""
     import engines
     out = []
 

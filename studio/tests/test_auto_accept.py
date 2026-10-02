@@ -287,7 +287,8 @@ def test_goal_review_auto_accept_blocked_by_error_finding(
 # ---------------------------------------------------------------- the week
 
 def _fake_tick(week=4):
-    def tick(engine_root_, script, *args, timeout=600, on_line=None):
+    def tick(engine_root_, script, *args, timeout=600, on_line=None,
+             env=None):
         assert (script,) + args == ("src/tick.py", "--live")
         world = engine_root_ / "world"
         world.mkdir(parents=True, exist_ok=True)

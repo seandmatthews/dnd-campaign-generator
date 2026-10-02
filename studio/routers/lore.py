@@ -22,9 +22,9 @@ import links
 import llm_client
 import loregen
 import spine
-from routers.common import (blocking_findings, ensure_entities_migrated,
-                            require_campaign, store_errors,
-                            submit_campaign_job)
+from routers.common import (blocking_findings, campaign_lock_nowait,
+                            ensure_entities_migrated, require_campaign,
+                            store_errors, submit_campaign_job)
 from routers.review import ReviewBody, approve_items
 from spine import CampaignError, CampaignExists, CampaignNotFound
 
@@ -197,10 +197,15 @@ def get_entity_page(name: str, page: str):
 @router.put("/api/campaign/{name}/lore/style/{file}")
 def put_style(name: str, file: str, body: TextBody):
     require_campaign(name)
-    with store_errors(CampaignError,
-                      not_found=(CampaignNotFound,)):
+    # the campaign lock like every other short canon writer (ticket 26):
+    # an unlocked style PUT during a week job raced the job's
+    # canon.snapshot, committing a half-published state under the wrong
+    # message — 409 with the retry line instead, like its siblings.
+    with campaign_lock_nowait(name, "updating the style file"), \
+            store_errors(CampaignError,
+                         not_found=(CampaignNotFound,)):
         spine.write_style(name, file, body.text)
-    canon.snapshot(name, f"campaign/{name}: update style/{file}")
+        canon.snapshot(name, f"campaign/{name}: update style/{file}")
     return {"ok": True}
 
 
@@ -210,7 +215,11 @@ def post_style(name: str, file: str, body: TextBody):
     purpose is staging a culture's name seed list — without one the name
     helper refuses to generate (fed-or-refused), and until now there was no
     way to stage the list from the app. Name lists need at least 3 seeds:
-    an empty list would send the LLM in with nothing in-voice to draw from."""
+    an empty list would send the LLM in with nothing in-voice to draw from.
+
+    Takes the campaign lock like PUT (ticket 26) — it stages canon and
+    snapshots it, exactly the write pair a week job must not interleave
+    with."""
     require_campaign(name)
     if file.startswith("names-"):
         seeds = [ln for ln in body.text.splitlines()
@@ -221,17 +230,18 @@ def post_style(name: str, file: str, body: TextBody):
                 detail="a name list needs at least 3 names, one per line "
                        "(lines starting with # are comments) — the helper "
                        "draws in-voice from these seeds")
-    try:
-        spine.create_style(name, file, body.text)
-    except CampaignExists as e:
-        raise HTTPException(
-            status_code=409,
-            detail=f"{e} — edit it in Style & voice instead")
-    except CampaignNotFound as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except CampaignError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    canon.snapshot(name, f"campaign/{name}: stage style/{file}")
+    with campaign_lock_nowait(name, "staging the style file"):
+        try:
+            spine.create_style(name, file, body.text)
+        except CampaignExists as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{e} — edit it in Style & voice instead")
+        except CampaignNotFound as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except CampaignError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        canon.snapshot(name, f"campaign/{name}: stage style/{file}")
     return {"ok": True}
 
 
