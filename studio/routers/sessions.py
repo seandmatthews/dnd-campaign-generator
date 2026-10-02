@@ -91,7 +91,10 @@ def get_sessions(name: str):
 @router.get("/api/campaign/{name}/sessions/{session_id}")
 def get_session(name: str, session_id: str):
     require_campaign(name)
-    return session_store.session_detail(name, session_id)
+    # API.md documents 404 for an unknown id; the global SessionError
+    # handler defaults to 422, so map it here like the extract sibling
+    with store_errors(not_found=(session_store.SessionError,)):
+        return session_store.session_detail(name, session_id)
 
 
 @router.post("/api/campaign/{name}/sessions/{session_id}/notes",

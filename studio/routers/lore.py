@@ -274,4 +274,7 @@ def post_name(name: str, body: NameBody):
         raise HTTPException(status_code=422, detail=str(e))
     except llm_client.BudgetExceeded as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeError as e:  # llm_client's readable provider errors —
+        # the sibling LLM endpoints (simulation, maps) answer these 503
+        raise HTTPException(status_code=503, detail=str(e))
     return {"names": names}

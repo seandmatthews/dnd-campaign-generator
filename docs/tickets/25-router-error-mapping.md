@@ -46,12 +46,12 @@ mechanical — no design decisions.
 
 ## Acceptance criteria
 
-- [ ] Stale-base knowledge write → 409 with the standard message shape
+- [x] Stale-base knowledge write → 409 with the standard message shape
       (not 500); mid-flight publication failure keeps the "staged
       transaction kept" wording.
-- [ ] Provider outage on /lore/name → 503 (matching siblings).
-- [ ] `reveal {"week": 0}` → 422; positive weeks unaffected.
-- [ ] Unknown session id on GET → 404 (API.md unchanged and now true).
-- [ ] Page breaking between load and locked re-read → 422 naming the file.
-- [ ] Non-dict 200 from the provider → the readable provider-error path,
+- [x] Provider outage on /lore/name → 503 (matching siblings).
+- [x] `reveal {"week": 0}` → 422; positive weeks unaffected.
+- [x] Unknown session id on GET → 404 (API.md unchanged and now true).
+- [x] Page breaking between load and locked re-read → 422 naming the file.
+- [x] Non-dict 200 from the provider → the readable provider-error path,
       never AttributeError.

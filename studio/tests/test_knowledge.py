@@ -274,3 +274,82 @@ def test_source_file_traversal_is_refused_and_never_probed(
     knowledge._save("testvale", doc)
     assert knowledge.source_revision("testvale",
                                      doc["facts"][-1]) == publication.ABSENT
+
+
+def test_stale_base_knowledge_write_is_a_409_not_a_500(
+        client, tmp_spine_root, monkeypatch):
+    """P3-13: an external edit to knowledge.yaml between the route's base
+    capture and its publish is a RevisionConflict — record/supersede used
+    to let it escape as a raw 500 'internal error: RevisionConflict'
+    instead of the 409 every other publisher answers."""
+    r = _add(client, text="The ford is one plank wide.",
+             visibility="public")
+    assert r.status_code == 200, r.text
+    fid = r.json()["fact"]["id"]
+    kpath = tmp_spine_root / "testvale" / "simulation" / "knowledge.yaml"
+    real_load = knowledge.load
+
+    def edit_then_load(name):
+        # the Obsidian hand-edit lands AFTER record_fact_tx captured its
+        # base revisions but BEFORE the publish that checks them
+        kpath.write_text(kpath.read_text(encoding="utf-8") + "# hand edit\n",
+                         encoding="utf-8")
+        return real_load(name)
+
+    monkeypatch.setattr(knowledge, "load", edit_then_load)
+    r = _add(client, text="A fact recorded over a stale base.",
+             visibility="public")
+    assert r.status_code == 409, r.text
+    err = r.json()["error"]
+    assert "stale knowledge base" in err
+    assert "knowledge.yaml" in err
+    assert "Nothing was written" in err
+    # supersede carries the same mapping over the same window
+    r = client.post(f"/api/campaign/testvale/knowledge/{fid}/supersede",
+                    json={"text": "The ford is two planks wide.",
+                          "visibility": "public"})
+    assert r.status_code == 409, r.text
+    assert "stale knowledge base" in r.json()["error"]
+
+
+def test_midflight_publication_failure_keeps_the_staged_wording(
+        client, tmp_spine_root, monkeypatch):
+    """P3-13's other half: a publication that fails mid-flight answers the
+    canonical 500 — staged transaction kept, recovered on restart — not
+    the opaque 'internal error: PublicationError'."""
+    def broken_publish(*a, **kw):
+        raise publication.PublicationError("disk full mid-write")
+
+    monkeypatch.setattr(publication, "publish", broken_publish)
+    r = _add(client, text="A fact that never lands.", visibility="public")
+    assert r.status_code == 500, r.text
+    err = r.json()["error"]
+    assert "could not be published" in err
+    assert "staged transaction is kept" in err
+    assert "recovered automatically" in err
+    assert "PublicationError" not in err
+
+
+def test_reveal_week_is_gated_like_a_fact_week(client, tmp_spine_root):
+    """P3-15: RevealBody.week takes the same >= 1 gate FactBody got in
+    ticket 14 — "known since week 0" (or -5) must never reach the
+    disclosure store and the player handout."""
+    r = _add(client, text="The ferryman waves the toll on feast days.",
+             visibility="public")
+    assert r.status_code == 200, r.text
+    fid = r.json()["fact"]["id"]
+    for bad in (0, -5):
+        r = client.post(f"/api/campaign/testvale/knowledge/{fid}/reveal",
+                        json={"week": bad})
+        assert r.status_code == 422, r.text
+        assert "campaign week" in r.json()["error"]
+    # nothing was recorded by the refused reveals
+    disclosure = client.get("/api/campaign/testvale/disclosure").json()
+    assert not disclosure["revealed"]
+    # positive weeks are unaffected
+    r = client.post(f"/api/campaign/testvale/knowledge/{fid}/reveal",
+                    json={"week": 2})
+    assert r.status_code == 200, r.text
+    disclosure = client.get("/api/campaign/testvale/disclosure").json()
+    entry = next(x for x in disclosure["revealed"] if x["fact_id"] == fid)
+    assert entry["revealed_week"] == 2

@@ -143,6 +143,23 @@ def test_complete_explicit_model_wins(monkeypatch, tmp_path):
     assert seen["body_model"] == "explicit-model"
 
 
+def test_complete_non_dict_200_takes_the_provider_error_path(
+        monkeypatch, tmp_path):
+    """P3-24: a 200 whose body is a JSON array (a proxy anomaly) must
+    raise the readable provider error — the old code called
+    data.get("usage") BEFORE the isinstance guard and crashed with
+    AttributeError."""
+    _isolate(monkeypatch, tmp_path)
+
+    def fake_post(cfg, body, timeout):
+        return [{"role": "assistant", "content": "hi"}]
+
+    monkeypatch.setenv("ZAI_API_KEY", "legacy-key")
+    monkeypatch.setattr(llm_client, "_post_json", fake_post)
+    with pytest.raises(RuntimeError, match="no choices"):
+        llm_client.complete("prompt")
+
+
 def test_zai_hint_only_for_zai_urls(monkeypatch, tmp_path):
     """The 1113/401 doctor hint is Z.ai-specific — a custom provider must
     not be told about the coding endpoint."""

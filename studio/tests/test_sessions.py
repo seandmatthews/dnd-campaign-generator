@@ -131,6 +131,14 @@ def test_unknown_place_and_empty_title_refused(client, tmp_spine_root):
     assert r.status_code == 422 and "place" in r.json()["error"]
 
 
+def test_get_unknown_session_is_a_404(client, tmp_spine_root):
+    """P3-16: API.md documents 404 for an unknown id on the GET; the
+    SessionError used to fall into the global 422 handler instead."""
+    r = client.get(f"{C}/sessions/session-deadbeef")
+    assert r.status_code == 404, r.text
+    assert "no such session" in r.json()["error"]
+
+
 # ------------------------------------------------------- prepare and accept
 
 
