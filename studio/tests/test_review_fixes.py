@@ -381,14 +381,17 @@ def test_page_snapshot_hashes_the_bytes_it_parses(tmp_spine_root):
     p = tmp_spine_root / "testvale" / "lore" / "entities" / "snap.md"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"---\r\nkind: place\r\nname: Snap\r\n---\r\n\r\nbody\r\n")
-    raw, rev = place_store._page_snapshot(p, None)
+    raw, rev, newline = place_store._page_snapshot(p, None)
     # the revision is the hash of the EXACT bytes on disk…
     assert rev == hashlib.sha256(p.read_bytes()).hexdigest()
     # …and CRLF hand-edits still parse their frontmatter (the universal-
-    # newline contract read_text used to provide)
+    # newline contract read_text used to provide)…
     meta, body = place_store._frontmatter_of(raw)
     assert meta == {"kind": "place", "name": "Snap"}
     assert body.strip() == "body"
+    # …while the file's own newline style rides along for byte-preserving
+    # writes (ticket 10) — a CRLF page must not come back LF-normalized
+    assert newline == "\r\n"
 
 
 def test_event_locator_revision_matches_the_viewed_bytes(

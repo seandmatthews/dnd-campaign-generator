@@ -540,3 +540,52 @@ def test_cli_set_finalizes_like_the_route(camp):
         if tx_root.is_dir() else []
     assert leftovers == [], \
         f"CLI set must prune committed staging like the route: {leftovers}"
+
+
+# -------------------------------------------- ticket 10: byte-preserving writes
+
+# the Obsidian-authored worst case: CRLF file-wide, an inline comment ON
+# the status line, a blank-valued key, and body edge-whitespace
+_HAND_EDITED_QUEST = (
+    "---\r\n"
+    "kind: quest\r\n"
+    "name: The Trolls Tithe\r\n"
+    "status: hooked   # hooked | active | resolved | abandoned\r\n"
+    "given_by:\r\n"
+    "secret_note: keep me\r\n"
+    "---\r\n"
+    "\r\n"
+    "Farms at the tree-line.  \r\n"
+    "Someone is counting.\r\n"
+)
+
+
+def test_status_flip_is_line_surgery_not_reserialization(camp):
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "The Trolls Tithe.md"
+    page.write_bytes(_HAND_EDITED_QUEST.encode("utf-8"))
+    out = quests.set_status(camp, "The Trolls Tithe", "active")
+    assert out["state"] == "published"
+    after = page.read_bytes().decode("utf-8")
+    expected = _HAND_EDITED_QUEST.replace(
+        "status: hooked   # hooked | active | resolved | abandoned",
+        "status: active # hooked | active | resolved | abandoned")
+    assert after == expected, "only the status line may change"
+
+
+def test_status_flips_round_trip_like_hand_edits(camp):
+    """hooked -> active -> resolved leaves exactly the bytes the same two
+    edits would leave in a text editor (CRLF endings intact file-wide)."""
+    page = spine.campaign_dir(camp) / "lore" / "entities" / \
+        "The Trolls Tithe.md"
+    page.write_bytes(_HAND_EDITED_QUEST.encode("utf-8"))
+    quests.set_status(camp, "The Trolls Tithe", "active")
+    quests.set_status(camp, "The Trolls Tithe", "resolved")
+    after = page.read_bytes().decode("utf-8")
+    expected = _HAND_EDITED_QUEST.replace(
+        "status: hooked   # hooked | active | resolved | abandoned",
+        "status: resolved # hooked | active | resolved | abandoned")
+    assert after == expected
+    # and the read model still sees the page (the surgery parses back)
+    record = quests.load(camp)["by_page"]["The Trolls Tithe"]
+    assert record["status"] == "resolved"

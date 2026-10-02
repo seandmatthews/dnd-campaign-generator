@@ -515,6 +515,53 @@ def test_patch_refuses_parent_cycles_and_non_map_preferred(
     assert view["maps"] == []  # preference is not an attachment
 
 
+# -------------------------------------------- ticket 10: byte-preserving writes
+
+# a CRLF, comment-carrying, blank-key page — the Obsidian hand-edit a
+# scalar patch must survive byte-for-byte
+_HAND_EDITED_PLACE = (
+    "---\r\n"
+    "kind: place   # the registry's kind line\r\n"
+    "name: Ruravaqan\r\n"
+    "place_id: ruravaqan\r\n"
+    "note_field:\r\n"
+    "---\r\n"
+    "\r\n"
+    "The city proper.  \r\n"
+)
+
+
+def test_scalar_place_patches_are_line_surgery(client, camp, tmp_spine_root):
+    root = tmp_spine_root
+    _page(root / camp, "Ferry Crossing",
+          {"kind": "place", "name": "Ferry Crossing",
+           "place_id": "ferry-crossing"})
+    page = root / camp / "lore" / "entities" / "Ruravaqan.md"
+    page.write_bytes(_HAND_EDITED_PLACE.encode("utf-8"))
+
+    r = client.patch(f"/api/campaign/{camp}/places/ruravaqan",
+                     json={"parent_place_id": "ferry-crossing"})
+    assert r.status_code == 200, r.text
+    after = page.read_bytes().decode("utf-8")
+    # the new scalar inserts as its own line before the closing fence;
+    # every original byte — comment, blank key, CRLF, body spacing —
+    # survives
+    expected = _HAND_EDITED_PLACE.replace(
+        "---\r\n\r\n",
+        "parent_place_id: ferry-crossing\r\n---\r\n\r\n")
+    assert after == expected
+
+    # a clearing write re-serializes (the key is deleted) — the
+    # documented fallback: comments go, but the file stays CRLF
+    r = client.patch(f"/api/campaign/{camp}/places/ruravaqan",
+                     json={"parent_place_id": ""})
+    assert r.status_code == 200
+    after = page.read_bytes().decode("utf-8")
+    assert "parent_place_id" not in after
+    assert "\r\n" in after, "re-serialization must keep the page's CRLF"
+    assert "The city proper." in after
+
+
 # ---------------------------------------------------------------- maps
 
 

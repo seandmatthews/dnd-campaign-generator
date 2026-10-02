@@ -25,7 +25,8 @@ and there is no cache to invalidate.
 Status changes are reviewed short writes: campaign lock or 409 (the route
 takes it), publication-path revision checks (a stale
 expected_page_revision -> 409, nothing written), transactional, and the
-write preserves the body and every unknown frontmatter key.
+write is LINE SURGERY on the status line — body, unknown keys, comments
+and line endings survive byte-for-byte (ticket 10).
 
 CLI (same service the HTTP routes use):
     python studio/quests.py <campaign> list [--json]
@@ -43,8 +44,8 @@ import canon
 import links
 import publication
 import spine
-from places import (PlaceError, _frontmatter_of, _page_snapshot,
-                    _page_text, _id_list)
+from places import (PlaceError, _changed_page_text, _frontmatter_of,
+                    _page_snapshot, _id_list)
 
 STATUSES = ("hooked", "active", "resolved", "abandoned")
 DEFAULT_STATUS = "hooked"
@@ -254,7 +255,7 @@ def load(name: str) -> dict:
         try:
             # one byte read for BOTH the text and the revision the UI hands
             # back as expected_page_revision (see places._page_snapshot)
-            raw, revision = _page_snapshot(path, None)
+            raw, revision, _newline = _page_snapshot(path, None)
             meta, body = _frontmatter_of(raw)
         except (OSError, ValueError, PlaceError) as e:
             # OSError: vanished mid-read; ValueError: not UTF-8; PlaceError:
@@ -370,15 +371,17 @@ def set_status(name: str, page: str, status: str,
     # places._page_snapshot): hashing after the parse could pair old text
     # with a newer revision and let publication accept a stale write over
     # an external edit
-    raw, base_revision = _page_snapshot(path, expected_page_revision)
+    raw, base_revision, newline = _page_snapshot(path, expected_page_revision)
     meta, body = _frontmatter_of(raw)
     meta = meta or {}
     if str(meta.get("status") or "").strip().lower() == status:
         return {"page": record["file"], "name": record["name"],
                 "status": status, "state": "noop", "transaction": None}
-    meta["status"] = status
     result = _locked_publish(
-        name, [{"path": record["file"], "text": _page_text(meta, body)}],
+        name, [{"path": record["file"],
+                "text": _changed_page_text(
+                    raw, {**meta, "status": status}, body,
+                    {"status": status}, newline)}],
         operation=f"quest {record['name']} status -> {status}",
         base_revisions={record["file"]: base_revision})
     return {"page": record["file"], "name": record["name"],

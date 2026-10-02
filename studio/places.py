@@ -39,6 +39,7 @@ labels private / pending / hypothetical sections. It is not a handout.
 
 import hashlib
 import json
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -89,16 +90,117 @@ def _frontmatter_of(text: str) -> tuple[dict | None, str]:
     return meta, text[m.end():].lstrip("\n")
 
 
-def _page_text(meta: dict, body: str) -> str:
-    """The exact bytes a page write produces — frontmatter first, then body
-    (same shape spine.entity_page_text makes, but meta here is the FULL
-    raw dict with unknown keys already in it)."""
+def _page_text(meta: dict, body: str, newline: str = "\n") -> str:
+    """The exact bytes a page write produces — frontmatter first, then
+    body (same shape spine.entity_page_text makes, but meta here is the
+    FULL raw dict with unknown keys already in it).
+
+    This is the RE-SERIALIZING path (ticket 10): for changes that are not
+    line-local — list-valued keys, deletions, a page with no frontmatter
+    block — where yaml.safe_dump must rebuild the block and by nature
+    drops empty-valued keys and comments. Single-scalar changes go
+    through _set_frontmatter_scalars instead, which touches one line.
+    The page's dominant line ending (from _page_snapshot) is honored."""
     meta = {k: v for k, v in meta.items() if v not in (None, "", [], {})}
     if not meta:
-        return f"{body.strip()}\n"
-    text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
-                          default_flow_style=False).strip()
-    return f"---\n{text}\n---\n\n{body.strip()}\n"
+        out = f"{body.strip()}\n"
+    else:
+        text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
+                              default_flow_style=False).strip()
+        out = f"---\n{text}\n---\n\n{body.strip()}\n"
+    return out if newline == "\n" else out.replace("\n", newline)
+
+
+# a top-level frontmatter key line ("status: hooked", "given_by:")
+_FM_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*:")
+
+
+def _scalar_yaml(value) -> str:
+    """The canonical YAML text for one scalar value, quoting decided by
+    yaml.safe_dump itself ('The Troll: Tithe' comes out quoted, 'active'
+    does not), so a surgically written line parses exactly like a
+    re-serialized one."""
+    line = yaml.safe_dump({"k": value}, allow_unicode=True,
+                          default_flow_style=False, sort_keys=False)
+    return line[len("k:"):].strip()
+
+
+def _set_frontmatter_scalars(text: str, changes: dict,
+                             newline: str = "\n") -> str | None:
+    """Frontmatter LINE SURGERY (ticket 10): set non-empty scalar keys by
+    editing or inserting their single lines in the ORIGINAL text, so
+    every other byte — inline comments, blank-valued keys, spacing, the
+    body — survives the write untouched.
+
+    None when the change is not line-local surgery's to make, and the
+    caller re-serializes with _page_text: a non-scalar/blank value, a key
+    whose current value is a list or mapping (block or flow), or a page
+    with no frontmatter block. Mixed line endings fold to the page's
+    dominant style, which _page_snapshot captured at the read."""
+    for v in changes.values():
+        if isinstance(v, str):
+            if not v.strip():
+                return None  # a deletion in disguise
+        elif not isinstance(v, (int, float, bool)):
+            return None
+    if not changes:
+        return None
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None  # no frontmatter block — _page_text creates one
+    try:
+        fm_end = next(i for i in range(1, len(lines))
+                      if lines[i].strip() == "---")
+    except StopIteration:
+        return None  # unclosed block: not ours to fix silently
+    for i in range(1, fm_end):
+        line = lines[i]
+        if not line.strip() or line[:1] in (" ", "\t"):
+            continue  # blank, or a continuation of the key above it
+        if not _FM_KEY_RE.match(line):
+            # top-level content that is not a key line (e.g. a stray '{}'
+            # an old generator once wrote): editing around it can produce
+            # invalid YAML — rebuild the block instead
+            return None
+    done: set[str] = set()
+    for i in range(1, fm_end):
+        m = _FM_KEY_RE.match(lines[i])
+        if not m:
+            continue
+        key = m.group(0)[:-1]
+        if key not in changes:
+            continue
+        rest = lines[i][len(m.group(0)):]
+        v = rest.strip()
+        block_follows = i + 1 < fm_end and lines[i + 1][:1] in (" ", "\t")
+        if v[:1] in ("[", "{", "|", ">") or (not v and block_follows):
+            return None  # current value is a collection — rebuild instead
+        comment = ""
+        at = rest.find(" #")
+        if at != -1:
+            comment = rest[at:]
+        lines[i] = f"{key}: {_scalar_yaml(changes[key])}{comment}"
+        done.add(key)
+    insert_at = fm_end
+    for key, value in changes.items():
+        if key in done:
+            continue
+        lines.insert(insert_at, f"{key}: {_scalar_yaml(value)}")
+        insert_at += 1
+    return newline.join(lines)
+
+
+def _changed_page_text(raw: str, meta: dict, body: str, changes: dict,
+                       newline: str = "\n") -> str:
+    """The page text for a frontmatter change (ticket 10): line surgery
+    when the change is pure non-empty scalars — comments, blank keys,
+    spacing and line endings the GM wrote all survive — and the
+    re-serializing _page_text for anything else. `meta` is the parsed
+    frontmatter (already carrying the change for the fallback path)."""
+    surgical = _set_frontmatter_scalars(raw, changes, newline)
+    if surgical is not None:
+        return surgical
+    return _page_text(meta, body, newline)
 
 
 def _id_list(value) -> list[str]:
@@ -113,16 +215,18 @@ def _id_list(value) -> list[str]:
     return [str(x).strip() for x in value if str(x).strip()]
 
 
-def _page_snapshot(path: Path, expected: str | None) -> tuple[str, str]:
-    """(page text, base revision) from ONE byte read: hashing a separate
-    read after the parse could pair old content with a newer revision and
-    let publication accept a stale write over an external edit. The decode
-    applies universal-newline translation like read_text, so a CRLF
-    hand-edit still parses its frontmatter."""
+def _page_snapshot(path: Path, expected: str | None) -> tuple[str, str, str]:
+    """(page text, base revision, newline style) from ONE byte read:
+    hashing a separate read after the parse could pair old content with a
+    newer revision and let publication accept a stale write over an
+    external edit. The decode applies universal-newline translation like
+    read_text, so a CRLF hand-edit still parses its frontmatter; the
+    file's dominant newline rides along so a byte-preserving write
+    (ticket 10) can restore the endings the GM's editor wrote."""
     data = path.read_bytes()
     revision = expected or hashlib.sha256(data).hexdigest()
     text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    return text, revision
+    return text, revision, ("\r\n" if b"\r\n" in data else "\n")
 
 
 # --------------------------------------------------------------- attachments
@@ -945,7 +1049,7 @@ def link(name: str, place_id: str, *, page: str | None = None,
     # _page_snapshot): hashing after the parse could pair the OLD text
     # with the NEW revision — publication would then accept the stale
     # write and destroy the edit
-    raw, base_revision = _page_snapshot(path, expected_page_revision)
+    raw, base_revision, newline = _page_snapshot(path, expected_page_revision)
     meta, body = _frontmatter_of(raw)
     meta = meta or {}
     existing = str(meta.get("place_id") or "").strip()
@@ -970,11 +1074,13 @@ def link(name: str, place_id: str, *, page: str | None = None,
         # adopt the simulation's id: one file write, no state rewrite, and
         # faction.place references keep resolving unchanged
         final_id = group["id"]
-    meta["place_id"] = final_id
-    if not str(meta.get("kind") or "").strip():
-        meta["kind"] = "place"
+    changes = {"place_id": final_id}
+    if not kind:
+        changes["kind"] = "place"
     result = _locked_publish(
-        name, [{"path": target_file, "text": _page_text(meta, body)}],
+        name, [{"path": target_file,
+                "text": _changed_page_text(raw, meta, body, changes,
+                                           newline)}],
         operation=f"link place records ({target_file} -> {final_id})",
         base_revisions={target_file: base_revision})
     return {"linked": final_id, "minted": minted, "page": target_file,
@@ -1002,10 +1108,13 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
     # one byte snapshot for BOTH the content and its baseline (see
     # _page_snapshot): hashing after the parse could pair old text with a
     # newer revision
-    raw, base_revision = _page_snapshot(path, expected_page_revision)
+    raw, base_revision, newline = _page_snapshot(path, expected_page_revision)
     meta, body = _frontmatter_of(raw)
     meta = meta or {}
-    changed = []
+    changed = []   # the response's labels (what the DM asked for)
+    written = []   # the keys the write actually touches (a rename also
+    # folds the old name into aliases — the write set, not the label set,
+    # decides surgery vs re-serialization)
     if name_ is not None:
         new_name = str(name_).strip()
         if not new_name:
@@ -1026,15 +1135,17 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
                 alias_list.append(old)  # old name keeps resolving
             meta["aliases"] = alias_list
             changed.append("name")
+            written += ["name", "aliases"]
     if aliases is not None:
         passed = [str(a).strip() for a in aliases if str(a).strip()]
         # after a rename in the same call, meta["aliases"] already carries
         # the folded old name — keep anything folded that the caller kept
         folded = _id_list(meta.get("aliases")) if "name" in changed else []
         meta["aliases"] = list(dict.fromkeys(
-            passed + [a for a in folded if str(a).strip()
-                      and str(a).strip() not in passed]))
+            passed + [a for a in folded if a.strip()
+                      and a.strip() not in passed]))
         changed.append("aliases")
+        written.append("aliases")
     if parent_place_id is not None:
         parent = str(parent_place_id).strip()
         if parent:
@@ -1064,6 +1175,7 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
                 cur = nxt
         meta["parent_place_id"] = parent or None
         changed.append("parent_place_id")
+        written.append("parent_place_id")
     if preferred_map is not None:
         pref = str(preferred_map).strip()
         if pref:
@@ -1082,10 +1194,14 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
             pref = rel
         meta["preferred_map"] = pref or None
         changed.append("preferred_map")
+        written.append("preferred_map")
     if not changed:
         return {"patched": [], "state": "noop", "transaction": None}
     result = _locked_publish(
-        name, [{"path": page["file"], "text": _page_text(meta, body)}],
+        name, [{"path": page["file"],
+                "text": _changed_page_text(
+                    raw, meta, body, {k: meta[k] for k in written},
+                    newline)}],
         operation=f"patch place {group['id']} ({', '.join(changed)})",
         base_revisions={page["file"]: base_revision})
     return {"patched": changed, **result}
@@ -1153,14 +1269,17 @@ def associate(name: str, place_id: str, *, source_kind: str,
         if not path.is_file():
             raise PlaceNotFound(f"no such entity page: {rel}")
         # one byte snapshot for content + baseline (see _page_snapshot)
-        raw, base_revision = _page_snapshot(path, expected_revision)
+        raw, base_revision, newline = _page_snapshot(path, expected_revision)
         meta, body = _frontmatter_of(raw)
         meta = meta or {}
         current = _id_list(meta.get(relationship))
         meta[relationship] = ([p for p in current if p != pid] + [pid]) \
             if add else [p for p in current if p != pid]
         result = _locked_publish(
-            name, [{"path": rel, "text": _page_text(meta, body)}],
+            name, [{"path": rel,
+                    "text": _changed_page_text(
+                        raw, meta, body,
+                        {relationship: meta[relationship]}, newline)}],
             operation=f"{relationship} <- {pid} ({fn})",
             base_revisions={rel: base_revision})
         return {"source": rel, "relationship": relationship,
@@ -1263,15 +1382,19 @@ def associate(name: str, place_id: str, *, source_kind: str,
     writes, base = [], {}
     note_path = d / Path(*att["note_file"].split("/"))
     if note_path.is_file():
-        raw, base[att["note_file"]] = _page_snapshot(
+        raw, base[att["note_file"]], newline = _page_snapshot(
             note_path, expected_revision)
         meta, body = _frontmatter_of(raw)
         meta = meta or {}
     else:
-        meta, body = {}, ""
+        # a brand-new note page has no bytes to preserve — _page_text
+        # creates its frontmatter block
+        raw, meta, body, newline = "", {}, "", "\n"
     meta["place_id"] = pid if add else None
     writes.append({"path": att["note_file"],
-                   "text": _page_text(meta, body)})
+                   "text": _changed_page_text(
+                       raw, meta, body, {"place_id": meta["place_id"]},
+                       newline)})
     params_rel = f"{att['dir']}/params.yaml"
     params_path = d / Path(*params_rel.split("/"))
     if params_path.is_file():
