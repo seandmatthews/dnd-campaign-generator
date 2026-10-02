@@ -14,8 +14,10 @@ tested on its own; the studio is the only one that invokes the others.
 ## Start here
 
 - **New here? Follow [`TUTORIAL.md`](TUTORIAL.md)** — from zero to a
-  living campaign (world, maps, lore, a simulated week) in about 30
-  minutes, with a "you should see" checkpoint at every step.
+  living campaign (world, maps, lore, a simulated week): days or weeks of
+  world history, compressed into a couple of hours at the keyboard, with
+  a "you should see" checkpoint at every step and each long step's
+  expected duration stated before it runs.
 - **Just run the app:** `python studio/run.py` (or `studio/start.bat`) —
   if anything is missing, the doctor script (`python studio/doctor.py`)
   checks every prerequisite and tells you the exact command that fixes it.

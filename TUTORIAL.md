@@ -4,8 +4,11 @@ A walkthrough from zero to a living campaign: a generated world, city and
 battle maps, lore you approved, and a faction simulation that writes a
 chronicle week by week.
 
-**Time:** about 30 minutes the first time (including installs); roughly 15
-once your machine is set up. **Cost:** everything except two features is
+**Time:** a first campaign is an evening, not a coffee break — days or
+weeks of world history, compressed into a couple of hours at the keyboard
+(installs included). The machine works in minutes-long spans while you read
+what came back; every long step below states its expected duration before
+it starts. **Cost:** everything except two features is
 free and offline. Story generation and week simulation call an LLM and
 spend API credits — the app asks before every one of those.
 
@@ -113,13 +116,15 @@ Skip to Step 4 (lore by hand) or Step 5; you can come back later.
 
 Still on Maps:
 
-- **Map a burg** — pick a town, click **Map it**. A street-level city map
-  appears in the *Cities* grid. The **attach to place** field (it follows
-  the burg unless you edit it) links the map to that place's entity page —
+- **Map a burg** — pick a town, click **Map it**. This runs a headless map
+  generator (a few minutes; the log streams in the panel), and a
+  street-level city map appears in the *Cities* grid. The **attach to
+  place** field (it follows the burg unless you edit it) links the map to that place's entity page —
   "everything about this place" now includes the map.
 - **Battlemap scenes** — pick a kind (dungeon / cave / camp), give it a
   name (e.g. "The Drowned Crypt"), optionally attach it to a place, click
-  **Generate scene**. You get a scene image plus a `.uvtt` file under
+  **Generate scene** — another headless run, a few minutes. You get a
+  scene image plus a `.uvtt` file under
   `campaigns/<name>/maps/sites/…` — drop that into Foundry VTT and walls,
   doors and lights come with it. Each map also gets a small companion note
   (`<slug>.md`) embedding the image and linking its place; open the
@@ -133,8 +138,9 @@ Still on Maps:
 Now the LLM features (API key needed). On **World Building**:
 
 - **Generate backstory** — optionally give it a focus ("the salt tax
-  riots of the Docks"), confirm the credits prompt. After a minute it
-  stages 3–6 proposed timeline entries.
+  riots of the Docks"), confirm the credits prompt. One metered LLM call:
+  a few minutes later it stages 3–6 proposed timeline entries — then give
+  yourself reading time before you decide.
 - **Name helper** — type a culture name and ask for suggestions. The
   helper refuses to invent names from nothing: the first attempt invites
   you to *stage a seed list* (3+ names, one per line) that it will then
@@ -171,7 +177,9 @@ On **Agent Simulation**, a fresh campaign shows *Create a simulation*:
    it's your setup, no LLM involved.
 
 Then click **Propose week 1** (under *Generate week 1*). After a credits
-confirmation, the week runs (a few minutes): factions act on what they can
+confirmation, the week runs faction-by-faction — expect 10–20 minutes
+with a full roster, streaming its log as it goes. Factions act on what
+they can
 *see* (their fog of war, inspectable in the Views panel), dice decide
 contested moves, and rumors spread. What comes back is a **proposal** —
 the proposed week with its chronicle and a diff, shown right on the tab.

@@ -486,7 +486,8 @@
         'No campaign selected. Click <strong>+ New</strong> in the header to ' +
         'create one, or pick one from the Campaign list. New here? The ' +
         '<a href="/tutorial" target="_blank" rel="noopener">first-campaign ' +
-        'tutorial</a> goes from zero to a living campaign in about 30 minutes.' +
+        'tutorial</a> turns an evening at the keyboard into days or weeks ' +
+        'of world history.' +
       '</div>'
     );
   }
@@ -519,7 +520,11 @@
             '5. Agent Simulation &rarr; <em>Create a simulation</em>, then ' +
             '<em>Propose week 1</em> &mdash; accepting the proposal advances ' +
             'the canon clock</p>' +
-          '<p class="modal-body">Full walkthrough with troubleshooting: ' +
+          '<p class="modal-body">The first campaign is an evening, not a ' +
+            'quick setup: days or weeks of world history, compressed into a ' +
+            'couple of hours at the keyboard &mdash; each long step says its ' +
+            'expected duration before it starts. Full walkthrough with ' +
+            'troubleshooting: ' +
             '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
             '(also at <code>TUTORIAL.md</code> in the repo). Something not ' +
             'booting? Run <code>python studio/doctor.py</code>.</p>' +
