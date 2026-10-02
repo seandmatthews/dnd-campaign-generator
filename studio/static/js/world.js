@@ -586,6 +586,87 @@
     host.appendChild(card);
   }
 
+  /* ----- authoring lore: the outside-editor pointer (no in-app editor,
+     by ruling — this card only points at the folder) ----- */
+
+  function authoringKey(campaign) {
+    return 'campaign-studio.authoring-dismissed.' + campaign;
+  }
+
+  function authoringDismissed(campaign) {
+    try { return localStorage.getItem(authoringKey(campaign)) === '1'; }
+    catch (_) { return false; }
+  }
+
+  function authoringCard() {
+    const card = S.el(
+      '<section class="panel panel-card authoring-card">' +
+        '<div class="authoring-head">' +
+          '<h3 class="panel-title">Authoring lore</h3>' +
+          '<button type="button" class="btn authoring-dismiss">Dismiss</button>' +
+        '</div>' +
+        '<p class="panel-note">This is now an <strong>Obsidian household</strong>. ' +
+          'Every page you see here &mdash; entities, chronicles, chronicle ' +
+          'links, the works &mdash; is a plain markdown file under ' +
+          '<code>campaigns/' + S.esc(S.state.campaign || '') + '/lore/</code>. ' +
+          'Write in Obsidian; the studio picks it up on reload.</p>' +
+        '<div class="form-block">' +
+          '<div class="inline-form">' +
+            '<code class="lore-path">campaigns/' + S.esc(S.state.campaign || '') +
+              '/lore/</code>' +
+            '<button type="button" class="btn lore-copy">Copy path</button>' +
+            '<a class="btn btn-primary lore-open hidden" ' +
+              'rel="noopener">Open in Obsidian</a>' +
+            '<a class="btn lore-get" target="_blank" rel="noopener" ' +
+              'href="https://obsidian.md/download">Get Obsidian</a>' +
+          '</div>' +
+          '<p class="muted form-note">The copy button gives the full folder ' +
+            'path &mdash; point any editor at it. With Obsidian installed, ' +
+            'Open focuses it (the first click on a new folder asks Obsidian ' +
+            'to add the vault; that dialog is Obsidian&rsquo;s own).</p>' +
+          '<div class="form-error"></div>' +
+        '</div>' +
+      '</section>'
+    );
+    const pathEl = card.querySelector('.lore-path');
+    const openLink = card.querySelector('.lore-open');
+    const errBox = card.querySelector('.form-error');
+
+    card.querySelector('.authoring-dismiss').addEventListener('click', () => {
+      try { localStorage.setItem(authoringKey(S.state.campaign), '1'); }
+      catch (_) {}
+      card.remove();
+    });
+
+    card.querySelector('.lore-copy').addEventListener('click', async () => {
+      const text = pathEl.textContent || '';
+      try {
+        await navigator.clipboard.writeText(text);
+        S.toast('Lore folder path copied.', 'ok');
+      } catch (_) {
+        S.toast('Copy failed — select the path and copy it by hand.', 'error');
+      }
+    });
+
+    // the absolute folder + its obsidian:// URI are server-resolved — the
+    // browser only knows the campaign name
+    S.api(S.campUrl('/lore/path')).then((p) => {
+      if (!card.isConnected) return;
+      if (p && p.path) pathEl.textContent = String(p.path);
+      if (p && p.obsidian_uri) {
+        openLink.href = String(p.obsidian_uri); // property set: never parsed as markup
+        openLink.classList.remove('hidden');
+      }
+    }).catch((err) => {
+      if (!card.isConnected) return;
+      errBox.innerHTML = '';
+      errBox.appendChild(S.errorPanel(err,
+        'The resolved folder path could not be loaded — the relative ' +
+        'path above still holds under the studio checkout.'));
+    });
+    return card;
+  }
+
   /* ----- tab renderer ----- */
 
   S.tabs.world = async function (container) {
@@ -597,6 +678,22 @@
 
     const root = S.el('<div class="tab-root"></div>');
     container.appendChild(root);
+
+    // The permanent 🔗: dismissal hides the card, never the way back in.
+    const head = S.el(
+      '<div class="world-head">' +
+        '<button type="button" class="btn world-authoring-link" ' +
+          'aria-label="Authoring lore" ' +
+          'title="Authoring lore — where the files live">🔗</button>' +
+      '</div>'
+    );
+    head.querySelector('.world-authoring-link').addEventListener('click', () => {
+      try { localStorage.removeItem(authoringKey(S.state.campaign)); }
+      catch (_) {}
+      S.showTab('world'); // re-render: the card reflects the cleared flag
+    });
+    root.appendChild(head);
+    if (!authoringDismissed(S.state.campaign)) root.appendChild(authoringCard());
 
     // Geography digest.
     const geoPanel = S.el(

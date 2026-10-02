@@ -125,7 +125,7 @@
     return slot;
   }
 
-  function entryCard(item, revision) {
+  function entryCard(item, revision, obsidian) {
     const title = item.title || '(untitled)';
     const card = S.el(
       '<article class="card review-card">' +
@@ -139,6 +139,18 @@
       '</article>'
     );
     card.querySelector('.review-body').textContent = String(item.body == null ? '' : item.body);
+    if (item.kind === 'lore-page') {
+      // page drafts are markdown the moment they land: the one-line pointer
+      // to the outside editor (no in-app editor, by ruling)
+      const uri = obsidian && obsidian.obsidian_uri;
+      card.appendChild(S.el(
+        '<p class="panel-note review-obsidian-pointer">Approve, then ' +
+          (uri
+            ? '<a href="' + S.esc(String(uri)) + '">open the folder in Obsidian</a>'
+            : 'open the folder in Obsidian') +
+          ' to edit &mdash; the studio picks the file up on reload.</p>'
+      ));
+    }
     const slot = findingsSlot(item.findings);
     if (slot) card.appendChild(slot);
     card.appendChild(actionButtons(item, revision));
@@ -162,7 +174,7 @@
     return card;
   }
 
-  function groupPanel(group, meta) {
+  function groupPanel(group, meta, obsidian) {
     const prov = [];
     if (meta && meta.week != null && meta.week !== '') prov.push('week ' + meta.week);
     if (meta && meta.focus) prov.push('focus: ' + meta.focus);
@@ -224,7 +236,7 @@
 
     const list = panel.querySelector('.review-list');
     const revision = meta && meta.revision ? String(meta.revision) : null;
-    group.entries.forEach((it) => list.appendChild(entryCard(it, revision)));
+    group.entries.forEach((it) => list.appendChild(entryCard(it, revision, obsidian)));
     group.findings.forEach((it) => list.appendChild(looseFindingCard(it)));
     return panel;
   }
@@ -262,6 +274,12 @@
       return;
     }
 
+    // page-draft cards carry the Obsidian pointer — one shared fetch, and
+    // advisory only: a failed lookup degrades to the pointer without the link
+    const obsidian = items.some((it) => it && it.kind === 'lore-page')
+      ? await S.api(S.campUrl('/lore/path')).catch(() => null)
+      : null;
+
     // grouping preserves queue order
     const meta = {};
     (data && Array.isArray(data.files) ? data.files : []).forEach((f) => {
@@ -290,6 +308,6 @@
       root.appendChild(S.el('<p class="panel-note review-note">' + S.esc(String(n)) + '</p>'));
     });
 
-    order.forEach((g) => root.appendChild(groupPanel(g, meta[g.file] || {})));
+    order.forEach((g) => root.appendChild(groupPanel(g, meta[g.file] || {}, obsidian)));
   };
 }());

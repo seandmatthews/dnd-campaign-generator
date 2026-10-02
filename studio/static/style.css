@@ -1387,6 +1387,25 @@ tr.entity-row:hover { background: var(--hover, rgba(0, 0, 0, 0.04)); }
 }
 li.backlink-item[style] { cursor: pointer; }
 
+/* ---------- authoring lore (the Obsidian-household pointer) ---------- */
+
+.world-head { display: flex; justify-content: flex-end; }
+.world-head .btn { padding: 0.15rem 0.6rem; font-size: 0.9rem; }
+.authoring-head { display: flex; align-items: center; gap: 8px; }
+.authoring-head .panel-title { flex: 1; margin: 0; padding: 0; border: 0; }
+.lore-path {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--paper-bright);
+  overflow-wrap: anywhere;
+  user-select: all; /* copy-by-hand needs one click on the path */
+}
+.authoring-card .inline-form { align-items: center; }
+.review-obsidian-pointer { font-style: italic; }
+
 /* ------------------------------------------------ knowledge tab (phases 4+6) */
 
 .pill-vis-dm { border-color: var(--line-strong); color: var(--ink-faint); }
