@@ -434,23 +434,38 @@ def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=(),
     rc = p.get("resources_committed") or {}
     if not isinstance(rc, dict):
         rc = {}
-    # you cannot commit what you do not have: clamp to the faction's actual stock
+    # you cannot commit what you do not have: clamp to the faction's actual
+    # stock. Every rewrite is recorded in llm_notes — the DM must be able
+    # to see the proposal was amended, not silently trust it
+    notes = []
     clamped = {}
     for k, v in rc.items():
         if k not in VALID_RESOURCES:
+            notes.append(f"dropped unknown resource {k!r}")
             continue
         level = v if v in VALID_LEVELS else "low"
+        if v not in VALID_LEVELS:
+            notes.append(f"resource {k!r} level {v!r} invalid — read as 'low'")
         if actual_resources:
             have = _LEVEL_INDEX.get(actual_resources.get(k, "none"), 0)
             want = _LEVEL_INDEX.get(level, 0)
-            level = VALID_LEVELS[min(want, have)]
+            if want > have:
+                notes.append(
+                    f"resource {k!r} clamped to "
+                    f"'{VALID_LEVELS[have]}' (stock is "
+                    f"'{actual_resources.get(k, 'none')}')")
+                level = VALID_LEVELS[min(want, have)]
         if level != "none":
             clamped[k] = level
     p["resources_committed"] = clamped
     # descriptive only — the difficulty is the resolver's fixed default DC;
     # a model must not choose its own DC by declaring low risk
     if p.get("risk_acceptance") not in VALID_RISK:
+        notes.append(f"risk_acceptance {p.get('risk_acceptance')!r} "
+                     "invalid — read as 'medium'")
         p["risk_acceptance"] = "medium"
+    if notes:
+        p["llm_notes"] = notes
     p["actor"] = actor_id
     return p
 

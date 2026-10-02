@@ -233,7 +233,9 @@ def reveal(name: str, fact_id: str, week: int | None = None) -> dict:
     """Move ONE current public fact into the party-disclosure record. Only
     `public` facts can be revealed — faction-restricted knowledge is not
     the party's just because the DM likes the idea (that's a deliberate
-    second decision via a new fact)."""
+    second decision via a new fact). LOCK-ONLY canon writer (publication.py's
+    tier 2): caller holds the campaign lock; this writes one file via the
+    spine's atomic writer and the route git-snapshots."""
     doc = knowledge.load(name)
     store = disclosure_after_image(
         load_disclosure(name), doc.get("facts", []),
@@ -243,6 +245,7 @@ def reveal(name: str, fact_id: str, week: int | None = None) -> dict:
 
 
 def revoke(name: str, fact_id: str) -> dict:
+    """LOCK-ONLY canon writer (publication.py's tier 2), like reveal."""
     store = load_disclosure(name)
     store["revealed"] = [r for r in store["revealed"]
                          if r.get("fact_id") != fact_id]

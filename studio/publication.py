@@ -49,6 +49,18 @@ Locking: publish()/resolve() must run under the caller's per-campaign lock
 (review approve/delete take it blocking; submit_campaign_job holds it for
 long jobs). This module adds no campaign lock of its own — nesting one under
 the held lock would deadlock (Lock is not reentrant).
+
+Canon writes come in exactly TWO tiers, by design:
+  1. TRANSACTIONAL (this module): anything multi-file, anything carrying a
+     proposal's base revisions, anything whose retry must be idempotent.
+  2. LOCK-ONLY: single-file DM actions that append or flip one record
+     (briefing.reveal/revoke, knowledge.reconcile, the spine's own typed
+     writers). They hold the campaign lock, write via
+     spine.write_text_atomic, and git-snapshot via canon — no transaction,
+     no receipt. That is enough BECAUSE they touch one file and have no
+     stale-input window worth re-checking; a second writer of the same tier
+     is serialized by the lock. A new canon writer joins tier 2 only with
+     those three properties, and tier 1 otherwise.
 """
 
 import hashlib
@@ -219,16 +231,10 @@ def _write_json(path: Path, doc: dict) -> None:
 
 
 def _replace(tmp: Path, path: Path) -> None:
-    """os.replace with the same brief Windows sharing-violation tolerance the
-    spine uses (a concurrent reader holding the destination open)."""
-    for attempt in range(3):
-        try:
-            tmp.replace(path)
-            return
-        except PermissionError:
-            if attempt == 2:
-                raise
-            time.sleep(0.05 * (attempt + 1))
+    """One retry loop for the whole studio: the spine's (a concurrent
+    reader holding the destination open makes os.replace raise
+    PermissionError for an instant on Windows)."""
+    spine._replace_with_retry(tmp, path)
 
 
 def _write_image(tx_dir: Path, kind: str, rel: str, text: str) -> None:
@@ -621,6 +627,20 @@ def receipt(name: str, key: str) -> dict | None:
         return doc if isinstance(doc, dict) else None
     except (OSError, ValueError):
         return None
+
+
+def receipt_with_snapshot(name: str, key: str) -> dict | None:
+    """receipt(), with the snapshot backfilled from the recorded transaction
+    when the receipt predates that field — the complete idempotent-repeat
+    answer, shared by the proposal accept flow and review approvals."""
+    prior = receipt(name, key)
+    if prior is None:
+        return None
+    if "snapshot" not in prior:
+        snap = transaction_snapshot(name, prior.get("transaction"))
+        if snap is not None:
+            prior = {**prior, "snapshot": snap}
+    return prior
 
 
 def record_receipt(name: str, key: str, result: dict) -> None:

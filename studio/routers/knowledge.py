@@ -44,6 +44,13 @@ class SupersedeBody(BaseModel):
     place_ids: list[str] | None = None
 
 
+class RevealBody(BaseModel):
+    """The reveal week, when the DM records one — absent/null means 'no
+    week recorded'. Typed: a malformed payload is a 422, not a silently
+    ignored dict."""
+    week: int | None = None
+
+
 def _require_state(name: str) -> None:
     d = require_campaign(name)
     if not (d / "simulation" / "state.yaml").is_file():
@@ -168,21 +175,13 @@ def get_briefing_markdown(name: str, since_week: int = 0, focus: str = ""):
 
 
 @router.post("/api/campaign/{name}/knowledge/{fact_id}/reveal")
-def post_reveal(name: str, fact_id: str, body: dict | None = None):
+def post_reveal(name: str, fact_id: str, body: RevealBody | None = None):
     """Disclose one current public fact to the party — the explicit reveal
     that makes public-in-world knowledge party knowledge."""
     require_campaign(name)
     with campaign_lock_nowait(name, "revealing the fact"), \
             store_errors(ValueError):
-        week = None
-        if isinstance(body, dict) and body.get("week") is not None:
-            try:
-                week = int(body["week"])
-            except (TypeError, ValueError):
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"week must be an integer, got {body['week']!r}")
-        briefing.reveal(name, fact_id, week=week)
+        briefing.reveal(name, fact_id, week=body.week if body else None)
         snap = canon.snapshot_result(
             name, f"campaign/{name}: reveal fact {fact_id}")
         return {"revealed": fact_id, "snapshot": snap}

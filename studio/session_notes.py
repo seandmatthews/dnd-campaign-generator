@@ -9,6 +9,8 @@ sessions/<session-id>/; acceptance is the only thing that touches canon.
       --notes-file notes.md [--week N] [--place east-quay]...
   python studio/session_notes.py list <campaign>
   python studio/session_notes.py show <campaign> <session-id>
+  python studio/session_notes.py add <campaign> <session-id> \
+      --from suggestions.yaml [--draft <draft-id>]   # manual, no LLM
   python studio/session_notes.py extract <campaign> <session-id> \
       --confirm-spend            # metered LLM run — explicit confirmation
   python studio/session_notes.py prepare <campaign> <session-id> \
@@ -16,10 +18,14 @@ sessions/<session-id>/; acceptance is the only thing that touches canon.
   python studio/session_notes.py accept <campaign> <proposal-id>
   python studio/session_notes.py discard <campaign> <proposal-id>
 
-Supports manual drafting without any LLM (skip extract; prepare drafts
-built by hand through the studio editor or `show` + a YAML editor).
-Standalone agentic-simulator ingestion (src/ingest.py, src/effects.py)
-is untouched and independent of Studio.
+Supports manual drafting without any LLM: `add` appends suggestions from
+a YAML file (a bare list or {suggestions: [...]} — history_event /
+resource_change / field_change / knowledge_fact / party_disclosure
+records; the studio editor or POST .../drafts works too) to the latest
+draft, creating the session's first draft when none exists. Cards that
+fail validation are saved with their blockers listed — fix or exclude
+them at prepare time. Standalone agentic-simulator ingestion
+(src/ingest.py, src/effects.py) is untouched and independent of Studio.
 """
 
 import argparse
@@ -66,6 +72,31 @@ def cmd_list(args) -> int:
 def cmd_show(args) -> int:
     detail = session_store.session_detail(args.campaign, args.session_id)
     print(spine.dump_yaml(detail))
+    return 0
+
+
+def cmd_add(args) -> int:
+    import yaml
+    try:
+        doc = yaml.safe_load(
+            pathlib.Path(args.from_file).read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    suggestions = doc.get("suggestions") if isinstance(doc, dict) else doc
+    if not isinstance(suggestions, list) or not suggestions:
+        print("error: the file carries no suggestions list (use a bare "
+              "list or {suggestions: [...]})", file=sys.stderr)
+        return 1
+    with spine.campaign_lock(args.campaign):
+        draft = session_store.add_suggestions(
+            args.campaign, args.session_id, suggestions, draft_id=args.draft)
+    print(f"draft {draft['draft_id']} (revision {draft['revision']}) now "
+          f"holds {len(draft['suggestions'])} suggestion(s)")
+    for s in draft.get("suggestions") or []:
+        blockers = s.get("validation") or []
+        note = f"  — BLOCKED: {'; '.join(blockers)}" if blockers else ""
+        print(f"  {s.get('id')}  {s.get('kind')}{note}")
     return 0
 
 
@@ -131,12 +162,12 @@ def cmd_prepare(args) -> int:
 
 def cmd_accept(args) -> int:
     # the SAME accept path as the studio's button: validation, the one
-    # transactional publication, the receipt, and the session bookkeeping
-    from fastapi import HTTPException
-    from routers.simulation import accept_proposal
+    # transactional publication, the receipt, and the session bookkeeping —
+    # through the service layer (proposal_flows), typed errors and all
+    import proposal_flows
     try:
-        result = accept_proposal(args.campaign, args.proposal_id)
-    except HTTPException as e:
+        result = proposal_flows.accept(args.campaign, args.proposal_id)
+    except proposal_flows.ProposalFlowError as e:
         print(f"error: {e.detail}", file=sys.stderr)
         return 1
     print(f"accepted {result.get('accepted')} "
@@ -149,11 +180,10 @@ def cmd_accept(args) -> int:
 
 
 def cmd_discard(args) -> int:
-    from fastapi import HTTPException
-    from routers.simulation import discard_proposal
+    import proposal_flows
     try:
-        result = discard_proposal(args.campaign, args.proposal_id)
-    except HTTPException as e:
+        result = proposal_flows.discard(args.campaign, args.proposal_id)
+    except proposal_flows.ProposalFlowError as e:
         print(f"error: {e.detail}", file=sys.stderr)
         return 1
     print(f"discarded {result.get('discarded')} — no canon change ever "
@@ -191,6 +221,17 @@ def main(argv=None) -> int:
     with_campaign(sp)
     sp.add_argument("session_id")
     sp.set_defaults(fn=cmd_show)
+
+    sp = sub.add_parser("add", help="append manual suggestions (no LLM) "
+                                    "from a YAML file")
+    with_campaign(sp)
+    sp.add_argument("session_id")
+    sp.add_argument("--from", dest="from_file", required=True,
+                    help="YAML file: a bare suggestion list or "
+                         "{suggestions: [...]}")
+    sp.add_argument("--draft", help="draft id (default: the latest, "
+                                    "creating the first draft if needed)")
+    sp.set_defaults(fn=cmd_add)
 
     sp = sub.add_parser("extract", help="run a bounded metered extraction")
     with_campaign(sp)

@@ -160,6 +160,10 @@ def validate_effect(effect, state):
     etype = str(effect.get("type") or "").strip()
     if not eid:
         errs.append("missing id (a stable id is what makes re-approval safe)")
+    week = effect.get("week")
+    if week is not None and (not isinstance(week, int)
+                             or isinstance(week, bool) or week < 0):
+        errs.append(f"week {week!r} is not a non-negative integer")
     if etype in PROJECT_EFFECT_TYPES:
         errs.extend(_validate_project_effect(effect, state))
         return errs
@@ -236,8 +240,14 @@ def _apply_one(state, effect, week):
         # routes through the shared completion pass (see module docstring)
         _projects.completion_pass(state, week)
         return ev
-    fid = effect["faction_id"]
-    faction = next(f for f in state["factions"] if f["id"] == fid)
+    # the SAME identity rules as validation: faction_map keys are str(id),
+    # so a numeric id in a hand-edited state resolves identically on both
+    # sides of the check/apply contract
+    faction = faction_map(state).get(str(effect["faction_id"]))
+    if faction is None:  # unreachable when validation gates the batch
+        raise LookupError(f"faction {effect['faction_id']!r} vanished "
+                          "between validation and application")
+    fid = str(faction["id"])
     if effect["type"] == "set_resource":
         faction.setdefault("resources", {})[effect["resource"]] = \
             str(effect["after"])
@@ -257,12 +267,27 @@ def _apply_one(state, effect, week):
     return ev
 
 
+def _effect_week(effect, week, state):
+    """The effect's explicit week, else the record's, else the clock —
+    an explicit 0 is a real week (week zero exists), never 'missing'."""
+    for candidate in (effect.get("week"), week,
+                      (state.get("meta") or {}).get("clock", {}).get("week")):
+        if isinstance(candidate, int) and not isinstance(candidate, bool) \
+                and candidate >= 0:
+            return candidate
+    return 0
+
+
 def apply_effects(state, effects, week=None):
-    """All-or-nothing: validate the whole batch against the CURRENT state,
-    then apply. Already-applied ids are skipped (dedup), so re-applying a
-    session record changes nothing twice. Returns (applied_count, errors).
-    Nothing is written here — the caller owns saving (ingest.apply, the
-    CLI's --apply, or the studio's publication path)."""
+    """All-or-nothing over an EVOLVING candidate: each effect is validated
+    against the state its predecessors in the batch produced (a completion
+    mid-batch makes a later `set_project_status: active` a refusal, and a
+    second write to the same resource sees the first's result), and the
+    real state is mutated only after the whole batch validates. Already-
+    applied ids are skipped (dedup), so re-applying a session record
+    changes nothing twice. Returns (applied_count, errors). Nothing is
+    written here — the caller owns saving (ingest.apply, the CLI's
+    --apply, or the studio's publication path)."""
     known_ids = set(state.get("meta", {}).get("applied_effects") or [])
     errors = []
     todo = []
@@ -273,20 +298,22 @@ def apply_effects(state, effects, week=None):
         if str(effect.get("id")) in known_ids:
             continue  # dedup first: an applied effect must not fail on a
             # stale precondition — its own application changed the value
-        errs = validate_effect(effect, state)
-        if errs:
-            errors.extend(f"effect {str(effect.get('id') or i + 1)}: {e}"
-                          for e in errs)
-            continue
         todo.append(effect)
-        known_ids.add(str(effect["id"]))
+        known_ids.add(str(effect.get("id")))  # .get: validate_effect's
+        # "missing id" refusal must be reachable — a bare ["id"] here
+        # KeyErrors first and the DM sees a traceback, not the message
     if errors:
         return 0, errors
+    import copy as _copy
+    candidate = _copy.deepcopy(state)
+    for i, effect in enumerate(todo):
+        errs = validate_effect(effect, candidate)
+        if errs:
+            return 0, errors + [f"effect {str(effect.get('id') or i + 1)}: {e}"
+                                for e in errs]
+        _apply_one(candidate, effect, _effect_week(effect, week, candidate))
     for effect in todo:
-        _apply_one(state, effect,
-                   int(effect.get("week") or week
-                       or state.get("meta", {}).get("clock", {})
-                       .get("week") or 0))
+        _apply_one(state, effect, _effect_week(effect, week, state))
     return len(todo), []
 
 
@@ -334,12 +361,20 @@ def apply_session_record(record, state):
                 errors.append(
                     f"event {i + 1}: place_ids must be a list of place ids")
             else:
+                # ids match EXACTLY (stable ids are case-sensitive by
+                # design); a case-variant gets a did-you-mean so the fix
+                # is one edit, not a registry hunt
+                lowered = {}
+                for p in place_ids:
+                    lowered.setdefault(str(p).lower(), p)
                 unknown = [str(x).strip() for x in eplaces
                            if str(x).strip() not in place_ids]
-                if unknown:
+                for u in unknown:
+                    exact_case = lowered.get(u.lower())
                     errors.append(
-                        f"event {i + 1}: unknown place id(s): "
-                        + ", ".join(unknown))
+                        f"event {i + 1}: unknown place id {u!r}"
+                        + (f" (ids match exactly — did you mean "
+                           f"{exact_case!r}?)" if exact_case else ""))
     for i, effect in enumerate(record.get("effects") or []):
         if not isinstance(effect, dict):
             errors.append(f"effect {i + 1}: not a mapping")
@@ -393,6 +428,10 @@ def main(argv):
         state = _store_load(state_path)
     except (OSError, yaml.YAMLError) as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(state, dict):
+        print(f"error: {state_path} is empty or not a mapping — the state "
+              "a session record applies against must exist", file=sys.stderr)
         return 1
     events, applied, errors = apply_session_record(record or {}, state)
     if errors:

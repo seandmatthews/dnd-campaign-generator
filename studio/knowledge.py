@@ -243,6 +243,18 @@ def supersede(name: str, old_id: str, *, text: str, visibility,
     return new
 
 
+def _input_base_revisions(name: str) -> dict:
+    """The revisions of the two files a transactional knowledge write will
+    replace, captured BEFORE the caller loads them: an external edit
+    between load and publish then fails the base-revision check instead of
+    being overwritten by the older in-memory copy."""
+    return {
+        KNOWLEDGE_FILE: publication.file_revision(_path(name)),
+        "simulation/state.yaml": publication.file_revision(
+            spine.campaign_dir(name) / "simulation" / "state.yaml"),
+    }
+
+
 def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
                    visibility, source_file: str = "", subjects=None,
                    place_ids=None) -> tuple:
@@ -252,6 +264,7 @@ def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
     recorded fact the engine state never saw (the old two-step order left
     exactly that window, self-healing only on the next knowledge write).
     Caller holds the campaign lock. Returns (fact, publication result)."""
+    base = _input_base_revisions(name)
     doc = load(name)
     state = spine.load_state(name)
     faction_ids = {f.get("id") for f in (state.get("factions") or [])}
@@ -259,7 +272,8 @@ def record_fact_tx(name: str, *, fact_id: str | None = None, text: str,
                          visibility=visibility, source_file=source_file,
                          subjects=subjects, place_ids=place_ids)
     return fact, _publish_store_and_state(name, doc, state,
-                                          operation="record knowledge fact")
+                                          operation="record knowledge fact",
+                                          base_revisions=base)
 
 
 def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
@@ -269,6 +283,7 @@ def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
     as record_fact_tx). place_ids/subjects omitted in the correction body
     carry forward from the old fact (see supersede). Returns (new fact,
     publication result)."""
+    base = _input_base_revisions(name)
     doc = load(name)
     old = next((f for f in doc["facts"] if f.get("id") == old_id), None)
     if old is None:
@@ -283,25 +298,31 @@ def supersede_fact_tx(name: str, old_id: str, *, text: str, visibility,
     old["status"] = "superseded"
     old["superseded_by"] = new["id"]
     return new, _publish_store_and_state(
-        name, doc, state, operation="supersede knowledge fact")
+        name, doc, state, operation="supersede knowledge fact",
+        base_revisions=base)
 
 
 def _publish_store_and_state(name: str, doc: dict, state: dict,
-                             operation: str) -> dict:
+                             operation: str,
+                             base_revisions: dict | None = None) -> dict:
     """One transactional publish carrying BOTH the knowledge store and the
-    state with the freshly compiled section."""
+    state with the freshly compiled section. base_revisions (the inputs'
+    revisions, captured before the caller loaded them) make a concurrent
+    external edit a 409 instead of a silent overwrite."""
     state = dict(state or {})
     state["knowledge"] = compile_state_section(name, doc=doc)
     result = publication.publish(name, [
         {"path": KNOWLEDGE_FILE, "text": spine.dump_yaml(doc)},
         {"path": "simulation/state.yaml", "text": spine.dump_yaml(state)},
-    ], operation=operation)
+    ], operation=operation, base_revisions=base_revisions)
     return result
 
 
 def reconcile(name: str, fact_id: str) -> dict:
     """Re-approve a fact's source file after the DM has read the changed
-    bytes: the recorded revision catches up. Approved text unchanged."""
+    bytes: the recorded revision catches up. Approved text unchanged.
+    LOCK-ONLY canon writer (publication.py's tier 2): the caller holds the
+    campaign lock; one file, atomic write, route-level git snapshot."""
     doc = load(name)
     fact = next((f for f in doc["facts"] if f.get("id") == fact_id), None)
     if fact is None:

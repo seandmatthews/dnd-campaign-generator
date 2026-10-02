@@ -40,7 +40,9 @@ def state():
              "outcome": "succeeded"},
             {"week": 4, "actor": "world", "text": "The council decreed the regency ends at week 8"},
         ],
-        "rumors": [{"claim": "The ferry guild is hiring blades", "fidelity": "secondhand"}],
+        "rumors": [{"id": "rumor_0001", "claim": "The ferry guild is hiring blades",
+                    "fidelity": "hearsay", "born_week": 3,
+                    "heard_by": ["ferrymen"], "transmissions": []}],
     }
 
 

@@ -109,9 +109,10 @@ def faction_view(state, faction_id):
             continue
         observed = {
             "id": f["id"],
-            # name/resources may be missing from a hand-edited state
-            # (validate_state checks only id) — the view degrades,
-            # it never KeyErrors the week mid-spend
+            # name/resources may be missing from a state that never went
+            # through validate_state (inspect mode, old snapshots) — the
+            # view degrades as a backstop even though --live now refuses
+            # such a faction before the spend
             "name": f.get("name") or f["id"],
             "kind": f.get("kind") or "unknown",
         }
@@ -179,10 +180,15 @@ def main(argv):
         return 2
     try:
         state = load_state(state_path)
-    except OSError as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    ids = {f["id"] for f in state["factions"]} if state else set()
+    if not isinstance(state, dict):
+        print(f"error: {state_path or 'world/state.yaml'} is empty or not "
+              "a mapping", file=sys.stderr)
+        return 1
+    ids = {f["id"] for f in state.get("factions") or []
+           if isinstance(f, dict) and f.get("id")}
     if args[0] not in ids:
         print(f"unknown faction id: {args[0]}", file=sys.stderr)
         return 2

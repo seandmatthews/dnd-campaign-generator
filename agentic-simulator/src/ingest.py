@@ -173,7 +173,7 @@ def main(argv):
         try:
             pending = read_pending(paths[0])
             n = apply(pending, state_path)
-        except OSError as e:
+        except (OSError, yaml.YAMLError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
         if n < 0:
@@ -186,8 +186,12 @@ def main(argv):
     try:
         notes_text = pathlib.Path(rest[0]).read_text(encoding="utf-8")
         state = load_state(state_path)
-    except OSError as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(state, dict):
+        print(f"error: {state_path} is empty or not a mapping",
+              file=sys.stderr)
         return 1
     proposals = extract(notes_text, state)
     if not proposals:

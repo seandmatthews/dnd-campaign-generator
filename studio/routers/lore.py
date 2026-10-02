@@ -12,7 +12,6 @@ entries and attaching advisory findings; POST name is synchronous and needs
 a names-<culture>.txt seed list.
 """
 
-import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -38,6 +37,18 @@ class NameBody(BaseModel):
     hint: str | None = None
 
 
+class MissingPagesBody(BaseModel):
+    """Optional bounds on a missing-pages run: a target subset and/or a cap.
+    Absent/null means 'no bound' — the job decides. Typed so a malformed
+    payload is a 422, not a silently ignored dict."""
+    targets: list[str] | None = None
+    limit: int | None = None
+
+
+class EntriesBody(BaseModel):
+    focus: str = ""
+
+
 @router.get("/api/campaign/{name}/lore")
 def get_lore(name: str):
     require_campaign(name)
@@ -61,7 +72,7 @@ def get_missing_pages(name: str):
 
 
 @router.post("/api/campaign/{name}/lore/pages/missing", status_code=202)
-def post_missing_pages(name: str, body: dict | None = None):
+def post_missing_pages(name: str, body: MissingPagesBody | None = None):
     """Write the missing pages (fed-or-refused, vault stage 4): each dangling
     wiki-link is a generation target grounded in the pages that link it.
     Body {"targets"?: [str]} limits the run to those names, and
@@ -73,11 +84,11 @@ def post_missing_pages(name: str, body: dict | None = None):
     d = require_campaign(name)
     targets = None
     limit = None
-    if isinstance(body, dict):
-        if isinstance(body.get("targets"), list):
-            targets = [str(t) for t in body["targets"] if str(t).strip()]
-        if isinstance(body.get("limit"), int) and body["limit"] > 0:
-            limit = body["limit"]
+    if body is not None:
+        if body.targets is not None:
+            targets = [t for t in body.targets if str(t).strip()]
+        if body.limit is not None and body.limit > 0:
+            limit = body.limit
 
     def job(log):
         result = loregen.generate_missing_pages(d, targets, log=log,
@@ -157,11 +168,9 @@ def post_style(name: str, file: str, body: TextBody):
 
 
 @router.post("/api/campaign/{name}/lore/entries", status_code=202)
-def post_entries(name: str, body: dict | None = None):
+def post_entries(name: str, body: EntriesBody | None = None):
     d = require_campaign(name)
-    focus = ""
-    if isinstance(body, dict) and isinstance(body.get("focus"), str):
-        focus = body["focus"].strip()
+    focus = (body.focus if body is not None else "").strip()
     if not (d / "world" / "geography.yaml").is_file():
         raise HTTPException(
             status_code=422,

@@ -22,8 +22,8 @@ import pytest
 import server
 import spine
 from conftest import wait_for_job
-from routers.simulation import (clear_week_flag, restore_interrupted_week,
-                                write_week_flag)
+from engines import (clear_week_flag, restore_interrupted_week,
+                     write_week_flag)
 
 BUSY = {"error": "another job is already modifying this campaign"}
 

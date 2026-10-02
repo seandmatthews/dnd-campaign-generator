@@ -17,8 +17,9 @@ import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import events
+from store import RUMOR_FIDELITY
 
-_GRADES = ("eyewitness", "reliable", "hearsay", "dead")
+_GRADES = RUMOR_FIDELITY  # decay order; validate_state refuses other grades
 
 
 def spawn_from_events(state):

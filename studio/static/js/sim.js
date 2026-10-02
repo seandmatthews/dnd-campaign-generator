@@ -1037,10 +1037,11 @@
       ? ' <span class="pill pill-kind">' + S.esc(String(ev.progress_before)) +
         ' &rarr; ' + S.esc(String(ev.progress_after)) + '</span>' : '';
     const text = ev.public_action && ev.public_action !== ev.action
-      ? ev.public_action + ' <span class="muted">(public line; DM: ' +
+      ? S.esc(String(ev.public_action)) +
+        ' <span class="muted">(public line; DM: ' +
         S.esc(String(ev.action || ev.text || '')) + ')</span>'
-      : (ev.text || ev.action || '');
-    return '<li>' + wk + moved + '<span class="event-text">' + S.esc(text) + '</span></li>';
+      : S.esc(String(ev.text || ev.action || ''));
+    return '<li>' + wk + moved + '<span class="event-text">' + text + '</span></li>';
   }
 
   function projectCard(project, factions) {

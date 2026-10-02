@@ -278,12 +278,14 @@
   const HEIGHTMAP_TEMPLATES = ['volcano', 'highIsland', 'lowIsland', 'continents',
     'archipelago', 'atoll', 'mediterranean', 'peninsula', 'pangea', 'isthmus',
     'shattered', 'taklamakan', 'oldWorld', 'fractious'];
+  // [class, server key, label, hint, min] — min mirrors the server's
+  // _OPTION_RANGES (maps.py) so a legal-looking form cannot 422 at submit
   const STEER_FIELDS = [
-    ['opt-cultures', 'cultures', 'Cultures', '1-30'],
-    ['opt-states', 'states', 'States', '1-60'],
-    ['opt-burgs', 'burgs', 'Burgs', '50-5000'],
-    ['opt-precip', 'precipitation', 'Precipitation', '5-500'],
-    ['opt-lat', 'latitude', 'Latitude band', '0 far north .. 100 far south'],
+    ['opt-cultures', 'cultures', 'Cultures', '1-30', 1],
+    ['opt-states', 'states', 'States', '1-60', 1],
+    ['opt-burgs', 'burgs', 'Burgs', '50-5000', 50],
+    ['opt-precip', 'precipitation', 'Precipitation', '5-500', 5],
+    ['opt-lat', 'latitude', 'Latitude band', '0 far north .. 100 far south', 0],
   ];
 
   function steerControlsHtml() {
@@ -292,9 +294,9 @@
     const templates = ['<option value="">random (per seed)</option>']
       .concat(HEIGHTMAP_TEMPLATES.map((t) => `<option value="${t}">${t}</option>`))
       .join('');
-    const nums = STEER_FIELDS.map(([cls, , label, range]) =>
+    const nums = STEER_FIELDS.map(([cls, , label, range, min]) =>
       `<label class="field"><span class="field-label">${label}</span>` +
-      `<input type="number" class="input ${cls}" min="0" placeholder="${range}"></label>`).join('');
+      `<input type="number" class="input ${cls}" min="${min}" placeholder="${range}"></label>`).join('');
     const temps = [['opt-equator', 'equator'], ['opt-north', 'north_pole'], ['opt-south', 'south_pole']]
       .map(([cls, label]) =>
         `<label class="field"><span class="field-label">${label} &deg;C</span>` +

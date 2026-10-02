@@ -219,7 +219,9 @@
         try {
           await S.api(S.campUrl('/places/' + encodeURIComponent(p.id)), {
             method: 'PATCH',
-            body: { preferred_map: select.value || null }
+            // '' means "clear" on the server (null reads as "field
+            // omitted" and patches nothing)
+            body: { preferred_map: select.value || '' }
           });
           S.toast('Preferred map saved.', 'ok');
           S.openPlace(p.id);

@@ -39,7 +39,9 @@ chronicle, no replay), because an all-holds week saved as canon would be
 indistinguishable from a quiet week. Every metered POST attempt spends the
 ceiling, retries included, so a hard-failing provider can exhaust the
 budget with zero proposals — that aborts too (raise LLM_MAX_CALLS and
-retry). A narrator failure leaves the ledger as the record. Dice roll from
+retry). A provider outage that fails EVERY acting faction's proposal
+aborts the same way: an all-failed week is not a quiet week either.
+A narrator failure leaves the ledger as the record. Dice roll from
 a per-week seeded RNG recorded in meta.rng_seeds — a week is replayable by
 seeding resolve with that number.
 """
@@ -71,9 +73,10 @@ CHRONICLE_DIR = ROOT / "chronicle"
 
 
 class WeekAborted(RuntimeError):
-    """The week stopped before any canon write — currently only per-run
-    budget exhaustion. main() maps it to exit 3; the studio refuses to
-    stage a proposal from a non-zero tick run."""
+    """The week stopped before any canon write — per-run budget exhaustion,
+    or every acting faction's proposal failing (a provider outage must not
+    be saved as a quiet week). main() maps it to exit 3; the studio refuses
+    to stage a proposal from a non-zero tick run."""
 
 
 def step_resource(resources, committed, direction):
@@ -206,7 +209,7 @@ def run_live(state):
 
     rumors.spread(state, state.get("rumors", []))   # rumors move before actions do
 
-    proposals, views = [], []
+    proposals, failed = [], []
     print(f"proposals for week {week}:")
     for faction in state["factions"]:
         if faction["id"] in held:
@@ -214,7 +217,6 @@ def run_live(state):
             print(f"  {faction['id']:<14} HOLDS ({reasons})")
             continue
         view = faction_view(state, faction["id"])
-        views.append(view)
         try:
             p = llm.propose(view, template, faction["id"])
         except llm.BudgetExceeded:
@@ -230,8 +232,15 @@ def run_live(state):
                 f"{faction['id']} — the week was NOT written: no state, no "
                 "chronicle, no replay; raise LLM_MAX_CALLS and re-run"
             ) from None
+        except (KeyError, AttributeError, TypeError, NameError, IndexError,
+                StopIteration):
+            # an engine bug must crash the week BEFORE more spend — the
+            # blanket hold below used to record these as "proposal failed"
+            # and the defect surfaced as model misbehavior
+            raise
         except Exception as e:  # noqa: BLE001 — one dead agent must not lose the week
             print(f"  {faction['id']:<14} HOLDS (proposal failed: {e})")
+            failed.append(faction["id"])
             continue
         for w in consistency.check(p, state, faction["id"], last_week=prev_week):
             print(f"  [consistency] {faction['id']}: {w['kind']} — {w['detail']}")
@@ -257,6 +266,18 @@ def run_live(state):
                     else f"{faction['id']} attended to private business")
         proposals.append(p)
         print(f"  {faction['id']:<14} target={p['target']:<14} risk={p['risk_acceptance']:<6} {p['action']}")
+        for note in p.get("llm_notes", []):
+            print(f"  [llm] {faction['id']}: rewritten — {note}")
+
+    if not proposals and failed:
+        # a week where every acting faction's proposal FAILED is not a
+        # quiet week — written canon would be indistinguishable from one
+        # (same rule as budget exhaustion; the memory-only clock bump and
+        # rumor spread above are discarded with this exception)
+        raise WeekAborted(
+            f"every acting faction's proposal failed ({', '.join(failed)}) "
+            "— the week was NOT written: no state, no chronicle, no "
+            "replay; check the provider (key, quota, network) and re-run")
 
     print("resolution:")
     # every proposal gets a stable action id once, before resolution: the
@@ -510,10 +531,17 @@ def main(argv=None):
         return 0 if ok else 1
     try:
         state = load_state()
+    except OSError as e:
+        print(f"error: world/state.yaml cannot be read: {e}", file=sys.stderr)
+        return 2
     except yaml.YAMLError as e:
         # a corrupt state file (a hand edit, a bad merge) must not surface
         # as a raw traceback — and certainly not after a spend
         print(f"error: world/state.yaml does not parse as YAML: {e}",
+              file=sys.stderr)
+        return 2
+    if not isinstance(state, dict):
+        print("error: world/state.yaml is empty or not a mapping",
               file=sys.stderr)
         return 2
     if "--live" in argv:
@@ -529,13 +557,17 @@ def main(argv=None):
             print("usage: python src/tick.py --why <week> <actor>", file=sys.stderr)
             return 2
         sys.exit(why_cli(state, ["tick.py", argv[i + 1], argv[i + 2]]))
-    clock = state["meta"]["clock"]
-    print(f"{place_label_of(state)}, week {clock['week']} ({clock['season']})")
-    print(f"Premise: {state['meta']['premise'].strip()}")
+    clock = (state.get("meta") or {}).get("clock") or {}
+    print(f"{place_label_of(state)}, week {clock.get('week', '?')} "
+          f"({clock.get('season') or 'unknown season'})")
+    premise = str((state.get("meta") or {}).get("premise") or "").strip()
+    print(f"Premise: {premise or '(none recorded)'}")
     print()
-    for faction in state["factions"]:
+    for faction in state.get("factions") or []:
+        if not isinstance(faction, dict) or not faction.get("id"):
+            continue  # validate_state names this on --live; inspect skips it
         view = faction_view(state, faction["id"])
-        print(f"--- {faction['name']} sees: ---")
+        print(f"--- {faction.get('name') or faction['id']} sees: ---")
         print(yaml.safe_dump(view, sort_keys=False).strip())
         print()
     return 0

@@ -51,6 +51,19 @@ class DraftEditBody(BaseModel):
     expected_revision: int
 
 
+class DraftCreateBody(BaseModel):
+    """A brand-new MANUAL draft: the no-LLM workflow's first step (a saved
+    session has no draft until suggestions exist)."""
+    suggestions: list[dict] = []
+
+
+class SuggestionsAddBody(BaseModel):
+    """Append NEW suggestions to a draft; id-less cards get server-minted
+    ids."""
+    suggestions: list[dict]
+    expected_revision: int | None = None
+
+
 class PrepareBody(BaseModel):
     selected: list[str]
     expected_draft_revision: int | None = None
@@ -102,6 +115,30 @@ def put_draft(name: str, session_id: str, draft_id: str,
             suggestions=body.suggestions,
             expected_revision=body.expected_revision)
     return draft
+
+
+@router.post("/api/campaign/{name}/sessions/{session_id}/drafts",
+             status_code=201)
+def post_draft(name: str, session_id: str, body: DraftCreateBody):
+    """Create the session's first MANUAL draft — manual drafting needs no
+    API key and no extraction run."""
+    require_campaign(name)
+    with campaign_lock_nowait(name, "creating a manual draft"):
+        return session_store.add_suggestions(name, session_id,
+                                             body.suggestions)
+
+
+@router.post("/api/campaign/{name}/sessions/{session_id}/drafts/"
+             "{draft_id}/suggestions", status_code=201)
+def post_suggestions(name: str, session_id: str, draft_id: str,
+                     body: SuggestionsAddBody):
+    """Add NEW suggestions to an existing draft (the 'add suggestion'
+    action); existing ids are never touched."""
+    require_campaign(name)
+    with campaign_lock_nowait(name, "adding suggestions"):
+        return session_store.add_suggestions(
+            name, session_id, body.suggestions, draft_id=draft_id,
+            expected_revision=body.expected_revision)
 
 
 @router.post("/api/campaign/{name}/sessions/{session_id}/prepare")

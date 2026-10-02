@@ -162,11 +162,11 @@ def campaign_lock_nowait(name: str, action: str):
     30 minutes); a blocking acquire used to pin the HTTP request that long,
     and a browser or proxy timeout on the way turns the would-be success
     into an error the DM must guess about. Fast-fail exactly like
-    submit_campaign_job, with a message that says when to retry."""
-    lock = spine.campaign_lock(name)
-    if not lock.acquire(blocking=False):
-        raise busy_409(action)
+    submit_campaign_job, with a message that says when to retry. Delegates
+    to spine.lock_nowait — the one implementation — and maps CampaignBusy
+    to the router's 409."""
     try:
-        yield
-    finally:
-        lock.release()
+        with spine.lock_nowait(name, action):
+            yield
+    except spine.CampaignBusy as e:
+        raise busy_409(action) from e

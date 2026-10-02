@@ -106,3 +106,53 @@ def dump(doc) -> str:
     revision_of_bytes hashes exactly these bytes (spine.dump_yaml's exact
     output), so every writer of the file must produce them through here."""
     return spine.dump_yaml(doc)
+
+
+# ----------------------------------------------- week-entry derivation
+#
+# The engine's week output becomes PROPOSED timeline entries (staged in the
+# bundle, nothing lands in lore/pending until accept) — one owner for the
+# derivation, shared by the week flow and anything else staging weeks.
+
+# clause/sentence punctuation that may end a proposed timeline title
+# (apostrophes and quotes deliberately excluded — possessives are not cuts)
+_CLAUSE_PUNCT_RE = re.compile(r"[—–,;:.!?()\[\]]")
+
+
+def propose_title(text: str, max_words: int = 7, min_words: int = 4) -> str:
+    """One short title for a proposed timeline entry. Mechanical, per the
+    design doc: the chronicle prose is already written and reviewable — the
+    timeline only needs its skeleton. Take the first 4-7 words of the event
+    text, cut at the first clause-punctuation mark once min_words are in
+    (an em-dash or comma at word 1-3 does not cut; possessives never cut)."""
+    head = (text or "").split()[:max_words]
+    for i, word in enumerate(head):
+        if i >= min_words and _CLAUSE_PUNCT_RE.search(word):
+            cut = " ".join(head[:i]).strip(" \t—–-,;:.!?()[]\"'")
+            if cut:
+                return cut
+    return " ".join(head).strip()
+
+
+def build_week_entries(week: int, events: list) -> list:
+    """One proposed timeline entry per NON-WORLD event of the proposed week
+    (world events are scenery, not faction history). Pure: the entries are
+    staged INTO THE PROPOSAL BUNDLE — nothing lands in lore/pending or the
+    timeline until the whole week is accepted."""
+    entries = []
+    for ev in events or []:
+        if not isinstance(ev, dict) or ev.get("week") != week:
+            continue
+        if str(ev.get("actor") or "").lower() == "world":
+            continue
+        text = str(ev.get("text") or "").strip()
+        if not text:
+            continue
+        entries.append({
+            "id": f"pw{week}-{len(entries) + 1}",
+            "when": f"week {week}",
+            "title": propose_title(text),
+            "text": text,
+            "source": f"sim:week-{week}",
+        })
+    return entries

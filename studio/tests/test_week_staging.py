@@ -20,7 +20,7 @@ import proposals
 import publication
 import spine
 from conftest import wait_for_job
-from routers.simulation import build_week_entries, propose_title
+from timeline import build_week_entries, propose_title
 
 WEEK4_EVENTS = [
     {"week": 4, "actor": "bastard",
@@ -238,12 +238,12 @@ def test_accept_reads_chronicle_meta_from_the_bundle_not_scratch(
 
 
 def test_chronicle_meta_from_texts_parses_the_bundle():
-    from routers.simulation import _chronicle_meta_from_texts
-    meta = _chronicle_meta_from_texts(
+    from proposal_flows import chronicle_meta_from_texts
+    meta = chronicle_meta_from_texts(
         {"0004-the-gate.md": "# Week 4 — The Gate\n\nProse.\n"})
     assert meta == {"week": 4, "title": "The Gate",
                     "file": "simulation/chronicle/0004-the-gate.md"}
-    assert _chronicle_meta_from_texts({}) is None
+    assert chronicle_meta_from_texts({}) is None
 
 
 def test_accept_after_restart_is_still_idempotent(

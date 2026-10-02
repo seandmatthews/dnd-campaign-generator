@@ -122,51 +122,52 @@ def create(name: str, *, base_week, proposed_week, base_revisions: dict,
     for k, v in (manifest_extra or {}).items():
         manifest[k] = v
     for fname, text in sorted((extra_artifacts or {}).items()):
-        (bdir / "artifacts" / f"{fname}.yaml").write_text(
-            text, encoding="utf-8")
+        spine.write_text_atomic(bdir / "artifacts" / f"{fname}.yaml", text)
         manifest["artifacts"][fname] = f"artifacts/{fname}.yaml"
     state_text = artifacts.get("state") or ""
-    (bdir / "artifacts" / "state.yaml").write_text(state_text,
-                                                   encoding="utf-8")
+    spine.write_text_atomic(bdir / "artifacts" / "state.yaml", state_text)
     manifest["artifacts"]["state"] = "artifacts/state.yaml"
     chronicles = artifacts.get("chronicles") or {}
     for fn in sorted(chronicles):
-        (bdir / "artifacts" / "chronicle" / fn).write_text(
-            chronicles[fn], encoding="utf-8")
+        spine.write_text_atomic(bdir / "artifacts" / "chronicle" / fn,
+                                chronicles[fn])
         manifest["artifacts"].setdefault("chronicles", {})[fn] = \
             f"artifacts/chronicle/{fn}"
     entries = artifacts.get("entries") or []
-    (bdir / "artifacts" / "timeline-entries.yaml").write_text(
-        spine.dump_yaml(entries), encoding="utf-8")
+    spine.write_text_atomic(bdir / "artifacts" / "timeline-entries.yaml",
+                            spine.dump_yaml(entries))
     manifest["artifacts"]["timeline_entries"] = \
         "artifacts/timeline-entries.yaml"
     updates = artifacts.get("updates") or []
-    (bdir / "artifacts" / "goal-updates.yaml").write_text(
-        spine.dump_yaml(updates), encoding="utf-8")
+    spine.write_text_atomic(bdir / "artifacts" / "goal-updates.yaml",
+                            spine.dump_yaml(updates))
     manifest["artifacts"]["goal_updates"] = "artifacts/goal-updates.yaml"
     findings = artifacts.get("findings") or []
-    (bdir / "artifacts" / "findings.yaml").write_text(
-        spine.dump_yaml(findings), encoding="utf-8")
+    spine.write_text_atomic(bdir / "artifacts" / "findings.yaml",
+                            spine.dump_yaml(findings))
     manifest["artifacts"]["findings"] = "artifacts/findings.yaml"
     changes = artifacts.get("changes") or []
-    (bdir / "artifacts" / "project-changes.yaml").write_text(
-        spine.dump_yaml(changes), encoding="utf-8")
+    spine.write_text_atomic(bdir / "artifacts" / "project-changes.yaml",
+                            spine.dump_yaml(changes))
     manifest["artifacts"]["changes"] = "artifacts/project-changes.yaml"
     replay_text = artifacts.get("replay")
     if replay_text:
-        (bdir / "artifacts" / "replay.yaml").write_text(
-            replay_text, encoding="utf-8")
+        spine.write_text_atomic(bdir / "artifacts" / "replay.yaml",
+                                replay_text)
         manifest["artifacts"]["replay"] = "artifacts/replay.yaml"
     diff = diff_states(before_state,
                        yaml.safe_load(state_text) or {},
                        entries)
     if diff_extra:
         diff.update(diff_extra)
-    (bdir / "artifacts" / "diff.json").write_text(
-        json.dumps(diff, indent=2, ensure_ascii=False), encoding="utf-8")
+    spine.write_text_atomic(
+        bdir / "artifacts" / "diff.json",
+        json.dumps(diff, indent=2, ensure_ascii=False))
     manifest["artifacts"]["diff"] = "artifacts/diff.json"
-    (bdir / "proposal.yaml").write_text(spine.dump_yaml(manifest),
-                                        encoding="utf-8")
+    # manifest LAST and atomically: it is the reader's entry point, so a
+    # crash mid-create can only leave an unlisted bundle (manifest missing
+    # or stale), never a half-valid one
+    spine.write_text_atomic(bdir / "proposal.yaml", spine.dump_yaml(manifest))
     return pid
 
 

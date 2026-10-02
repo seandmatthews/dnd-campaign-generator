@@ -38,6 +38,7 @@ import contextlib
 import copy
 import datetime
 import hashlib
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -52,6 +53,8 @@ import yaml
 SCHEMA_VERSION = 1
 DECISION_SCHEMA = 1
 
+_log = logging.getLogger(__name__)
+
 # Extraction limits (implementation defaults, not billing estimates).
 NOTES_MAX_CHARS = 30_000
 SUGGESTIONS_MAX = 30
@@ -59,9 +62,11 @@ EXTRACT_ATTEMPTS = 2
 
 KINDS = ("history_event", "resource_change", "field_change",
          "knowledge_fact", "party_disclosure")
-RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
-RESOURCE_LEVELS = ("none", "low", "medium", "high")
-FIELD_KEYS = ("goal", "kind", "secret", "species")
+# the engine vocabulary has ONE studio copy: spine.py (parity-tested against
+# the engine's own declarations in tests/test_engine_parity.py)
+RESOURCE_KEYS = spine.RESOURCE_KEYS
+RESOURCE_LEVELS = spine.RESOURCE_LEVELS
+FIELD_KEYS = spine.FIELD_KEYS
 VISIBILITIES = ("dm_only", "public")
 
 _ID_RE = re.compile(r"^(session|draft|suggestion)-[0-9a-f]{8}$")
@@ -202,12 +207,37 @@ def create(name: str, *, title: str, notes: str, event_week: int | None = None,
 
 
 def _save_notes_revision(sdir: Path, doc: dict, notes: str) -> dict:
-    """Append one immutable notes file; never rewrites an existing one."""
-    n = len(doc.get("notes") or []) + 1
-    rel = _notes_filename(n)
-    target = sdir / Path(*rel.split("/"))
-    if target.exists():
-        raise SessionConflict(f"notes revision {rel} already exists")
+    """Append one immutable notes file; never rewrites an existing one.
+    A file left behind by a crash AFTER the write but BEFORE the session.yaml
+    save (an unindexed orphan) is ADOPTED — indexed as-is with recovered:
+    true, so the DM sees the material and it is never overwritten — instead
+    of raising the same conflict on every later append forever. A retry that
+    carries byte-identical text to the orphan lands on it (idempotent)."""
+    notes_list = doc.setdefault("notes", [])
+    recorded = {e.get("file") for e in notes_list}
+    n = len(notes_list) + 1
+    while True:
+        rel = _notes_filename(n)
+        target = sdir / Path(*rel.split("/"))
+        if not target.exists():
+            break
+        if rel in recorded:
+            raise SessionConflict(f"notes revision {rel} already exists")
+        try:
+            orphan = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            raise SessionError(
+                f"notes revision {rel} is an unindexed leftover that cannot "
+                f"be read ({e}) — move it out of the notes/ folder by hand")
+        entry = {"file": rel, "revision": publication.file_revision(target),
+                 "created": _now(), "chars": len(orphan), "recovered": True}
+        if notes is not None and orphan == notes:
+            # this exact text was already written before the crash: the
+            # retry lands on it instead of duplicating the revision
+            notes_list.append(entry)
+            return entry
+        notes_list.append(entry)
+        n += 1
     target.parent.mkdir(parents=True, exist_ok=True)
     spine.write_text_atomic(target, notes)
     # revision hashes the EXACT bytes on disk: spine's atomic write is
@@ -215,7 +245,7 @@ def _save_notes_revision(sdir: Path, doc: dict, notes: str) -> dict:
     # staleness check.
     entry = {"file": rel, "revision": publication.file_revision(target),
              "created": _now(), "chars": len(notes)}
-    doc.setdefault("notes", []).append(entry)
+    notes_list.append(entry)
     return entry
 
 
@@ -359,7 +389,10 @@ def update_draft(name: str, session_id: str, draft_id: str, *, suggestions: list
                  expected_revision: int) -> dict:
     """The no-LLM editor: replace the draft's suggestions (edited fields,
     selections, confirmations) after an optimistic-revision check.
-    Suggestion IDS are preserved: an edit never re-mints identity.
+    Existing suggestion IDS are preserved: an edit never re-mints identity.
+    A card WITHOUT an id is new material authored in the editor — it gets a
+    freshly minted id here; an UNKNOWN id is still refused (a stale or
+    foreign card must never silently re-enter the draft).
     Caller holds the campaign lock."""
     draft = load_draft(name, session_id, draft_id)
     if draft.get("revision") != expected_revision:
@@ -368,24 +401,87 @@ def update_draft(name: str, session_id: str, draft_id: str, *, suggestions: list
             "extraction finished?) — reload and reapply your edits; nothing "
             "was written")
     by_id = {s.get("id"): s for s in draft.get("suggestions") or []}
+    taken = set(by_id)
     incoming = []
     for s in suggestions or []:
         if not isinstance(s, dict):
             raise SessionError("a suggestion is not a mapping")
         sid_ = s.get("id")
-        if sid_ not in by_id:
+        if sid_ in by_id:
+            merged = dict(by_id[sid_])
+            merged.update(copy.deepcopy(s))
+            # status/proposal bookkeeping is server-owned: an editor cannot
+            # wave an unaccepted suggestion through
+            merged["status"] = by_id[sid_].get("status") or "open"
+            merged["proposal"] = by_id[sid_].get("proposal")
+            merged["accepted"] = by_id[sid_].get("accepted")
+        elif sid_ in (None, ""):
+            merged = copy.deepcopy(s)
+            fresh = new_suggestion_id()
+            while fresh in taken:
+                fresh = new_suggestion_id()
+            merged["id"] = fresh
+            taken.add(fresh)
+            merged.setdefault("selected", False)
+            merged["status"] = "open"
+            merged.pop("proposal", None)
+            merged.pop("accepted", None)
+        else:
             raise SessionError(
                 f"suggestion {sid_!r} is not part of this draft — reload "
-                "the draft; new suggestions go through a new draft")
-        merged = dict(by_id[sid_])
-        merged.update(copy.deepcopy(s))
-        # status/proposal bookkeeping is server-owned: an editor cannot
-        # wave an unaccepted suggestion through
-        merged["status"] = by_id[sid_].get("status") or "open"
-        merged["proposal"] = by_id[sid_].get("proposal")
-        merged["accepted"] = by_id[sid_].get("accepted")
+                "the draft; new suggestions go in without an id or "
+                "through POST .../suggestions")
         incoming.append(merged)
     draft["suggestions"] = incoming
+    draft["revision"] = int(draft.get("revision") or 0) + 1
+    validate_draft(name, draft)
+    _save_yaml(_draft_path(name, session_id, draft_id), draft)
+    return draft
+
+
+def add_suggestions(name: str, session_id: str, suggestions: list,
+                    draft_id: str | None = None,
+                    expected_revision: int | None = None) -> dict:
+    """The no-LLM authoring entry point the extraction flow had to itself
+    until now: append NEW suggestions to a draft — the latest when
+    draft_id is None, or the session's FIRST (manual) draft when it has
+    none — so the documented no-LLM workflow (import notes, draft by
+    hand, prepare, accept) exists end to end. Ids are minted HERE for
+    id-less cards; an id that already exists in the draft is refused (edit
+    it, do not re-add it). Caller holds the campaign lock."""
+    doc = load(name, session_id)
+    if draft_id is None:
+        drafts = doc.get("drafts") or []
+        draft_id = drafts[-1] if drafts else None
+    if draft_id is None:
+        return save_draft(name, session_id, origin="manual",
+                          suggestions=suggestions)
+    draft = load_draft(name, session_id, draft_id)
+    if expected_revision is not None \
+            and draft.get("revision") != expected_revision:
+        raise SessionConflict(
+            "this draft changed since you opened it — reload and add "
+            "again; nothing was written")
+    taken = {s.get("id") for s in draft.get("suggestions") or []}
+    for s in suggestions or []:
+        if not isinstance(s, dict):
+            raise SessionError("a suggestion is not a mapping")
+        s = dict(s)
+        sid_ = s.get("id")
+        if sid_:
+            if sid_ in taken:
+                raise SessionError(
+                    f"suggestion {sid_!r} already exists in this draft — "
+                    "edit the existing card instead of re-adding it")
+        else:
+            sid_ = new_suggestion_id()
+            while sid_ in taken:
+                sid_ = new_suggestion_id()
+            s["id"] = sid_
+        taken.add(sid_)
+        s.setdefault("selected", False)
+        s.setdefault("status", "open")
+        draft["suggestions"].append(s)
     draft["revision"] = int(draft.get("revision") or 0) + 1
     validate_draft(name, draft)
     _save_yaml(_draft_path(name, session_id, draft_id), draft)
@@ -420,6 +516,15 @@ def validate_draft(name: str, draft: dict) -> list:
                                                notes_cache, notes_rel,
                                                origin)
     return draft
+
+
+def _confirm_flag(s: dict, key: str) -> bool:
+    """One confirmation flag with STRICT semantics: the confirmed value
+    must be a mapping and the flag exactly true. A malformed body ("yes",
+    1, "on") is never an approval — it surfaces as the ordinary
+    confirmation blocker below, not as a 500."""
+    confirmed = s.get("confirmed")
+    return isinstance(confirmed, dict) and confirmed.get(key) is True
 
 
 def _validate_suggestion(s: dict, factions: dict, place_ids: set,
@@ -472,7 +577,7 @@ def _validate_suggestion(s: dict, factions: dict, place_ids: set,
                             f"(use one of {', '.join(RESOURCE_LEVELS)})")
         if not str(s.get("reason") or "").strip():
             errs.append("missing reason (why did this happen?)")
-        if not (s.get("confirmed") or {}).get("resource_grade"):
+        if not _confirm_flag(s, "resource_grade"):
             errs.append("CONFIRM: the exact resource grade needs your "
                         "explicit confirmation")
     elif kind == "field_change":
@@ -503,8 +608,7 @@ def _validate_suggestion(s: dict, factions: dict, place_ids: set,
         else:
             errs.append("visibility must be 'dm_only', 'public', or a list "
                         "of faction ids")
-        if vis != "dm_only" and \
-                not s.get("confirmed", {}).get("knowledge_visibility"):
+        if vis != "dm_only" and not _confirm_flag(s, "knowledge_visibility"):
             errs.append("CONFIRM: a visibility beyond dm_only needs your "
                         "explicit confirmation")
         sup = s.get("supersedes_fact_id")
@@ -584,7 +688,12 @@ def _quote_in_lines(quote: str, lines: list) -> bool:
 def _selected_open(draft: dict, selected_ids: list) -> list:
     by_id = {s.get("id"): s for s in draft.get("suggestions") or []}
     out = []
+    seen: set = set()
     for sid_ in selected_ids:
+        if sid_ in seen:
+            continue  # a repeated id is one selection, never two records —
+            # duplicates would mint a second knowledge fact per occurrence
+        seen.add(sid_)
         s = by_id.get(sid_)
         if s is None:
             raise SessionError(f"no such suggestion in this draft: {sid_}")
@@ -681,19 +790,43 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                 "this session has no draft — add suggestions manually or "
                 "run extraction first")
         draft_id = drafts[-1]
-    draft = load_draft(name, session_id, draft_id)
-    if expected_draft_revision is not None \
-            and draft.get("revision") != expected_draft_revision:
-        raise SessionConflict(
-            "this draft changed since you opened it — reload, reselect, "
-            "and prepare again; nothing was staged")
-    selected = _selected_open(draft, list(selected_ids or []))
-    if not selected:
-        raise SessionError(
-            "nothing selected — choose at least one suggestion to prepare")
-    _check_blockers(selected)
-    _check_conflicts(selected)
-    _check_dependencies(draft, selected)
+
+    # capture the exact base UNDER the lock — the draft included, so the
+    # selection and its validations describe one consistent snapshot
+    with _locked(name, "preparing the session changes"):
+        draft = load_draft(name, session_id, draft_id)
+        if expected_draft_revision is not None \
+                and draft.get("revision") != expected_draft_revision:
+            raise SessionConflict(
+                "this draft changed since you opened it — reload, reselect, "
+                "and prepare again; nothing was staged")
+        selected = _selected_open(draft, list(selected_ids or []))
+        if not selected:
+            raise SessionError(
+                "nothing selected — choose at least one suggestion to "
+                "prepare")
+        _check_blockers(selected)
+        _check_conflicts(selected)
+        _check_dependencies(draft, selected)
+        pending = proposals.find_pending(name)
+        if pending:
+            raise SessionConflict(
+                f"a proposal is awaiting review ({pending.get('proposal_id')})"
+                " — accept or discard it first; you can return to it and "
+                "prepare this session afterwards")
+        state_text, state_rev = _snapshot(state_path)
+        base_revisions = {
+            "simulation/state.yaml": state_rev,
+            "simulation/knowledge.yaml": publication.file_revision(
+                d / "simulation" / "knowledge.yaml"),
+            "simulation/party-knowledge.yaml": publication.file_revision(
+                d / "simulation" / "party-knowledge.yaml"),
+        }
+        notes_rel = draft.get("notes_revision")
+        if notes_rel:
+            _, notes_rev = read_notes(name, session_id, notes_rel)
+            base_revisions[f"sessions/{session_id}/{notes_rel}"] = notes_rev
+        captured_draft_revision = draft.get("revision")
     session_doc = session  # event_week provenance
     event_week = session_doc.get("event_week")
 
@@ -713,7 +846,10 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                 "after": s.get("after"),
                 "reason": s.get("reason"),
                 "source": f"session:{session_id}",
-                "week": s.get("week") or event_week,
+                # an explicit week 0 is a real week: only a MISSING week
+                # falls back to the session's event week
+                "week": s.get("week") if s.get("week") is not None
+                else event_week,
             }
             if kind == "resource_change":
                 eff["resource"] = s.get("resource")
@@ -731,27 +867,6 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                 ev["place_ids"] = [str(p) for p in s.get("place_ids")]
             events.append(ev)
 
-    # capture the exact base under the lock: after-images are judged
-    # against these bytes at accept time
-    with _locked(name, "preparing the session changes"):
-        pending = proposals.find_pending(name)
-        if pending:
-            raise SessionConflict(
-                f"a proposal is awaiting review ({pending.get('proposal_id')})"
-                " — accept or discard it first; you can return to it and "
-                "prepare this session afterwards")
-        state_text, state_rev = _snapshot(state_path)
-        base_revisions = {
-            "simulation/state.yaml": state_rev,
-            "simulation/knowledge.yaml": publication.file_revision(
-                d / "simulation" / "knowledge.yaml"),
-            "simulation/party-knowledge.yaml": publication.file_revision(
-                d / "simulation" / "party-knowledge.yaml"),
-        }
-        notes_rel = draft.get("notes_revision")
-        if notes_rel:
-            _, notes_rev = read_notes(name, session_id, notes_rel)
-            base_revisions[f"sessions/{session_id}/{notes_rel}"] = notes_rev
     base_doc = yaml.safe_load(state_text) or {}
 
     import tempfile
@@ -793,17 +908,30 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
     # knowledge + disclosure after-images in memory (pure transforms; the
     # save rides the acceptance publication, never an independent write)
     knowledge_doc = knowledge.load(name)
+    facts_by_id = {f.get("id"): f for f in (knowledge_doc.get("facts") or [])}
     fact_records = []
     fact_suggestions = {}
     for s in selected:
         if s.get("kind") != "knowledge_fact":
             continue
         fact_suggestions[s["id"]] = len(fact_records)
+        # association semantics match the direct supersede path: a field
+        # the suggestion does not CARRY (key absent) inherits the old
+        # fact's value, so correcting a fact never silently strips it from
+        # its place pages or subject joins; an explicit [] clears
+        old = facts_by_id.get(s.get("supersedes_fact_id")) \
+            if s.get("supersedes_fact_id") else None
+        subjects = s.get("subjects")
+        if subjects is None and old is not None:
+            subjects = old.get("subjects")
+        place_ids = s.get("place_ids")
+        if place_ids is None and old is not None:
+            place_ids = old.get("place_ids")
         fact_records.append({
             "text": s.get("text"),
             "visibility": s.get("visibility") or "dm_only",
-            "subjects": s.get("subjects") or None,
-            "place_ids": s.get("place_ids") or None,
+            "subjects": subjects,
+            "place_ids": place_ids,
             "supersedes_fact_id": s.get("supersedes_fact_id") or None,
         })
     created_facts = {}
@@ -883,6 +1011,17 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
                 "simulation/state.yaml changed while the session changes "
                 "were being prepared — prepare again against the current "
                 "state; nothing was staged")
+        # the draft is re-read under this lock: an editor who saved while
+        # the engine ran must not have that revision clobbered by the
+        # prepared-status write (and the write itself rides the SAME lock
+        # hold as the staging, so an acceptance can never interleave)
+        live_draft = load_draft(name, session_id, draft_id)
+        if live_draft.get("revision") != captured_draft_revision:
+            raise SessionConflict(
+                "this draft changed while the session changes were being "
+                "prepared (another editor saved?) — nothing was staged; "
+                "reload, reselect, and prepare again")
+        draft = live_draft
         pid = proposals.new_id()
         decision = {
             "schema_version": DECISION_SCHEMA,
@@ -925,12 +1064,14 @@ def prepare(name: str, session_id: str, *, selected_ids: list,
             },
             diff_extra=diff_extra,
             proposal_id=pid)
-    # draft bookkeeping: the prepared subset shows as pending in the UI
-    for s in draft.get("suggestions") or []:
-        if s.get("id") in {x.get("id") for x in selected}:
-            s["status"] = "prepared"
-            s["proposal"] = pid
-    _save_yaml(_draft_path(name, session_id, draft_id), draft)
+        # draft bookkeeping INSIDE the staging lock: the prepared subset
+        # shows as pending in the UI, and the write cannot race an accept
+        # (which needs this same lock)
+        for s in draft.get("suggestions") or []:
+            if s.get("id") in {x.get("id") for x in selected}:
+                s["status"] = "prepared"
+                s["proposal"] = pid
+        _save_yaml(_draft_path(name, session_id, draft_id), draft)
     return {"proposal_id": pid, "status": "pending",
             "kind": "session_changes",
             "selected": [s.get("id") for s in selected],
@@ -953,17 +1094,15 @@ def _snapshot(path: Path) -> tuple:
 @contextlib.contextmanager
 def _locked(name: str, action: str):
     """Campaign lock for the service layer; fails fast with SessionConflict
-    (never a blocking HTTP request). NEVER nested — Lock is not reentrant."""
-    lock = spine.campaign_lock(name)
-    if not lock.acquire(timeout=1.0):
-        raise SessionConflict(
-            f"{action} cannot run right now: another job is "
-            "already modifying this campaign (a week run?) — retry "
-            "when it finishes. Nothing was changed.")
+    (never a blocking HTTP request). NEVER nested — Lock is not reentrant.
+    Delegates to spine.lock_nowait (the one fast-fail implementation; the
+    1s grace absorbs micro-holds) and maps CampaignBusy to the session
+    store's error type."""
     try:
-        yield
-    finally:
-        lock.release()
+        with spine.lock_nowait(name, action, timeout=1.0):
+            yield
+    except spine.CampaignBusy as e:
+        raise SessionConflict(str(e))
 
 
 # ------------------------------------------------------------- acceptance
@@ -978,9 +1117,11 @@ def decision_text(decision: dict) -> str:
 def on_accepted(name: str, manifest: dict, bundle: dict) -> None:
     """Post-publication bookkeeping for a session_changes accept: mark the
     selected suggestions accepted in their draft and record the proposal
-    in the session's decision list. Best-effort on purpose — the canon
-    publication and its receipt are the source of truth; this repairs on
-    idempotent replay."""
+    in the session's decision list. BEST-EFFORT without exception: the
+    canon publication and its receipt are the source of truth, so a
+    missing or damaged session record must never fail the accept response
+    (or its idempotent replays) — it logs and leaves a repairable
+    warning; replaying the accept repairs the bookkeeping."""
     session_id = manifest.get("session_id")
     draft_id = manifest.get("draft_id")
     pid = manifest.get("proposal_id")
@@ -989,25 +1130,36 @@ def on_accepted(name: str, manifest: dict, bundle: dict) -> None:
     selected = set(manifest.get("selected_suggestion_ids") or [])
     try:
         draft = load_draft(name, session_id, draft_id)
-    except SessionError:
+    except Exception as e:  # noqa: BLE001 — advisory, never the accept's answer
+        _log.warning("accept of %s: draft %s unreadable (%s) — draft "
+                     "bookkeeping skipped; replaying the accept repairs it",
+                     pid, draft_id, e)
         return
-    changed = False
-    for s in draft.get("suggestions") or []:
-        if s.get("id") in selected and s.get("status") != "accepted":
-            s["status"] = "accepted"
-            s["accepted"] = _now()
-            changed = True
-    if changed:
-        _save_yaml(_draft_path(name, session_id, draft_id), draft)
-    session = load(name, session_id)
-    if pid not in (session.get("decisions") or []):
-        session.setdefault("decisions", []).append(pid)
-        _save_yaml(_session_dir(name, session_id) / "session.yaml", session)
+    try:
+        changed = False
+        for s in draft.get("suggestions") or []:
+            if s.get("id") in selected and s.get("status") != "accepted":
+                s["status"] = "accepted"
+                s["accepted"] = _now()
+                changed = True
+        if changed:
+            _save_yaml(_draft_path(name, session_id, draft_id), draft)
+        session = load(name, session_id)
+        if pid not in (session.get("decisions") or []):
+            session.setdefault("decisions", []).append(pid)
+            _save_yaml(_session_dir(name, session_id) / "session.yaml",
+                       session)
+    except Exception as e:  # noqa: BLE001 — see above
+        _log.warning("accept of %s: session bookkeeping failed (%s) — "
+                     "canon and receipt are fine; replaying the accept "
+                     "repairs it", pid, e)
 
 
 def on_discarded(name: str, manifest: dict) -> None:
     """A discarded session_changes proposal reopens its prepared
-    suggestions so they can be prepared again against a new base."""
+    suggestions so they can be prepared again against a new base.
+    Best-effort like on_accepted: the discard itself (the bundle status
+    flip) is already done when this runs."""
     session_id = manifest.get("session_id")
     draft_id = manifest.get("draft_id")
     pid = manifest.get("proposal_id")
@@ -1015,16 +1167,17 @@ def on_discarded(name: str, manifest: dict) -> None:
         return
     try:
         draft = load_draft(name, session_id, draft_id)
-    except SessionError:
-        return
-    changed = False
-    for s in draft.get("suggestions") or []:
-        if s.get("status") == "prepared" and s.get("proposal") == pid:
-            s["status"] = "open"
-            s.pop("proposal", None)
-            changed = True
-    if changed:
-        _save_yaml(_draft_path(name, session_id, draft_id), draft)
+        changed = False
+        for s in draft.get("suggestions") or []:
+            if s.get("status") == "prepared" and s.get("proposal") == pid:
+                s["status"] = "open"
+                s.pop("proposal", None)
+                changed = True
+        if changed:
+            _save_yaml(_draft_path(name, session_id, draft_id), draft)
+    except Exception as e:  # noqa: BLE001 — advisory, never the discard's answer
+        _log.warning("discard of %s: draft %s could not be reopened (%s)",
+                     pid, draft_id, e)
 
 
 _PROPOSAL_ID_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
@@ -1357,8 +1510,10 @@ def raw_to_suggestions(name: str, raw: dict, state: dict,
             s["reason"] = str(r.get("reason") or "").strip()
         elif kind == "knowledge_fact":
             s["text"] = str(r.get("text") or "").strip()
-            s["subjects"] = [str(x) for x in (r.get("subjects") or [])
-                             if str(x).strip()]
+            subjects = [str(x) for x in (r.get("subjects") or [])
+                        if str(x).strip()]
+            if subjects:
+                s["subjects"] = subjects  # omitted = inherit on supersede
             s["visibility"] = "dm_only"
             pids = []
             for p in r.get("places") or []:
@@ -1367,7 +1522,8 @@ def raw_to_suggestions(name: str, raw: dict, state: dict,
                     s["findings"].append(f"place {fp}")
                 elif pid:
                     pids.append(pid)
-            s["place_ids"] = pids
+            if pids:
+                s["place_ids"] = pids  # omitted = inherit on supersede
         elif kind == "party_disclosure":
             # matched against existing approved facts AND new facts this
             # same extraction proposes, by normalized text — the model

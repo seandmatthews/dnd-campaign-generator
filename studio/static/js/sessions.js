@@ -53,9 +53,9 @@
 
     let head = '<div class="ssn-card-head">' +
       '<label class="ssn-select"><input type="checkbox" class="ssn-check" ' +
-      'data-id="' + S.esc(sug.id) + '" ' +
+      'data-id="' + S.esc(sug.id || '') + '" ' +
       ((sug.selected && !accepted) ? 'checked' : '') +
-      (accepted ? ' disabled' : '') + '> <code>' + S.esc(sug.id) + '</code></label>' +
+      (accepted ? ' disabled' : '') + '> <code>' + S.esc(sug.id || 'new') + '</code></label>' +
       kindPill(sug.kind) +
       (accepted ? pill('accepted', 'pill-vis-public') : '') +
       (prepared ? pill('in proposal', 'pill-vis-factions') : '') +
@@ -166,6 +166,37 @@
     return out + '</select>';
   }
 
+  /* ---------- manual drafting (the no-LLM path) ---------- */
+
+  function blankSuggestion(kind) {
+    // a fresh card authored by hand: no id yet (the server mints one at
+    // save), blockers show until the fields are filled
+    const base = { id: null, kind: kind, selected: false, status: 'open',
+      confirmed: {}, findings: [], validation: [] };
+    if (kind === 'history_event') { base.actor = ''; base.text = ''; base.week = null; }
+    if (kind === 'resource_change') {
+      base.faction_id = ''; base.resource = ''; base.after = ''; base.reason = '';
+    }
+    if (kind === 'field_change') {
+      base.faction_id = ''; base.field = ''; base.after = ''; base.reason = '';
+    }
+    if (kind === 'knowledge_fact') { base.text = ''; base.visibility = 'dm_only'; }
+    if (kind === 'party_disclosure') { base.fact_id = null; base.fact_suggestion = null; }
+    return base;
+  }
+
+  function kindPicker(cls, btnLabel, btnCls) {
+    let out = '<div class="inline-form ssn-authoring">' +
+      '<select class="input ' + cls + '">';
+    Object.keys(KIND_LABEL).forEach((k) => {
+      out += '<option value="' + S.esc(k) + '">' + S.esc(KIND_LABEL[k]) + '</option>';
+    });
+    out += '</select>' +
+      '<button type="button" class="btn ' + (btnCls || '') + ' ' + cls + '-btn">' +
+      S.esc(btnLabel) + '</button></div>';
+    return out;
+  }
+
   /* ---------- one session's detail view ---------- */
 
   async function sessionDetail(root, sid, sim) {
@@ -212,9 +243,15 @@
           '<section class="panel ssn-review"><h4 class="panel-title">Suggested changes</h4>' +
             '<div class="ssn-extract-failure"></div>' +
             '<div class="ssn-cards">' +
-              (cards || '<p class="muted">No suggestions yet — extract from the notes ' +
-                '(costs one metered LLM call) or wait for the extractor.</p>') +
+              (cards ||
+                (draft
+                  ? '<p class="muted">No suggestions yet — extract from the notes ' +
+                    '(costs one metered LLM call) or add cards by hand below.</p>'
+                  : '<p class="muted">No draft yet — extract from the notes (one ' +
+                    'metered LLM call) or start a manual draft:</p>' +
+                    kindPicker('ssn-new-kind', 'Start a manual draft'))) +
             '</div>' +
+            (draft ? kindPicker('ssn-add-kind', 'Add suggestion') : '') +
             '<div class="inline-form proposal-actions">' +
               '<button type="button" class="btn ssn-extract"' + (latest ? '' : ' disabled') +
               '>Extract changes (metered LLM call)</button>' +
@@ -238,6 +275,35 @@
     if (lastFailure && failBox) failBox.appendChild(S.errorPanel(lastFailure));
 
     panel.querySelector('.ssn-back').addEventListener('click', () => S.showTab('sessions'));
+
+    // manual authoring: "Add suggestion" appends a blank card to the
+    // existing draft (saved with the next save/prepare); with no draft at
+    // all, "Start a manual draft" creates the session's first one
+    const addSel = panel.querySelector('.ssn-add-kind');
+    if (addSel) {
+      panel.querySelector('.ssn-add-kind-btn').addEventListener('click', () => {
+        const sug = blankSuggestion(addSel.value);
+        const cardEl = S.el(card(sug, draft, sim));
+        cardEl.__new = sug;
+        panel.querySelector('.ssn-cards').appendChild(cardEl);
+      });
+    }
+    const newSel = panel.querySelector('.ssn-new-kind');
+    if (newSel) {
+      panel.querySelector('.ssn-new-kind-btn').addEventListener('click', async () => {
+        try {
+          await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
+            '/drafts', { method: 'POST',
+            body: { suggestions: [blankSuggestion(newSel.value)] } });
+          S.toast('Manual draft started — fill in the card, then prepare.', 'ok');
+          const host = panel.parentElement;
+          host.innerHTML = '';
+          await sessionDetail(host, sid, sim);
+        } catch (err) {
+          errBox.textContent = (err && err.error) || 'Could not create the draft.';
+        }
+      });
+    }
 
     // append an immutable notes revision
     panel.querySelector('.ssn-append-btn').addEventListener('click', async () => {
@@ -269,9 +335,10 @@
         const r = await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
           '/extract', { method: 'POST', body: { confirm: true } });
         S.toast('Extracting — watch the job log on the Simulation tab.', 'ok');
-        const job = await S.pollJob(r.job_id);
+        // pollJob resolves with the job's RESULT itself (already unwrapped)
+        const result = await S.pollJob(r.job_id);
         extractFailures.delete(failKey);
-        S.toast('Extraction staged ' + (job.result.suggestions || 0) +
+        S.toast('Extraction staged ' + (result.suggestions || 0) +
           ' suggestion(s) — review the cards.', 'ok');
         S.showTab('sessions');
       } catch (err) {
@@ -281,16 +348,19 @@
       }
     });
 
-    // save edits + selections as one draft revision
-    async function saveDraft(extraSuggestions) {
+    // save edits + selections (and any NEW cards) as one draft revision
+    async function saveDraft() {
       if (!draft) throw { error: 'no draft to save' };
       const sugs = [];
       panel.querySelectorAll('.ssn-card').forEach((cardEl) => {
         const check = cardEl.querySelector('.ssn-check');
         const id = check.getAttribute('data-id');
-        const orig = (draft.suggestions || []).find((x) => x.id === id);
-        if (!orig) return;
-        const upd = JSON.parse(JSON.stringify(orig));
+        const orig = id ? (draft.suggestions || []).find((x) => x.id === id)
+          : null;
+        if (id && !orig) return;
+        // a card without an id is new material: the server mints the id
+        const upd = JSON.parse(JSON.stringify(orig || cardEl.__new || {}));
+        upd.id = id || null;
         upd.selected = check.checked;
         cardEl.querySelectorAll('.ssn-edit').forEach((inp) => {
           const f = inp.getAttribute('data-field');
@@ -317,23 +387,29 @@
       });
     }
 
-    // selecting, confirming, editing: saved to the draft before prepare
+    // prepare: save the editor state first, then stage with the revision
+    // saveDraft returned — a concurrent edit between the two calls is a
+    // 409, never a silently staged older selection
     panel.querySelector('.ssn-prepare').addEventListener('click', async () => {
       const checked = Array.from(panel.querySelectorAll('.ssn-check:checked'))
-        .map((c) => c.getAttribute('data-id'));
+        .map((c) => c.getAttribute('data-id')).filter(Boolean);
       if (!checked.length) {
         errBox.textContent = 'Select at least one suggestion first.';
         return;
       }
       try {
-        await saveDraft();
+        const saved = await saveDraft();
         const r = await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
           '/prepare', {
           method: 'POST',
-          body: { selected: checked, draft_id: draft.draft_id }
+          body: {
+            selected: checked,
+            draft_id: saved.draft_id || draft.draft_id,
+            expected_draft_revision: saved.revision
+          }
         });
-        S.toast('Staged proposal ' + r.proposal_id + ' — review and accept it ' +
-          'on the Simulation tab.', 'ok');
+        S.toast('Staged proposal ' + (r.proposal_id || '—') +
+          ' — review and accept it on the Simulation tab.', 'ok');
         S.showTab('sim');
       } catch (err) {
         errBox.textContent = (err && err.error) || 'Prepare failed.';
@@ -407,7 +483,8 @@
         const r = await S.api(camp() + 'sessions', {
           method: 'POST', body: { title: title, notes: notes }
         });
-        S.toast('Session saved (' + r.session_id + ') — open it to review changes.', 'ok');
+        S.toast('Session saved' + (r.session_id ? ' (' + r.session_id + ')' : '') +
+          ' — open it to review changes.', 'ok');
         S.showTab('sessions');
       } catch (err) {
         errBox.textContent = (err && err.error) || 'Could not save the session.';

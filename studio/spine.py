@@ -11,8 +11,11 @@ via campaigns_root(), never at import time.
 """
 
 import re
+import contextlib
 import datetime
+import logging
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -63,24 +66,179 @@ class CampaignFileError(CampaignError):
 
 # One mutation at a time per campaign: long jobs (week, world/city/site
 # generation) hold the lock for their whole run, review approve/delete take
-# it blocking for the length of their file rewrite. The registry is
-# in-process (the server is the only writer; canon lives on disk, D5).
+# it blocking for the length of their file rewrite. TWO layers: an
+# in-process threading.Lock (threads of the server) and a cross-process
+# advisory lock file under campaigns/.locks/ — the server and a separately
+# launched CLI (session_notes.py, places.py) are separate processes and
+# used to each believe they held the exclusive mutation.
 _CAMPAIGN_LOCKS: dict = {}
 _CAMPAIGN_LOCKS_GUARD = threading.Lock()
 
+try:
+    import fcntl as _fcntl
+    _FILE_LOCK = "posix"
+except ImportError:  # not POSIX
+    try:
+        import msvcrt as _msvcrt
+        _FILE_LOCK = "windows"
+    except ImportError:  # exotic platform: process-local exclusion only
+        _FILE_LOCK = "none"
 
-def campaign_lock(name: str) -> threading.Lock:
+_log = logging.getLogger(__name__)
+
+
+def _locks_root() -> Path:
+    """The shared lock-file directory: OUTSIDE every campaign dir (a lock
+    file inside campaigns/<name>/ would dirty the per-campaign git history
+    the snapshot trail relies on)."""
+    return campaigns_root() / ".locks"
+
+
+class CampaignLock:
+    """One campaign's mutation lock: threading.Lock + a cross-process
+    byte-range lock file. Same surface as threading.Lock had here:
+    `acquire(blocking=..., timeout=...)` -> bool, `release()`, and the
+    `with` form blocks. OS releases the file lock if a process dies, so a
+    killed CLI cannot wedge the server. NEVER nest acquisitions of the
+    same campaign's lock — a Lock is not reentrant, and a blocking
+    re-acquire deadlocks."""
+
+    def __init__(self, name: str):
+        self._name = str(name)
+        self._local = threading.Lock()
+        self._fh = None
+        self._no_file_lock = False
+
+    def _lock_file(self) -> Path:
+        # computed at ACQUIRE time: campaigns_root() is patched per test,
+        # and a path cached at first use would outlive its tmp root
+        return _locks_root() / (
+            re.sub(r"[^A-Za-z0-9._-]", "_", self._name) + ".lock")
+
+    def acquire(self, blocking: bool = True, timeout: float = -1.0) -> bool:
+        deadline = None
+        if blocking:
+            if not self._local.acquire(True, timeout):
+                return False
+            if timeout is not None and timeout >= 0:
+                deadline = time.monotonic() + timeout
+        else:
+            if not self._local.acquire(False):
+                return False
+        try:
+            if not self._acquire_file(blocking, deadline):
+                self._local.release()
+                return False
+        except BaseException:
+            self._local.release()
+            raise
+        return True
+
+    def _acquire_file(self, blocking: bool, deadline) -> bool:
+        if _FILE_LOCK == "none" or self._no_file_lock:
+            return True
+        lock_path = self._lock_file()
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            gitignore = lock_path.parent / ".gitignore"
+            if not gitignore.exists():
+                # lock files are runtime state: keep them out of the
+                # campaigns repo's git status
+                gitignore.write_text("*\n", encoding="utf-8")
+            fh = open(lock_path, "a+b")  # noqa: SIM115 — the handle is held
+            # for the lock's lifetime and closed by release()
+        except OSError as e:
+            # an unwritable locks root (read-only checkout?) must not block
+            # every mutation: degrade to process-local exclusion, loudly once
+            self._no_file_lock = True
+            _log.warning("campaign lock file %s unusable (%s) — falling "
+                         "back to process-local locking only", lock_path, e)
+            return True
+        while True:
+            fh = open(lock_path, "a+b")  # noqa: SIM115 — closed below on
+            # contention, or held for the lock's lifetime on success
+            try:
+                if _FILE_LOCK == "windows":
+                    fh.seek(0)
+                    _msvcrt.locking(fh.fileno(), _msvcrt.LK_NBLCK, 1)
+                else:
+                    _fcntl.flock(fh.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+                self._fh = fh
+                return True
+            except OSError:
+                fh.close()
+                if not blocking or (deadline is not None
+                                    and time.monotonic() >= deadline):
+                    return False
+                time.sleep(0.05)
+
+    def release(self) -> None:
+        try:
+            fh, self._fh = self._fh, None
+            if fh is not None:
+                try:
+                    if _FILE_LOCK == "windows":
+                        fh.seek(0)
+                        _msvcrt.locking(fh.fileno(), _msvcrt.LK_UNLCK, 1)
+                    else:
+                        _fcntl.flock(fh.fileno(), _fcntl.LOCK_UN)
+                finally:
+                    fh.close()
+        finally:
+            self._local.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def campaign_lock(name: str) -> CampaignLock:
     """The mutation lock for one campaign (created on first use).
 
-    A threading.Lock IS a context manager, so `with spine.campaign_lock(n):`
+    A CampaignLock IS a context manager, so `with spine.campaign_lock(n):`
     is the blocking form — used by review approve/delete (short file
-    rewrites; they wait for a running job to finish). Long jobs acquire at
-    submit time with `acquire(blocking=False)` and release in the job's
-    finally (routers/common.submit_campaign_job), answering 409 while held.
-    NEVER nest acquisitions of the same campaign's lock — a Lock is not
-    reentrant, and a blocking re-acquire deadlocks."""
+    rewrites; they wait for a running job to finish) and the CLIs. Long jobs
+    acquire at submit time with `acquire(blocking=False)` and release in the
+    job's finally (routers/common.submit_campaign_job), answering 409 while
+    held. The lock is honored across processes (server vs CLI) through the
+    lock file; NEVER nest acquisitions of the same campaign's lock."""
     with _CAMPAIGN_LOCKS_GUARD:
-        return _CAMPAIGN_LOCKS.setdefault(name, threading.Lock())
+        return _CAMPAIGN_LOCKS.setdefault(name, CampaignLock(name))
+
+
+class CampaignBusy(CampaignError):
+    """Another writer holds the campaign lock — retry when it finishes."""
+
+
+def lock_nowait(name: str, action: str, timeout: float = 0.0):
+    """The ONE fast-fail interactive-writer acquire: the campaign lock,
+    never a blocking wait (a week job can hold the lock for half an hour),
+    raising CampaignBusy carrying the standard retry message. timeout=0 is
+    the instant fail the routes answer 409 with; the session store passes a
+    1s grace to absorb micro-holds. Sessions, the routers, and
+    proposal_flows each map CampaignBusy to their own error type with the
+    SAME words — one implementation of the dance, three one-line mappers."""
+
+    @contextlib.contextmanager
+    def cm():
+        lock = campaign_lock(name)
+        # threading semantics: blocking=False ignores timeout, so pick the
+        # form explicitly — instant check, or a bounded grace wait
+        ok = lock.acquire(True, timeout) if timeout > 0 \
+            else lock.acquire(False)
+        if not ok:
+            raise CampaignBusy(
+                f"{action} cannot run right now: another job is "
+                "already modifying this campaign (a week run?) — retry "
+                "when it finishes. Nothing was changed.")
+        try:
+            yield
+        finally:
+            lock.release()
+    return cm()
 
 
 def campaigns_root() -> Path:
@@ -95,18 +253,27 @@ def slugify(name: str) -> str:
 def _safe_load(path: Path):
     if not path.exists():
         return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f)
-    except OSError:
-        # a concurrent writer holds the file (Windows shares) or it vanished;
-        # loaders degrade to "empty" rather than 500ing a read route
-        return None
-    except (yaml.YAMLError, UnicodeDecodeError) as e:
-        first = str(e).splitlines()[0] if str(e) else type(e).__name__
-        raise CampaignFileError(
-            f"{path.name} does not parse ({first}) — a hand-edit slipped? "
-            f"Fix or delete the file, or restore it with git checkout -- {path}")
+    # A brief Windows sharing violation while a writer replaces the file
+    # (the write side already retries) is worth two reads — but a
+    # persistently unreadable file must NOT degrade to "empty": loaders
+    # would render a missing campaign instead of naming the problem.
+    last_err = None
+    for attempt in range(3):
+        try:
+            with open(path, encoding="utf-8") as f:
+                return yaml.safe_load(f)
+        except OSError as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+        except (yaml.YAMLError, UnicodeDecodeError) as e:
+            first = str(e).splitlines()[0] if str(e) else type(e).__name__
+            raise CampaignFileError(
+                f"{path.name} does not parse ({first}) — a hand-edit slipped? "
+                f"Fix or delete the file, or restore it with git checkout -- {path}")
+    raise CampaignFileError(
+        f"{path.name} cannot be read ({last_err}) — a concurrent writer "
+        "or a permissions problem; retrying the request may clear it")
 
 
 def read_yaml_dict(path: Path) -> dict | None:
@@ -138,11 +305,20 @@ def _replace_with_retry(tmp: Path, path: Path, attempts: int = 3) -> None:
 
 def write_text_atomic(path: Path, text: str) -> Path:
     """Write via tmp + os.replace so a crash or concurrent reader never sees
-    a half-written spine file. Same volume, so the replace is atomic."""
+    a half-written spine file. Same volume, so the replace is atomic; the
+    tmp name is UNIQUE (mkstemp) — a fixed `<name>.tmp` let two writers
+    under the same campaign lock clobber each other's partial write."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    _replace_with_retry(tmp, path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".",
+                                    suffix=".tmp")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        _replace_with_retry(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)  # no litter, destination untouched
+        raise
     return path
 
 
@@ -627,6 +803,80 @@ def state_clock_week(doc: dict):
     return ((doc.get("meta") or {}).get("clock") or {}).get("week")
 
 
+# ------------------------------------------------- engine vocabulary mirror
+#
+# The engine's resource ladder and set_field allowlist, mirrored here as
+# the studio's ONE copy (sessions.py and the simulation router import from
+# here; studio/tests/test_engine_parity.py asserts the mirror matches the
+# engine's own declarations). Never edit one side without the other.
+
+RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
+RESOURCE_LEVELS = ("none", "low", "medium", "high")
+FIELD_KEYS = ("goal", "kind", "secret", "species")
+
+
+def validate_faction_docs(factions: list) -> list[dict]:
+    """The state.yaml factions list from the create form: ids derived from
+    names (underscore slugs — tick.py's HOLDS log lines parse [a-z_]+),
+    resources filled to the canonical three with "low" defaults. Raises
+    CampaignError (the router maps it to 422) — the studio's only pre-flight
+    state-schema validator, so it lives with the schema, not the route."""
+    if not (2 <= len(factions) <= 5):
+        raise CampaignError(
+            f"a sandbox needs 2-5 factions that want things from each "
+            f"other (got {len(factions)})")
+    seen_ids: dict[str, str] = {}
+    out = []
+    for f in factions:
+        name = str(f.get("name") or "").strip()
+        goal = str(f.get("goal") or "").strip()
+        if not name:
+            raise CampaignError("every faction needs a name")
+        if not goal:
+            raise CampaignError(
+                f"faction '{name}' needs a goal — what it wants, in "
+                "one line (that want is what drives the week)")
+        fid = slugify(name).replace("-", "_")
+        if not fid:
+            raise CampaignError(
+                f"faction name '{name}' has no usable id characters")
+        if fid == "world":
+            raise CampaignError(
+                "faction id 'world' is reserved (world events are "
+                "scenery, not a faction)")
+        if fid in seen_ids:
+            raise CampaignError(
+                f"two factions collapse to the same id '{fid}' "
+                f"('{name}' and '{seen_ids[fid]}') — give them "
+                "distinct names")
+        seen_ids[fid] = name
+        resources = {}
+        for key, level in (f.get("resources") or {}).items():
+            if key not in RESOURCE_KEYS:
+                raise CampaignError(
+                    f"faction '{name}': unknown resource '{key}' "
+                    f"(use coin, muscle, legitimacy)")
+            level = str(level).lower().strip()
+            if level not in RESOURCE_LEVELS:
+                raise CampaignError(
+                    f"faction '{name}': resource '{key}' must be one "
+                    f"of {', '.join(RESOURCE_LEVELS)}")
+            resources[key] = level
+        for key in RESOURCE_KEYS:
+            resources.setdefault(key, "low")
+        out.append({
+            "id": fid,
+            "name": name,
+            "goal": goal,
+            "resources": resources,
+        })
+        if str(f.get("kind") or "").strip():
+            out[-1]["kind"] = str(f["kind"]).strip()
+        if str(f.get("place") or "").strip():
+            out[-1]["place"] = str(f["place"]).strip()
+    return out
+
+
 def write_state(name: str, doc: dict) -> Path:
     """Write simulation/state.yaml from a dict (the create-a-simulation
     flow). The caller validates content; this is the typed writer."""
@@ -635,12 +885,24 @@ def write_state(name: str, doc: dict) -> Path:
     return write_text_atomic(path, dump_yaml(doc))
 
 
+def place_id(name: str) -> str:
+    """A stable place id from its name — EXACTLY the engine's derivation
+    (store._place_id: word-slug, 80-char cap, "place" fallback), mirrored
+    here rather than imported because the studio drives the engine through
+    its CLI, never by importing across projects. The parity test in
+    studio/tests pins the two implementations together."""
+    slug = "-".join(re.findall(r"[a-z0-9]+", str(name).lower()))[:80] \
+        .rstrip("-")
+    return slug or "place"
+
+
 def state_places(state: dict) -> list:
-    """Every simulated place, normalized for display: the multi-place
-    `places` list when the state carries one, else the legacy single city
-    as a one-entry list. Ids are derived the same way the engine derives
-    them (slugify) when a place carries none, so faction.place references
-    line up on both sides of the seam."""
+    """Every simulated place, normalized for display — behaviorally
+    IDENTICAL to the engine's store.places_of (the parity test pins it):
+    the multi-place `places` list when the state carries one, else the
+    legacy single city as a one-entry list. Ids derive the engine's way
+    (place_id) so faction.place references line up on both sides of the
+    seam: same cap, same fallback, same forced id for the legacy city."""
     out = []
     raw = state.get("places") if isinstance(state, dict) else None
     if isinstance(raw, list) and raw:
@@ -648,14 +910,19 @@ def state_places(state: dict) -> list:
     else:
         city = state.get("city") if isinstance(state, dict) else None
         entries = [city] if isinstance(city, dict) else []
+    legacy = not (isinstance(raw, list) and raw)
     for p in entries:
         name = str(p.get("name") or "").strip()
         if not name:
             continue
         place = dict(p)
         place["name"] = name
-        place.setdefault("id", slugify(name))
-        place.setdefault("kind", "city")
+        if legacy:
+            place["id"] = place_id(name)  # the engine forces it for cities
+            place.setdefault("kind", "city")
+        else:
+            place.setdefault("id", place_id(name))
+            place.setdefault("kind", "place")
         out.append(place)
     return out
 

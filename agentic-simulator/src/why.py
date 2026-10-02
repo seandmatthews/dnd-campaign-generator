@@ -28,6 +28,8 @@ import pathlib
 import re
 import sys
 
+import yaml
+
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import events
 from store import STATE_FILE, faction_map, load_state, split_argv
@@ -132,8 +134,12 @@ def main(argv):
     state_path = values.get("--state")
     try:
         state = load_state(state_path)
-    except OSError as e:
+    except (OSError, yaml.YAMLError) as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    if not isinstance(state, dict):
+        print(f"error: {state_path or 'world/state.yaml'} is empty or not "
+              "a mapping", file=sys.stderr)
         return 1
     return why_cli(state, rest)
 

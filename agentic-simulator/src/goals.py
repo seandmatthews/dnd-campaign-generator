@@ -191,7 +191,7 @@ def main(argv):
     try:
         state = load_state(state_path)
         validate_state(state)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, yaml.YAMLError) as e:
         print(f"goals.py: {e}", file=sys.stderr)
         return 1
 

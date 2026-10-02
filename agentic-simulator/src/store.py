@@ -27,6 +27,10 @@ RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
 RESOURCE_LEVELS = ("none", "low", "medium", "high")
 LEVEL_INDEX = {g: i for i, g in enumerate(RESOURCE_LEVELS)}
 
+# Rumor fidelity grades in decay order — rumors.spread indexes into this
+# ladder, so a hand-invented grade must be refused, not decayed from.
+RUMOR_FIDELITY = ("eyewitness", "reliable", "hearsay", "dead")
+
 
 def split_argv(argv, *valued_flags):
     """Shared CLI parsing: (values, rest) — each flag in valued_flags
@@ -93,6 +97,7 @@ def places_of(state):
     city = state.get("city") if isinstance(state, dict) else None
     if isinstance(city, dict) and str(city.get("name") or "").strip():
         place = dict(city)
+        place["name"] = str(city.get("name") or "").strip()
         place["id"] = _place_id(place["name"])
         place.setdefault("kind", "city")
         return [place]
@@ -129,13 +134,30 @@ def place_words(state, include_districts=True):
 
 def validate_state(state):
     """The shape a week spends against, checked BEFORE any LLM call — each
-    gap here used to crash after the spend. The state file is hand-edited
-    by design, so refuse a partial edit naming the missing piece rather
-    than buying it with a week's provider spend. Raises ValueError."""
+    gap here used to crash after the spend, two of them after the canon
+    write. The state file is hand-edited by design, so refuse a partial
+    edit naming the missing piece rather than buying it with a week's
+    provider spend. Container existence AND element shape: a faction the
+    scheduler, views, and the chronicle summary direct-index (name, goal,
+    resources) must carry those keys; an explicitly-null optional
+    (disposition:, knows:) is refused too — `.get(key, default)` defaults
+    only when the key is ABSENT, so a hand-written null defeats every
+    downstream reader. Raises ValueError."""
     if not isinstance(state, dict):
         raise ValueError("state is not a mapping (empty or corrupt file?)")
     places = places_of(state)
     if not places:
+        raw_places = state.get("places")
+        if isinstance(raw_places, list) and raw_places:
+            # a nonempty list that normalizes to nothing is a MALFORMED
+            # list, not a missing one — naming the legacy city here would
+            # tell the author to add data they already have
+            raise ValueError(
+                f"places has {len(raw_places)} entr"
+                f"{'y' if len(raw_places) == 1 else 'ies'} but none is "
+                "usable: every entry must be a mapping with at least "
+                "{name: ...} — fix or empty the list (the legacy city "
+                "fallback only applies when `places` is absent)")
         raise ValueError(
             "no places: set places: [{name: ...}, ...] (a city, its wider "
             "world — anything factions belong to), or the legacy "
@@ -160,14 +182,87 @@ def validate_state(state):
     for f in factions:
         if not isinstance(f, dict) or not str(f.get("id") or "").strip():
             raise ValueError("every faction needs a non-empty id")
+        fid = str(f["id"])
+        if not str(f.get("name") or "").strip():
+            raise ValueError(f"faction '{fid}' needs a non-empty name — "
+                             "the scheduler and the inspect view read it")
+        if not str(f.get("goal") or "").strip():
+            raise ValueError(f"faction '{fid}' needs a non-empty goal — "
+                             "the chronicle's state summary reads it")
+        resources = f.get("resources")
+        if not isinstance(resources, dict):
+            raise ValueError(f"faction '{fid}' needs a resources mapping "
+                             f"(coin/muscle/legitimacy), not {resources!r}")
+        for k, v in resources.items():
+            if v not in RESOURCE_LEVELS:
+                raise ValueError(
+                    f"faction '{fid}' resource {k!r} is {v!r}, not one of "
+                    f"{', '.join(RESOURCE_LEVELS)} — the consequence rules "
+                    "index the ladder by grade")
+        if "disposition" in f and not isinstance(f["disposition"], dict):
+            raise ValueError(f"faction '{fid}' disposition must be a "
+                             f"mapping, not {f['disposition']!r} — a "
+                             "hand-written `disposition:` (null) defeats "
+                             "every .get() default that reads it; delete "
+                             "the key or give it faction_id: posture entries")
+        if "knows" in f and not isinstance(f["knows"], list):
+            raise ValueError(f"faction '{fid}' knows must be a list, not "
+                             f"{f['knows']!r} — delete the key or list the "
+                             "facts it knows")
         place = f.get("place")
         if place is not None and place not in seen_ids:
             raise ValueError(
-                f"faction '{f['id']}' names place '{place}', which is not "
+                f"faction '{fid}' names place '{place}', which is not "
                 f"one of: {', '.join(sorted(seen_ids))}")
-    if not isinstance(state.get("events"), list):
+    events = state.get("events")
+    if not isinstance(events, list):
         raise ValueError("events is missing or not a list — resolved weeks "
                          "append to it")
+    for i, ev in enumerate(events):
+        if not isinstance(ev, dict):
+            raise ValueError(f"event {i + 1} is not a mapping")
+        if not isinstance(ev.get("week"), int) or isinstance(ev.get("week"), bool):
+            raise ValueError(f"event {i + 1} needs an integer week, not "
+                             f"{ev.get('week')!r}")
+        if not str(ev.get("actor") or "").strip():
+            raise ValueError(f"event {i + 1} needs a non-empty actor — the "
+                             "rumor mill reads it (world events never spawn "
+                             "rumors but still carry the key)")
+        if not str(ev.get("text") or "").strip():
+            raise ValueError(f"event {i + 1} needs non-empty text")
+    rumors_list = state.get("rumors")
+    if rumors_list is not None:
+        if not isinstance(rumors_list, list):
+            raise ValueError(f"rumors must be a list, not {rumors_list!r}")
+        for i, r in enumerate(rumors_list):
+            if not isinstance(r, dict):
+                raise ValueError(f"rumor {i + 1} is not a mapping")
+            missing = [k for k in ("id", "claim", "fidelity")
+                       if not str(r.get(k) or "").strip()]
+            if missing:
+                raise ValueError(f"rumor {i + 1} is missing "
+                                 f"{', '.join(missing)}")
+            if r.get("fidelity") not in RUMOR_FIDELITY:
+                raise ValueError(
+                    f"rumor {i + 1} fidelity {r.get('fidelity')!r} is not "
+                    f"one of {', '.join(RUMOR_FIDELITY)}")
+            for k in ("heard_by", "transmissions"):
+                if not isinstance(r.get(k), list):
+                    raise ValueError(f"rumor {i + 1} needs {k} as a list, "
+                                     f"not {r.get(k)!r}")
+            if not isinstance(r.get("born_week"), int) \
+                    or isinstance(r.get("born_week"), bool):
+                raise ValueError(f"rumor {i + 1} needs an integer "
+                                 f"born_week, not {r.get('born_week')!r}")
+            for j, t in enumerate(r.get("transmissions")):
+                tmiss = [k for k in ("week", "from", "to",
+                                     "fidelity_before", "fidelity_after")
+                         if not str(t.get(k) or "").strip()]
+                if not isinstance(t, dict) or tmiss:
+                    raise ValueError(
+                        f"rumor {i + 1} transmission {j + 1} is missing "
+                        f"{', '.join(tmiss) if isinstance(t, dict) else 'its mapping shape'}"
+                        " — views.heard reads every field")
 
 
 def save_state(state, path=None):

@@ -23,26 +23,25 @@ Invalid candidates never become approvable bundles: an engine failure, a
 clock that did not advance exactly one week, a missing chronicle, or a run
 where every faction call failed are job errors, not proposals. A genuinely
 quiet scheduler-held week is valid.
+
+Layout: the accept/discard SERVICE and the staging helpers live in
+studio/proposal_flows.py (typed errors — the CLI reuses them without
+touching FastAPI); the engine-home machinery (copy-in, week flag, the
+week/forecast run flows, chronicle meta over the home's files) lives in
+studio/engines.py; week-entry derivation lives in studio/timeline.py; the
+create-form schema validation lives in spine.validate_faction_docs. This
+file is routes and request/response shapes only.
 """
 
-import contextlib
-import datetime
-import hashlib
 import json
-import logging
-import re
 from pathlib import Path
 
 import canon
 import engines
 import forecasts
-import links
-import llm_client
+import proposal_flows
 import proposals
-import publication
-import sessions
 import spine
-import timeline
 import yaml
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, StrictBool, field_validator
@@ -50,8 +49,6 @@ from pydantic import BaseModel, StrictBool, field_validator
 from routers.common import (
     campaign_lock_nowait,
     ensure_publishable_409,
-    finalize_publication,
-    publication_500,
     require_campaign,
     store_errors,
     strict_confirm,
@@ -59,44 +56,6 @@ from routers.common import (
 )
 
 router = APIRouter()
-
-# proposal kinds that change ONLY simulation/state.yaml — no chronicles, no
-# timeline entries. The accept path treats everything else as a full week.
-STATE_ONLY_KINDS = frozenset({"session_effects", "goal_updates",
-                              "project_changes"})
-
-_log = logging.getLogger("studio.simulation")
-
-
-# views/why read the CAMPAIGN's own state via the engine's --state flag —
-# no copy-in, so no shared-engine-home critical section and no lock: a view
-# of campaign A works while campaign B's week runs. The engine lock now
-# guards only what actually mutates the shared home (week copy-in/copy-out).
-_HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
-_WEEK_TIMEOUT = 1800  # a live week is minutes of LLM calls
-
-
-@contextlib.contextmanager
-def _engine_lock_logged(log, why: str):
-    """The engine home is one shared scratch across campaigns: jobs that
-    passed the submit-time courtesy check can still queue here behind
-    another campaign's run. Log the wait so a slow run is never silent,
-    and bound it (a run aborted by its own watchdog eventually releases)."""
-    deadline = 3 * (_WEEK_TIMEOUT + 60)
-    if not engines.ENGINE_LOCK.acquire(timeout=5.0):
-        log(f"waiting for the engine home — {why} is in flight; this run "
-            "starts when it finishes (the job log goes quiet meanwhile)")
-        if not engines.ENGINE_LOCK.acquire(timeout=deadline):
-            raise RuntimeError(
-                f"the engine home stayed busy for over {deadline // 60} "
-                f"minutes — giving up without running anything")
-    try:
-        yield
-    finally:
-        engines.ENGINE_LOCK.release()
-# clause/sentence punctuation that may end a proposed timeline title
-# (apostrophes and quotes deliberately excluded — possessives are not cuts)
-_CLAUSE_PUNCT_RE = re.compile(r"[—–,;:.!?()\[\]]")
 
 
 class WeekBody(BaseModel):
@@ -209,77 +168,17 @@ class CreateStateBody(BaseModel):
     force: StrictBool = False
 
 
-_RESOURCE_LEVELS = ("none", "low", "medium", "high")
-_RESOURCE_KEYS = ("coin", "muscle", "legitimacy")
 _PREMISE_MAX = 600
 
 
 def _validated_faction_doc(factions: list[FactionBody]) -> list[dict]:
-    """The state.yaml factions list from the create form: ids derived from
-    names (underscore slugs — tick.py's HOLDS log lines parse [a-z_]+),
-    resources filled to the canonical three with "low" defaults."""
-    if not (2 <= len(factions) <= 5):
-        raise HTTPException(
-            status_code=422,
-            detail=f"a sandbox needs 2-5 factions that want things from each "
-                   f"other (got {len(factions)})")
-    seen_ids: dict[str, str] = {}
-    out = []
-    for f in factions:
-        name = (f.name or "").strip()
-        goal = (f.goal or "").strip()
-        if not name:
-            raise HTTPException(status_code=422,
-                                detail="every faction needs a name")
-        if not goal:
-            raise HTTPException(
-                status_code=422,
-                detail=f"faction '{name}' needs a goal — what it wants, in "
-                       "one line (that want is what drives the week)")
-        fid = spine.slugify(name).replace("-", "_")
-        if not fid:
-            raise HTTPException(
-                status_code=422,
-                detail=f"faction name '{name}' has no usable id characters")
-        if fid == "world":
-            raise HTTPException(
-                status_code=422,
-                detail="faction id 'world' is reserved (world events are "
-                       "scenery, not a faction)")
-        if fid in seen_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"two factions collapse to the same id '{fid}' "
-                       f"('{name}' and '{seen_ids[fid]}') — give them "
-                       "distinct names")
-        seen_ids[fid] = name
-        resources = {}
-        for key, level in f.resources.items():
-            if key not in _RESOURCE_KEYS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"faction '{name}': unknown resource '{key}' "
-                           f"(use coin, muscle, legitimacy)")
-            level = str(level).lower().strip()
-            if level not in _RESOURCE_LEVELS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"faction '{name}': resource '{key}' must be one "
-                           f"of {', '.join(_RESOURCE_LEVELS)}")
-            resources[key] = level
-        for key in _RESOURCE_KEYS:
-            resources.setdefault(key, "low")
-        out.append({
-            "id": fid,
-            "name": name,
-            "goal": goal,
-            "resources": resources,
-        })
-        if (f.kind or "").strip():
-            out[-1]["kind"] = f.kind.strip()
-        if (f.place or "").strip():
-            out[-1]["place"] = f.place.strip()
-    return out
+    """pydantic bodies -> spine.validate_faction_docs (the schema validator
+    lives with the schema; CampaignError maps to 422 here)."""
+    plain = [{"name": f.name, "goal": f.goal, "kind": f.kind,
+              "resources": f.resources, "place": f.place}
+             for f in factions]
+    with store_errors(spine.CampaignError):
+        return spine.validate_faction_docs(plain)
 
 
 @router.post("/api/campaign/{name}/simulation/state", status_code=201)
@@ -520,435 +419,15 @@ def post_week(name: str, body: WeekBody):
                 "accept or discard it first")
         # interrupted-run detection: flagged before copy-in, cleared only
         # when the proposal is staged (or failed and rolled back)
-        write_week_flag(name)
+        engines.write_week_flag(name)
         log(f"week run flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
         # Lock order: campaign lock (held by this job) outside, engine
         # lock inside — views/why take only the engine lock.
-        with _engine_lock_logged(log, "a week run or forecast"):
-            return _run_week_proposal(name, d, log)
+        with engines.engine_lock_logged(log, "a week run or forecast"):
+            return engines.run_week_proposal(name, d, log)
 
     return submit_campaign_job("sim-week", name, job)
-
-
-def _state_snapshot(state_path: Path) -> tuple[str, str]:
-    """The state text and its revision from ONE read. Two separate reads
-    (text, then revision) let an external hand edit land in between and pin
-    an after-image to revisions it was never derived from — the staleness
-    check would then pass at accept time and publish over the edit."""
-    data = state_path.read_bytes()
-    return data.decode("utf-8"), hashlib.sha256(data).hexdigest()
-
-
-def _run_week_proposal(name: str, d: Path, log) -> dict:
-    """Copy-in -> tick -> STAGE A PROPOSAL, run under the engine lock
-    (post_week's job holds the campaign lock outside). Nothing is copied
-    into the campaign here: the engine's output becomes a pending proposal
-    bundle the DM reviews. Flag clearing happens however the block exits."""
-    try:
-        base_doc = spine.load_state(name)
-        base_week = spine.state_clock_week(base_doc)
-        # fail BEFORE any spend: a hand-edited float week (week: 4.0) would
-        # otherwise crash tick.py mid-run after the faction calls, and re-
-        # crash on every retry — each attempt a full week's API cost
-        if not isinstance(base_week, int) or isinstance(base_week, bool):
-            raise RuntimeError(
-                f"meta.clock.week is {base_week!r}, not an integer — fix "
-                "simulation/state.yaml before running a week")
-        base_revisions = {
-            "simulation/state.yaml": publication.file_revision(
-                d / "simulation" / "state.yaml"),
-            "lore/timeline.yaml": publication.file_revision(
-                d / "lore" / "timeline.yaml"),
-        }
-        input_set_revisions = {
-            "simulation/chronicle": publication.fingerprint_dir(
-                d / "simulation" / "chronicle"),
-            "lore/entities": publication.fingerprint_dir(
-                d / "lore" / "entities"),
-        }
-        chronicle_dir = engines.engine_chronicle_dir()
-
-        _copy_state_in(name)
-        # capture AFTER copy-in: the copy clears the home's run outputs, so
-        # this is the clean baseline every new chronicle is diffed against
-        before = {p.name for p in chronicle_dir.glob("*.md")} \
-            if chronicle_dir.is_dir() else set()
-        log("state copied into engine home (previous engine state kept as "
-            "state.yaml.bak)")
-        log("running src/tick.py --live (scheduler, proposals, dice, chronicle)")
-        rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR, "src/tick.py",
-                                   "--live", timeout=_WEEK_TIMEOUT, on_line=log)
-        if rc != 0:
-            for ln in lines[-10:]:  # make sure the tail shows the failure
-                log(ln)
-            raise RuntimeError("tick --live failed rc=%s: %s"
-                               % (rc, engines.tail_detail(lines, 10)))
-
-        engine_state = engines.engine_state_path()
-        try:
-            new_state_text = engine_state.read_text(encoding="utf-8")
-        except OSError as e:
-            raise RuntimeError(f"the engine wrote no state: {e}")
-        after_doc = yaml.safe_load(new_state_text) or {}
-        if not isinstance(after_doc, dict):
-            raise RuntimeError("the engine's state does not parse as a "
-                               "mapping — no proposal staged")
-        proposed_week = spine.state_clock_week(after_doc)
-
-        # invalid candidates never become approvable bundles (a float clock
-        # would slip the != check — 5.0 == 5 — and poison the manifest)
-        if not isinstance(proposed_week, int) or isinstance(proposed_week, bool) \
-                or (base_week is not None and proposed_week != base_week + 1):
-            raise RuntimeError(
-                f"the engine did not advance exactly one week (base week "
-                f"{base_week} -> {proposed_week}) — no proposal staged")
-        new_files = sorted(
-            (chronicle_dir.glob("*.md") and
-             {p.name for p in chronicle_dir.glob("*.md")} - before)
-            if chronicle_dir.is_dir() else set())
-        if not new_files:
-            raise RuntimeError("the engine wrote no chronicle — no proposal "
-                               "staged (a run with no chronicle cannot be "
-                               "reviewed)")
-        n_factions = len(base_doc.get("factions") or [])
-        proposal_failed = [ln for ln in lines
-                           if "HOLDS (proposal failed" in ln]
-        scheduler_held = {m.group(1) for ln in lines
-                          if (m := _HOLDS_RE.match(ln))
-                          and "proposal failed" not in ln}
-        if n_factions and proposal_failed \
-                and (len(proposal_failed) + len(scheduler_held)) >= n_factions:
-            tail = " | ".join(proposal_failed[-3:])
-            raise RuntimeError(
-                "every faction call failed or held — reporting generation "
-                f"failure rather than staging an empty week ({tail})")
-
-        # the resolver's replay trail (normalized proposals + seed + rule
-        # version) rides with the proposal when the engine wrote one
-        replay_path = engines.engine_replay_path(proposed_week)
-        replay_text = replay_path.read_text(encoding="utf-8") \
-            if replay_path.is_file() else None
-        try:
-            replay_doc = yaml.safe_load(replay_text) \
-                if replay_text else None
-        except yaml.YAMLError:
-            replay_doc = None
-
-        # the engine's RNG seed for the proposed week (replay identity; the
-        # LLM responses themselves are nondeterministic and are NOT replayed)
-        run_record = {
-            "engine": "agentic-simulator/src/tick.py --live",
-            "seed": ((after_doc.get("meta") or {}).get("rng_seeds") or {})
-            .get(str(proposed_week)),
-            "rule_version": replay_doc.get("rule_version")
-            if isinstance(replay_doc, dict) else None,
-            "model": None, "base_url": None,
-        }
-        try:
-            cfg = llm_client.resolve_config()
-            run_record["model"] = cfg.get("model")
-            run_record["base_url"] = cfg.get("url")
-        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
-            pass
-
-        chronicles = {fn: (chronicle_dir / fn).read_text(encoding="utf-8")
-                      for fn in new_files}
-        entries = build_week_entries(proposed_week,
-                                     after_doc.get("events") or [])
-        # parse the chronicle meta NOW, while the engine home still holds
-        # this run's files — by accept time another campaign's week or a
-        # forecast may have replaced them (the bundle is the durable copy)
-        chron = _chronicle_meta(new_files)
-        pid = proposals.create(
-            name, base_week=base_week, proposed_week=proposed_week,
-            base_revisions=base_revisions,
-            input_set_revisions=input_set_revisions,
-            artifacts={"state": new_state_text, "chronicles": chronicles,
-                       "entries": entries, "replay": replay_text},
-            run_record=run_record, before_state=base_doc,
-            chronicle_meta=chron)
-        log(f"proposed week {proposed_week} staged ({pid}) — nothing in the "
-            "campaign has changed; review it, then accept or discard")
-
-        held = {m.group(1) for ln in lines if (m := _HOLDS_RE.match(ln))}
-        for fn in new_files:
-            held |= _held_from_chronicle_path(chronicle_dir / fn)
-        diff = proposals.diff_states(base_doc, after_doc, entries)
-        return {
-            "proposal_id": pid, "status": "pending",
-            "week": proposed_week, "base_week": base_week,
-            "chronicle": chron,
-            "held": sorted(held), "timeline_entries": len(entries),
-            "diff": diff,
-        }
-    finally:
-        clear_week_flag(name)
-
-
-def _run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
-    """Copy-in -> N x tick --live on scratch -> record the projection. Runs
-    under the engine lock (the job holds the campaign lock outside). The
-    campaign is NEVER written except the forecast bundle; nothing here is
-    canon-able, so there is no accept — the DM reads and discards."""
-    try:
-        base_doc = spine.load_state(name)
-        base_week = spine.state_clock_week(base_doc)
-        # fail BEFORE any spend (same rule as the week flow: a hand-edited
-        # float week would otherwise burn the first tick then re-crash)
-        if not isinstance(base_week, int) or isinstance(base_week, bool):
-            raise RuntimeError(
-                f"meta.clock.week is {base_week!r}, not an integer — fix "
-                "simulation/state.yaml before running a forecast")
-        _copy_state_in(name)
-        log("state copied into engine home (previous engine state kept as "
-            "state.yaml.bak)")
-        chronicle_dir = engines.engine_chronicle_dir()
-        prev_doc = base_doc
-        weeks_out = []
-        for i in range(1, n_weeks + 1):
-            before = {p.name for p in chronicle_dir.glob("*.md")} \
-                if chronicle_dir.is_dir() else set()
-            log(f"projecting week {base_week + i} "
-                f"(tick {i}/{n_weeks} on scratch data)")
-            rc, lines = engines.run_py(engines.AGENTIC_SIMULATOR,
-                                       "src/tick.py", "--live",
-                                       timeout=_WEEK_TIMEOUT, on_line=log)
-            if rc != 0:
-                for ln in lines[-10:]:
-                    log(ln)
-                raise RuntimeError(
-                    "forecast week %d failed rc=%s: %s"
-                    % (base_week + i, rc, engines.tail_detail(lines, 10)))
-            try:
-                after_text = engines.engine_state_path().read_text(
-                    encoding="utf-8")
-            except OSError as e:
-                raise RuntimeError(f"the engine wrote no state: {e}")
-            after_doc = yaml.safe_load(after_text) or {}
-            if not isinstance(after_doc, dict):
-                raise RuntimeError(
-                    "the engine's state does not parse as a mapping — "
-                    "forecast aborted")
-            week = spine.state_clock_week(after_doc)
-            if not isinstance(week, int) or isinstance(week, bool) \
-                    or week != spine.state_clock_week(prev_doc) + 1:
-                raise RuntimeError(
-                    "the engine did not advance exactly one week "
-                    f"({spine.state_clock_week(prev_doc)} -> {week}) — forecast aborted")
-            new_files = sorted(
-                {p.name for p in chronicle_dir.glob("*.md")} - before) \
-                if chronicle_dir.is_dir() else []
-            if not new_files:
-                raise RuntimeError(
-                    f"the engine wrote no chronicle for week {week} — "
-                    "forecast aborted")
-            n_factions = len(base_doc.get("factions") or [])
-            proposal_failed = [ln for ln in lines
-                               if "HOLDS (proposal failed" in ln]
-            scheduler_held = {m.group(1) for ln in lines
-                              if (m := _HOLDS_RE.match(ln))
-                              and "proposal failed" not in ln}
-            if n_factions and proposal_failed \
-                    and (len(proposal_failed) + len(scheduler_held)) \
-                    >= n_factions:
-                raise RuntimeError(
-                    "every faction call failed in projected week "
-                    f"{week} — the projection is not a forecast, it is "
-                    "an outage (nothing recorded)")
-            title = (_chronicle_meta(new_files) or {}).get("title")
-            markdown = "\n\n".join(
-                (chronicle_dir / fn).read_text(encoding="utf-8")
-                for fn in new_files)
-            weeks_out.append({
-                "week": week, "title": title,
-                "markdown": markdown,
-                "diff": proposals.diff_states(prev_doc, after_doc, []),
-            })
-            prev_doc = after_doc
-        run_record = {
-            "engine": f"agentic-simulator/src/tick.py --live x{n_weeks} "
-                      "(scratch forecast)",
-            # no seed/rule_version (week bundles carry them): a projection
-            # is not replayable by design — each tick re-asks the model
-            "model": None, "base_url": None,
-        }
-        try:
-            cfg = llm_client.resolve_config()
-            run_record["model"] = cfg.get("model")
-            run_record["base_url"] = cfg.get("url")
-        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
-            pass
-        fid = forecasts.create(name, base_week=base_week, weeks=weeks_out,
-                               run_record=run_record)
-        log(f"forecast staged ({fid}): {n_weeks} projected week(s), base "
-            f"week {base_week} — a projection only; the campaign is "
-            "unchanged and nothing here can be accepted into canon")
-        return {"forecast_id": fid, "status": "active", "base_week": base_week,
-                "weeks": weeks_out}
-    finally:
-        clear_week_flag(name)
-
-
-def _chronicle_meta(filenames: list) -> dict | None:
-    """The primary chronicle for a run = the newest new file by mtime
-    (sorted-by-name is wrong for reruns: 0005-a-2.md sorts before
-    0005-a.md). Title parsed from the file's `# Week N — Title` heading."""
-    if not filenames:
-        return None
-    chronicle_dir = engines.engine_chronicle_dir()
-    fn = max(filenames, key=lambda f: (chronicle_dir / f).stat().st_mtime)
-    title = fn
-    try:
-        for ln in (chronicle_dir / fn).read_text(encoding="utf-8").splitlines()[:1]:
-            m = re.match(r"#\s*Week\s+\d+\s*[—–-]\s*(.+?)\s*$", ln)
-            if m:
-                title = m.group(1)
-    except (OSError, UnicodeDecodeError):
-        pass
-    week_m = re.match(r"(\d{4})", fn)
-    return {"week": int(week_m.group(1)) if week_m else None,
-            "title": title, "file": f"simulation/chronicle/{fn}"}
-
-
-def _chronicle_meta_from_texts(texts: dict) -> dict | None:
-    """_chronicle_meta for a bundle's STAGED chronicles: the engine home's
-    scratch copies may be long gone (another campaign's week or a forecast
-    reuses it), so acceptance must read the bundle it is about to publish.
-    A bundle is one run's output — usually exactly one chronicle. For a
-    legacy rerun bundle carrying two, plain name-max picks the ORIGINAL
-    over the rewrite ('-2' sorts before '.'): rank by (week prefix, rerun
-    suffix) and take the newest rewrite, the run this bundle staged."""
-    if not texts:
-        return None
-
-    def _rank(fn: str):
-        m = re.match(r"(\d{4})-.*?(?:-(\d+))?\.md$", fn)
-        return (int(m.group(1)) if m else 0,
-                int(m.group(2)) if (m and m.group(2)) else 0, fn)
-
-    fn = max(texts, key=_rank)
-    title = fn
-    for ln in str(texts[fn] or "").splitlines()[:1]:
-        m = re.match(r"#\s*Week\s+\d+\s*[—–-]\s*(.+?)\s*$", ln)
-        if m:
-            title = m.group(1)
-    week_m = re.match(r"(\d{4})", fn)
-    return {"week": int(week_m.group(1)) if week_m else None,
-            "title": title, "file": f"simulation/chronicle/{fn}"}
-
-
-def _held_from_chronicle_path(path: Path) -> set:
-    """The chronicle's `Held (scheduler): a, b` line (tick.py write_chronicle)."""
-    held = set()
-    for ln in path.read_text(encoding="utf-8").splitlines():
-        if ln.startswith("Held") and ":" in ln:
-            for tok in re.split(r"[,\s]+", ln.split(":", 1)[1].strip()):
-                if tok:
-                    held.add(tok)
-    return held
-
-
-# ------------------------------------------------- interrupted-week flag
-
-
-def write_week_flag(name: str) -> None:
-    """Mark a week run in flight (content: campaign name + ISO timestamp)."""
-    flag = engines.week_flag_path()
-    flag.parent.mkdir(parents=True, exist_ok=True)
-    flag.write_text(json.dumps({
-        "campaign": name,
-        "started": datetime.datetime.now(
-            datetime.timezone.utc).isoformat(timespec="seconds"),
-    }, indent=2), encoding="utf-8")
-
-
-def clear_week_flag(name: str | None = None) -> None:
-    """Clear the in-flight flag. With a campaign name, only clear the flag
-    THIS campaign wrote: the flag is one shared file, and two queued engine
-    jobs (a week behind a forecast) both write it — the first finisher must
-    not delete the second's marker, or a crash during the second run skips
-    boot restore entirely."""
-    flag = engines.week_flag_path()
-    if name is not None:
-        try:
-            doc = json.loads(flag.read_text(encoding="utf-8"))
-            if not (isinstance(doc, dict) and doc.get("campaign") == name):
-                return  # a later run's flag — leave it alone
-        except (OSError, ValueError):
-            pass  # unreadable/absent: the unlink below settles it
-    try:
-        flag.unlink()
-    except FileNotFoundError:
-        pass
-
-
-def restore_interrupted_week():
-    """Boot-time repair (server.py lifespan): a left-behind week flag means
-    the server died mid-week. Restore the engine home's state.yaml from its
-    .bak (when one exists), delete the flag, and warn loudly. Returns
-    {"campaign","restored"} or None when no flag was left."""
-    flag = engines.week_flag_path()
-    if not flag.is_file():
-        return None
-    doc = {}
-    try:
-        loaded = json.loads(flag.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            doc = loaded
-    except (OSError, ValueError):
-        pass  # unreadable flag: still restore, still clear
-    name = str(doc.get("campaign") or "unknown")
-    state = engines.engine_state_path()
-    bak = engines.engine_state_backup_path()
-    if bak.is_file():
-        engines.copy_file_atomic(bak, state)
-        _log.warning("interrupted week run for campaign %s — engine home "
-                     "restored", name)
-    else:
-        _log.warning("interrupted week run for campaign %s — no state.yaml.bak "
-                     "in the engine home, leaving it as it stands", name)
-    clear_week_flag()
-    return {"campaign": name, "restored": bak.is_file()}
-
-
-def propose_title(text: str, max_words: int = 7, min_words: int = 4) -> str:
-    """One short title for a proposed timeline entry. Mechanical, per the
-    design doc: the chronicle prose is already written and reviewable — the
-    timeline only needs its skeleton. Take the first 4-7 words of the event
-    text, cut at the first clause-punctuation mark once min_words are in
-    (an em-dash or comma at word 1-3 does not cut; possessives never cut)."""
-    head = (text or "").split()[:max_words]
-    for i, word in enumerate(head):
-        if i >= min_words and _CLAUSE_PUNCT_RE.search(word):
-            cut = " ".join(head[:i]).strip(" \t—–-,;:.!?()[]\"'")
-            if cut:
-                return cut
-    return " ".join(head).strip()
-
-
-def build_week_entries(week: int, events: list) -> list:
-    """One proposed timeline entry per NON-WORLD event of the proposed week
-    (world events are scenery, not faction history). Pure: the entries are
-    staged INTO THE PROPOSAL BUNDLE — nothing lands in lore/pending or the
-    timeline until the whole week is accepted."""
-    entries = []
-    for ev in events or []:
-        if not isinstance(ev, dict) or ev.get("week") != week:
-            continue
-        if str(ev.get("actor") or "").lower() == "world":
-            continue
-        text = str(ev.get("text") or "").strip()
-        if not text:
-            continue
-        entries.append({
-            "id": f"pw{week}-{len(entries) + 1}",
-            "when": f"week {week}",
-            "title": propose_title(text),
-            "text": text,
-            "source": f"sim:week-{week}",
-        })
-    return entries
 
 
 # -------------------------------------------------------- proposal routes
@@ -1006,252 +485,20 @@ def get_proposal(name: str):
 
 @router.post("/api/campaign/{name}/simulation/proposal/{pid}/accept")
 def accept_proposal(name: str, pid: str):
-    """Publish the WHOLE pending proposal. For a simulated_week that is
-    state + chronicles + timeline entries; for session_effects, the new
-    state (history events + validated resource/fact changes). One
-    transactional publication (publication.py), validated against the base
-    revisions recorded when the proposal was created — an external edit
-    between then and now is a 409, never a silent overwrite. Idempotent:
-    repeating the accept returns the recorded result."""
+    """Publish the WHOLE pending proposal (service: proposal_flows.accept —
+    idempotent, transactional, revision-validated; ProposalFlowError maps
+    to its status via the server handler)."""
     require_campaign(name)
-    # a stable key for this exact accept: a repeat (double click, retry,
-    # restart) returns the recorded result instead of applying twice
-    key = hashlib.sha256(
-        json.dumps(["accept-proposal", name, pid]).encode("utf-8")).hexdigest()
-    with campaign_lock_nowait(name, "accepting the proposal"):
-        ensure_publishable_409(name)
-        prior = publication.receipt(name, key)
-        if prior:
-            # the crash window AFTER the receipt: publish landed, the status
-            # flip did not. Repair it from the receipt, or a proposal that
-            # is actually canon stays "pending" and blocks every new week.
-            try:
-                b = proposals.load(name, pid)
-                if b["manifest"].get("status") == "pending":
-                    proposals.set_status(name, pid, "accepted",
-                                         decided_note="status repaired from "
-                                                      "the accept receipt")
-                if b["manifest"].get("kind") == "session_changes":
-                    # reconstruct the draft/decision bookkeeping too: the
-                    # UI status is rebuilt from the receipt, never left
-                    # half-finished by a crash between publish and repair
-                    sessions.on_accepted(name, b["manifest"], b)
-            except proposals.ProposalError:
-                pass  # bundle gone or damaged: the receipt still answers
-            if "snapshot" not in prior:  # older receipts predate the field
-                snap = publication.transaction_snapshot(
-                    name, prior.get("transaction"))
-                if snap is not None:
-                    prior = {**prior, "snapshot": snap}
-            return {**prior, "idempotent": True}
-        try:
-            bundle = proposals.load(name, pid)
-        except proposals.ProposalError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        manifest = bundle["manifest"]
-        if manifest.get("status") != "pending":
-            raise HTTPException(
-                status_code=409,
-                detail=f"proposal {pid} is {manifest.get('status')!r}, "
-                       "not pending — refresh and check its state")
-        prior_tx = publication.transaction_for_key(name, key)
-        if prior_tx is not None:
-            # the crash window: this accept was applied and then recovered
-            # by boot (receipt never written). The staged outcome IS the
-            # original result — finish the bookkeeping and answer once.
-            result = _accept_result(manifest, bundle, prior_tx["transaction"])
-            publication.record_receipt(name, key, result)
-            proposals.set_status(name, pid, "accepted",
-                                 decided_note="published via crash recovery")
-            if manifest.get("kind") == "session_changes":
-                sessions.on_accepted(name, manifest, bundle)
-            snap = finalize_publication(
-                name, prior_tx["transaction"],
-                _accept_message(name, manifest, None))
-            return {**result, "snapshot": snap, "idempotent": True}
-        d = spine.campaign_dir(name)
-
-        base = dict(manifest.get("base_revisions") or {})
-        writes = [{
-            "path": "simulation/state.yaml",
-            "text": bundle["state_text"],
-        }]
-        if manifest.get("kind") == "session_changes":
-            # the combined transaction: state after-image (effects already
-            # applied by the engine at prepare time) + the knowledge and
-            # disclosure after-images + the session decision record — one
-            # publication, one receipt, recover together
-            extra = bundle.get("extra") or {}
-            for key_, rel in (("knowledge", "simulation/knowledge.yaml"),
-                              ("disclosure",
-                               "simulation/party-knowledge.yaml")):
-                if extra.get(key_) is not None:
-                    writes.append({
-                        "path": rel,
-                        "text": spine.dump_yaml(extra[key_]),
-                    })
-            decision = extra.get("decision") or {}
-            writes.append({
-                "path": f"sessions/{manifest.get('session_id')}"
-                        f"/decisions/{pid}.yaml",
-                "text": sessions.decision_text(decision),
-            })
-            chron = None
-        elif manifest.get("kind") in STATE_ONLY_KINDS:
-            chron = None
-        else:
-            entries = bundle["entries"]
-            with store_errors(timeline.TimelineBadFile,
-                      conflict=(timeline.TimelineConflict,)):
-                tdoc, tentries = timeline.load(d)
-                new_timeline = timeline.append(tdoc, tentries, entries)
-            writes.append({
-                "path": "lore/timeline.yaml",
-                "text": timeline.dump(new_timeline),
-            })
-            for fn in bundle["chronicles"]:
-                rel = f"simulation/chronicle/{fn}"
-                writes.append({"path": rel, "text": bundle["chronicles"][fn]})
-                base[rel] = publication.ABSENT  # create-only: a file that
-                # appeared in the meantime is an external edit -> conflict
-            chron = manifest.get("chronicle") \
-                or _chronicle_meta_from_texts(bundle["chronicles"])
-        try:
-            pub = publication.publish(
-                name, writes, operation=_accept_operation(manifest),
-                base_revisions=base, idempotency_key=key)
-        except publication.RevisionConflict as e:
-            raise HTTPException(
-                status_code=409,
-                detail=f"stale proposal: {e} — the campaign changed since "
-                       f"this was generated. Discard it and prepare a fresh "
-                       f"one from the new base. Nothing was written.")
-        except publication.PublicationConflictError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-        except Exception as e:  # noqa: BLE001 — mid-flight failure
-            raise publication_500("proposal", e)
-
-        result = _accept_result(manifest, bundle, pub["transaction"])
-        if pub["state"] == "noop":
-            result["noop"] = True
-        if manifest.get("kind") == "session_changes":
-            # canon landed: freeze the draft's selected suggestions and
-            # record the decision — best-effort; the receipt repairs it on
-            # idempotent replay
-            sessions.on_accepted(name, manifest, bundle)
-        publication.record_receipt(name, key, result)
-        # the week HAS landed and the receipt is recorded: a set_status
-        # failure here must not surface as a 500 for a publish that
-        # succeeded — the receipt repairs the status on retry
-        try:
-            proposals.set_status(name, pid, "accepted",
-                                 decided_note="published; see the receipt")
-        except proposals.ProposalError as e:
-            _log.error("accept of %s published but could not mark the "
-                       "bundle accepted (%s) — the receipt repairs it on "
-                       "retry", pid, e)
-            result["status_flip_failed"] = str(e)
-        msg = _accept_message(name, manifest, chron)
-        # vault stage 4 advisory decoration after publication, as before
-        for fn in bundle["chronicles"]:
-            try:
-                if links.linkify_chronicle(name, fn):
-                    _log.info("linked lore names in chronicle/%s", fn)
-            except Exception as e:  # noqa: BLE001 — advisory, never blocking
-                _log.warning("chronicle linkify skipped for %s: %s", fn, e)
-        snap = finalize_publication(name, pub["transaction"], msg)
-        result["snapshot"] = snap
-        return result
-
-
-def _accept_result(manifest: dict, bundle: dict, tx_id: str | None) -> dict:
-    """The API result for an accept — used both live and when reconstructing
-    a recovered accept's answer."""
-    result = {
-        "accepted": manifest.get("proposal_id"),
-        "week": manifest.get("proposed_week"),
-        "kind": manifest.get("kind") or "simulated_week",
-        "transaction": tx_id,
-    }
-    if manifest.get("kind") in STATE_ONLY_KINDS:
-        diff = bundle["diff"]
-        result["events_added"] = len(diff.get("events_added") or [])
-        result["resources_changed"] = len(diff.get("resources") or {})
-        result["goals_changed"] = len(diff.get("fields") or {})
-        if manifest.get("kind") == "project_changes":
-            result["operations"] = len(bundle.get("changes") or [])
-            result["projects_added"] = len(diff.get("projects_added") or [])
-            result["projects_changed"] = len(diff.get("projects_changed")
-                                             or {})
-    elif manifest.get("kind") == "session_changes":
-        diff = bundle["diff"]
-        result["session_id"] = manifest.get("session_id")
-        result["events_added"] = len(diff.get("events_added") or [])
-        result["resources_changed"] = len(diff.get("resources") or {})
-        result["goals_changed"] = len(diff.get("fields") or {})
-        result["facts_added"] = len(diff.get("facts_added") or [])
-        result["facts_superseded"] = len(diff.get("facts_superseded") or [])
-        result["disclosed"] = len(diff.get("disclosed") or [])
-        result["suggestions"] = manifest.get("selected_suggestion_ids") or []
-    else:
-        result["chronicles"] = sorted(bundle["chronicles"])
-        result["timeline_entries"] = len(bundle["entries"])
-    return result
-
-
-def _accept_operation(manifest: dict) -> str:
-    kind = manifest.get("kind")
-    if kind == "session_effects":
-        # `(x or {})`: an explicit null in a hand-edited manifest means the
-        # key EXISTS with value None — .get('run_record', {}) returns None
-        return (f"accept session effects ("
-                f"{(manifest.get('run_record') or {}).get('source') or 'session'})")
-    if kind == "goal_updates":
-        return "accept goal updates from the ledger"
-    if kind == "project_changes":
-        return "accept project changes (create/edit/pause/resume/abandon)"
-    if kind == "session_changes":
-        return ("accept session changes (session "
-                f"{(manifest.get('run_record') or {}).get('session_id')})")
-    return f"accept week {manifest.get('proposed_week')} proposal"
-
-
-def _accept_message(name: str, manifest: dict, chron) -> str:
-    kind = manifest.get("kind")
-    if kind == "session_effects":
-        source = (manifest.get("run_record") or {}).get("source") or "session"
-        return f"campaign/{name}: session effects applied ({source})"
-    if kind == "goal_updates":
-        return f"campaign/{name}: goal updates applied (goal review)"
-    if kind == "project_changes":
-        return f"campaign/{name}: project changes applied"
-    if kind == "session_changes":
-        return (f"campaign/{name}: session changes applied (session "
-                f"{(manifest.get('run_record') or {}).get('session_id')})")
-    msg = f"campaign/{name}: week {manifest.get('proposed_week')}"
-    if chron and chron.get("title"):
-        msg += f" — {chron['title']}"
-    return msg
+    return proposal_flows.accept(name, pid)
 
 
 @router.post("/api/campaign/{name}/simulation/proposal/{pid}/discard")
 def discard_proposal(name: str, pid: str):
-    """Discard a proposal: flips the bundle's status only. The live campaign
-    is untouched (it was never touched — generation staged everything), and
-    the bundle stays on disk as an audit receipt. Rejected content is never
-    fed into future prompts."""
+    """Discard a proposal: flips the bundle's status only (service:
+    proposal_flows.discard). The live campaign is untouched — generation
+    staged everything — and the bundle stays on disk as an audit receipt."""
     require_campaign(name)
-    with campaign_lock_nowait(name, "discarding the proposal"), \
-            store_errors(conflict=(proposals.ProposalError,)):
-        manifest = proposals.set_status(
-            name, pid, "discarded",
-            decided_note="discarded by the DM; no canon "
-                         "change ever happened")
-        if manifest.get("kind") == "session_changes":
-            # reopen the prepared suggestions so the excluded/rest of the
-            # session can be prepared again against a new base
-            sessions.on_discarded(name, manifest)
-        return {"discarded": pid}
+    return proposal_flows.discard(name, pid)
 
 
 # ------------------------------------------------------- session ingestion
@@ -1260,10 +507,7 @@ def discard_proposal(name: str, pid: str):
 def _effect_id(effect: dict) -> str:
     """Stable effect id: content-derived when the DM did not supply one, so
     re-submitting the same session cannot mint a second identity."""
-    if effect.get("id"):
-        return str(effect["id"])
-    payload = json.dumps(effect, sort_keys=True, ensure_ascii=False)
-    return "eff-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+    return proposal_flows.effect_id(effect)
 
 
 @router.post("/api/campaign/{name}/simulation/session")
@@ -1328,7 +572,7 @@ def post_session(name: str, body: SessionBody):
         # overwrite the accepted week.
         with campaign_lock_nowait(name, "recording the session"):
             state_path = d / "simulation" / "state.yaml"
-            state_text, base_revision = _state_snapshot(state_path)
+            state_text, base_revision = proposal_flows.capture_state(state_path)
         copy_path = tmp_dir / "state-copy.yaml"
         copy_path.write_text(state_text, encoding="utf-8")
 
@@ -1362,27 +606,11 @@ def post_session(name: str, body: SessionBody):
     base_revisions = {"simulation/state.yaml": base_revision}
     with campaign_lock_nowait(name, "staging the session proposal"):
         # re-check under the lock: the pre-route check raced the moment the
-        # request thread didn't hold it (two tabs, session + week together)
-        racing = proposals.find_pending(name)
-        if racing:
-            raise HTTPException(
-                status_code=409,
-                detail=f"a proposal appeared while this session was being "
-                       f"prepared ({racing.get('proposal_id')}) — accept or "
-                       f"discard it first; nothing was staged")
-        # and the state the engine validated against must still be canon:
-        # an accept (or sandbox replace) during the engine run means this
-        # after-image was derived from a state that no longer exists —
-        # staging it would publish over that change
-        current = publication.file_revision(
-            d / "simulation" / "state.yaml")
-        if current != base_revision:
-            raise HTTPException(
-                status_code=409,
-                detail="simulation/state.yaml changed while this session "
-                       "was being prepared (another proposal was accepted?) "
-                       "— re-record the session against the current state; "
-                       "nothing was staged")
+        # request thread didn't hold it (two tabs, session + week together),
+        # and the state the engine validated against must still be canon —
+        # staging a stale after-image would publish over the change
+        proposal_flows.recheck_for_staging(
+            name, base_revision=base_revision, what="this session")
         pid = proposals.create(
             name, kind="session_effects",
             base_week=spine.state_clock_week(base_doc), proposed_week=spine.state_clock_week(base_doc),
@@ -1504,10 +732,10 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
     tmp_dir = Path(tempfile.mkdtemp(prefix="studio-projects-"))
     try:
         # capture base + revision together under the lock (same rule as the
-        # session flow, line ~1359)
+        # session flow: one read, or a hand edit lands between text and hash)
         with campaign_lock_nowait(name, "preparing project changes"):
             state_path = d / "simulation" / "state.yaml"
-            state_text, base_revision = _state_snapshot(state_path)
+            state_text, base_revision = proposal_flows.capture_state(state_path)
         copy_path = tmp_dir / "state-copy.yaml"
         copy_path.write_text(state_text, encoding="utf-8")
         changes_path = tmp_dir / "changes.yaml"
@@ -1538,23 +766,9 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
 
         # the state the engine validated against must still be canon
         with campaign_lock_nowait(name, "staging the project proposal"):
-            racing = proposals.find_pending(name)
-            if racing:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"a proposal appeared while these project changes "
-                           f"were being prepared "
-                           f"({racing.get('proposal_id')}) — accept or "
-                           f"discard it first; nothing was staged")
-            current = publication.file_revision(
-                d / "simulation" / "state.yaml")
-            if current != base_revision:
-                raise HTTPException(
-                    status_code=409,
-                    detail="simulation/state.yaml changed while these "
-                           "project changes were being prepared — prepare "
-                           "again against the current state; nothing was "
-                           "staged")
+            proposal_flows.recheck_for_staging(
+                name, base_revision=base_revision,
+                what="these project changes")
             pid = proposals.create(
                 name, kind="project_changes",
                 base_week=spine.state_clock_week(candidate_doc),
@@ -1619,7 +833,7 @@ def post_goal_review(name: str):
                 f"({racing.get('proposal_id')}) — nothing was run or spent; "
                 "accept or discard it first")
         state_path = d / "simulation" / "state.yaml"
-        state_text, base_revision = _state_snapshot(state_path)
+        state_text, base_revision = proposal_flows.capture_state(state_path)
         base_doc = yaml.safe_load(state_text) or {}
 
         import tempfile
@@ -1702,26 +916,11 @@ def post_goal_review(name: str):
         # the engine ran for minutes: an accept (or sandbox replace) landing
         # in between means this after-image was derived from a state that no
         # longer exists — staging it would publish over that change
-        current = publication.file_revision(state_path)
-        if current != base_revision:
-            raise RuntimeError(
-                "simulation/state.yaml changed while the goal review was "
-                "running (another proposal was accepted?) — run it again "
-                "against the current state; nothing was staged")
-        racing = proposals.find_pending(name)
-        if racing:
-            raise RuntimeError(
-                f"a proposal appeared while this goal review was finishing "
-                f"({racing.get('proposal_id')}) — nothing was staged")
-        run_record = {"kind": "goal-review",
-                      "engine": "agentic-simulator/src/goals.py --state",
-                      "model": None, "base_url": None}
-        try:
-            cfg = llm_client.resolve_config()
-            run_record["model"] = cfg.get("model")
-            run_record["base_url"] = cfg.get("url")
-        except Exception:  # noqa: BLE001 — identity is best-effort, no secrets
-            pass
+        proposal_flows.recheck_for_staging(
+            name, base_revision=base_revision, what="the goal review")
+        run_record = {**engines.run_record_identity(
+                          "agentic-simulator/src/goals.py --state"),
+                      "kind": "goal-review"}
         pid = proposals.create(
             name, kind="goal_updates",
             base_week=spine.state_clock_week(base_doc),
@@ -1790,11 +989,11 @@ def post_forecast(name: str, body: ForecastBody):
             raise RuntimeError(
                 f"a forecast appeared while this run was starting "
                 f"({racing.get('forecast_id')}) — nothing was run or spent")
-        write_week_flag(name)
+        engines.write_week_flag(name)
         log(f"forecast flagged ({engines.WEEK_FLAG_NAME}) — a boot after a "
             "crash restores the engine home from its backup")
-        with _engine_lock_logged(log, "a week run or forecast"):
-            return _run_forecast(name, d, body.weeks, log)
+        with engines.engine_lock_logged(log, "a week run or forecast"):
+            return engines.run_forecast(name, d, body.weeks, log)
 
     return submit_campaign_job("forecast", name, job)
 
@@ -1900,26 +1099,3 @@ def post_why(name: str, body: WhyBody):
                    + (f": {out[-200:]}" if out else ""))
     lines_out = data if isinstance(data, list) else (data.get("lines") or [])
     return {"week": body.week, "faction": body.faction, "lines": lines_out}
-
-
-def _copy_state_in(name: str) -> None:
-    """D4: campaign state.yaml -> engine home, backing up the engine's
-    previous state first, and clearing the home's run OUTPUTS (chronicles,
-    replay trails). The home is shared scratch: leftover projection files
-    from a discarded forecast would collide with a real week's chronicle
-    names (-2 suffixes) and a stale replay/week-N.yaml would ride into an
-    unrelated campaign's proposal as its replay trail."""
-    src = spine.campaign_dir(name) / "simulation" / "state.yaml"
-    engine_state = engines.engine_state_path()
-    engine_state.parent.mkdir(parents=True, exist_ok=True)
-    if engine_state.is_file():
-        engines.copy_file(engine_state, engines.engine_state_backup_path())
-    chronicle_dir = engines.engine_chronicle_dir()
-    if chronicle_dir.is_dir():
-        for p in chronicle_dir.glob("*.md"):
-            p.unlink(missing_ok=True)
-    replay_dir = engines.engine_replay_path(0).parent
-    if replay_dir.is_dir():
-        for p in replay_dir.glob("week-*.yaml"):
-            p.unlink(missing_ok=True)
-    engines.copy_file(src, engine_state)

@@ -11,7 +11,7 @@ import engines
 import forecasts
 import proposals
 from conftest import wait_for_job
-from routers.simulation import write_week_flag
+from engines import write_week_flag
 
 
 def _fake_tick_series(engine_root, start_week=3):
@@ -258,7 +258,7 @@ def test_copy_in_clears_engine_home_run_outputs(
     leftovers from a discarded forecast used to pollute real weeks' chronicle
     names (-2 suffixes) and a stale replay/week-N.yaml could ride into an
     unrelated campaign's proposal."""
-    from routers.simulation import _copy_state_in
+    from engines import copy_state_in
     home = tmp_spine_root / "engine-home"
     monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
     chron = home / "chronicle"
@@ -269,7 +269,7 @@ def test_copy_in_clears_engine_home_run_outputs(
     (replay / "week-4.yaml").write_text("stale: true\n", encoding="utf-8")
     (home / "world").mkdir(parents=True, exist_ok=True)
     (home / "world" / "state.yaml").write_text("old: true\n", encoding="utf-8")
-    _copy_state_in("testvale")
+    copy_state_in("testvale")
     assert list(chron.glob("*.md")) == []
     assert list(replay.glob("week-*.yaml")) == []
     # the copy-in itself still works: canon state now lives in the home

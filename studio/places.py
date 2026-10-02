@@ -37,6 +37,7 @@ The printed Markdown is DM material — it identifies itself as such and
 labels private / pending / hypothetical sections. It is not a handout.
 """
 
+import hashlib
 import json
 import sys
 import uuid
@@ -110,6 +111,18 @@ def _id_list(value) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(x).strip() for x in value if str(x).strip()]
+
+
+def _page_snapshot(path: Path, expected: str | None) -> tuple[str, str]:
+    """(page text, base revision) from ONE byte read: hashing a separate
+    read after the parse could pair old content with a newer revision and
+    let publication accept a stale write over an external edit. The decode
+    applies universal-newline translation like read_text, so a CRLF
+    hand-edit still parses its frontmatter."""
+    data = path.read_bytes()
+    revision = expected or hashlib.sha256(data).hexdigest()
+    text = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    return text, revision
 
 
 # --------------------------------------------------------------- attachments
@@ -455,7 +468,11 @@ def _parent_cycle_findings(reg: dict) -> list[dict]:
         else:
             cycles = True  # walked the whole registry without reaching a root
         if cycles:
-            ring = frozenset(chain + [g["id"]])
+            # report the CYCLE only: the walk's lead-in (nodes that merely
+            # point INTO the loop, like C in C -> A -> B -> A) is not a
+            # member — the cycle is the repeated portion of the chain
+            members = chain[chain.index(nxt):] if nxt in chain else chain
+            ring = frozenset(members)
             if ring not in reported:
                 reported.add(ring)
                 out.append({
@@ -470,12 +487,16 @@ def _parent_cycle_findings(reg: dict) -> list[dict]:
 # ---------------------------------------------------------------- view parts
 
 
-def _event_items(name: str, state: dict, ids: set[str], window: str,
-                 limit: int, offset: int) -> tuple[list, dict]:
+def _event_items(name: str, state: dict, state_rev: str, ids: set[str],
+                 window: str, limit: int, offset: int) -> tuple[list, dict]:
     """Events explicitly located at one of `ids` (never inferred from an
     actor's current place). Old events without place_ids stay unlocated —
     historical unknown locations remain unknown. Each item carries a
-    read-only locator (state revision + list index), not a fake stable id."""
+    read-only locator (state revision + list index), not a fake stable id.
+    state_rev is the revision of the EXACT bytes `state` was parsed from —
+    capturing it separately (a later file read) could pair an old index
+    with a newer file's hash and let a later association pass the revision
+    check while pointing at a different event."""
     clock = ((state.get("meta") or {}).get("clock") or {})
     current = clock.get("week")
     hits = []
@@ -494,7 +515,6 @@ def _event_items(name: str, state: dict, ids: set[str], window: str,
     counts = {"total": total, "returned": min(limit, max(0, total - offset)),
               "more": max(0, total - offset - limit)}
     out = []
-    state_rev = None
     for i, ev in hits[offset:offset + limit]:
         item = {"week": ev.get("week"), "actor": ev.get("actor") or "world",
                 "text": str(ev.get("text") or ""),
@@ -507,9 +527,6 @@ def _event_items(name: str, state: dict, ids: set[str], window: str,
         if ev.get("id"):
             item["id"] = str(ev["id"])
         else:
-            if state_rev is None:
-                state_rev = publication.file_revision(
-                    spine.campaign_dir(name) / "simulation" / "state.yaml")
             item["locator"] = {"index": i, "state_revision": state_rev}
         out.append(item)
     return out, counts
@@ -728,7 +745,28 @@ def place_view(name: str, place_id: str, *, window: str = "recent",
     if include_descendants:
         ids = set(_descendant_ids(reg, group["id"]))
 
-    state = spine.load_state(name)
+    # one byte snapshot for the events list AND the locator revision the
+    # page hands out: parsing one read and hashing another could pair an
+    # old event index with a newer file's revision (DND-10)
+    state_path = spine.campaign_dir(name) / "simulation" / "state.yaml"
+    try:
+        state_data = state_path.read_bytes()
+    except OSError:
+        state_data = None
+    if state_data is None:
+        state_rev, state = publication.ABSENT, {}
+    else:
+        state_rev = hashlib.sha256(state_data).hexdigest()
+        try:
+            state = yaml.safe_load(state_data.decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError) as e:
+            first = str(e).splitlines()[0] if str(e) else type(e).__name__
+            raise spine.CampaignFileError(
+                f"state.yaml does not parse ({first}) — a hand-edit "
+                "slipped? Fix or delete the file, or restore it with "
+                "git checkout -- simulation/state.yaml")
+        state = state if isinstance(state, dict) else {}
+
     maps = list(group["maps"])
     preferred = (group.get("lore") or {}).get("preferred_map") or ""
 
@@ -744,7 +782,7 @@ def place_view(name: str, place_id: str, *, window: str = "recent",
     for m in maps:
         m["preferred"] = is_pref(m)
 
-    events, event_counts = _event_items(name, state, ids, window,
+    events, event_counts = _event_items(name, state, state_rev, ids, window,
                                         event_limit, event_offset)
     mentions, mention_counts = _mention_items(name, group,
                                               mention_limit, mention_offset)
@@ -903,8 +941,11 @@ def link(name: str, place_id: str, *, page: str | None = None,
     path = spine.campaign_dir(name) / Path(*target_file.split("/"))
     if not path.is_file():
         raise PlaceNotFound(f"no such entity page: {target_file}")
-    raw = path.read_text(encoding="utf-8")
-    base_revision = expected_page_revision or publication.file_revision(path)
+    # one byte snapshot for BOTH the content and its baseline (see
+    # _page_snapshot): hashing after the parse could pair the OLD text
+    # with the NEW revision — publication would then accept the stale
+    # write and destroy the edit
+    raw, base_revision = _page_snapshot(path, expected_page_revision)
     meta, body = _frontmatter_of(raw)
     meta = meta or {}
     existing = str(meta.get("place_id") or "").strip()
@@ -913,6 +954,14 @@ def link(name: str, place_id: str, *, page: str | None = None,
             f"{target_file} already claims place_id '{existing}' — a page "
             "owns one identity; resolve the conflict by hand or fix the "
             "duplicate first")
+    kind = str(meta.get("kind") or "").strip()
+    if kind and kind != "place":
+        # the registry only lets kind: place pages own identities: a
+        # place_id on an NPC page would return success with an id the
+        # place view can never resolve
+        raise PlaceError(
+            f"{target_file} is kind: {kind} — only kind: place pages can "
+            "own a place identity; change the page's kind first")
     if minted:
         # a lore-only provisional record has no durable identity yet — the
         # link mints one (place-<uuid>) and it survives every later rename
@@ -950,8 +999,10 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
     group = _require_group(name, place_id)
     page = _require_lore_page(group)
     path = spine.campaign_dir(name) / Path(*page["file"].split("/"))
-    raw = path.read_text(encoding="utf-8")
-    base_revision = expected_page_revision or publication.file_revision(path)
+    # one byte snapshot for BOTH the content and its baseline (see
+    # _page_snapshot): hashing after the parse could pair old text with a
+    # newer revision
+    raw, base_revision = _page_snapshot(path, expected_page_revision)
     meta, body = _frontmatter_of(raw)
     meta = meta or {}
     changed = []
@@ -963,10 +1014,13 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
             old = page["name"]
             meta["name"] = new_name
             # the passed alias list (if any) MERGES with the fold — a
-            # rename+aliases call must not silently drop the old name
+            # rename+aliases call must not silently drop the old name.
+            # _id_list folds a scalar hand-edit ("aliases: The Old Mill")
+            # the same way the page loader does; list + raw scalar was a
+            # TypeError that made a readable page unrenamable
             alias_list = [str(a).strip() for a in
-                          ((aliases if aliases is not None
-                            else []) + (meta.get("aliases") or []))
+                          ((aliases if aliases is not None else [])
+                           + _id_list(meta.get("aliases")))
                           if str(a).strip()]
             if old not in alias_list:
                 alias_list.append(old)  # old name keeps resolving
@@ -976,7 +1030,7 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
         passed = [str(a).strip() for a in aliases if str(a).strip()]
         # after a rename in the same call, meta["aliases"] already carries
         # the folded old name — keep anything folded that the caller kept
-        folded = meta.get("aliases") or [] if "name" in changed else []
+        folded = _id_list(meta.get("aliases")) if "name" in changed else []
         meta["aliases"] = list(dict.fromkeys(
             passed + [a for a in folded if str(a).strip()
                       and str(a).strip() not in passed]))
@@ -1014,7 +1068,12 @@ def patch(name: str, place_id: str, *, name_: str | None = None,
         pref = str(preferred_map).strip()
         if pref:
             d = spine.campaign_dir(name)
-            target = publication._safe_target(d, pref)
+            try:
+                target = publication._safe_target(d, pref)
+            except publication.PublicationError as e:
+                # an unsafe path is the CALLER's input problem — a 422,
+                # never the catch-all 500 the raw error mapped to
+                raise PlaceError(str(e))
             rel = target.relative_to(d.resolve()).as_posix()
             if not rel.startswith("maps/") or not target.exists():
                 raise PlaceError(
@@ -1051,7 +1110,8 @@ def associate(name: str, place_id: str, *, source_kind: str,
       event   state event locator  -> occurred_at (state event place_ids)
       fact    fact id              -> about (knowledge store place_ids)
       faction faction id           -> interest (state interest_place_ids)
-      map     map slug             -> depicts (companion note + params place_id)
+      map     map slug, qualified when ambiguous ("cities/<slug>" or
+              "sites/<slug>") -> depicts (companion note + params place_id)
     Unknown place references are refused at write time here (the read model
     reports them as findings; writes must not mint new ones). Provisional
     page-locator ids ("page:<stem>") are refused too — link the place first
@@ -1092,8 +1152,9 @@ def associate(name: str, place_id: str, *, source_kind: str,
         path = d / Path(*rel.split("/"))
         if not path.is_file():
             raise PlaceNotFound(f"no such entity page: {rel}")
-        base_revision = expected_revision or publication.file_revision(path)
-        meta, body = _frontmatter_of(path.read_text(encoding="utf-8"))
+        # one byte snapshot for content + baseline (see _page_snapshot)
+        raw, base_revision = _page_snapshot(path, expected_revision)
+        meta, body = _frontmatter_of(raw)
         meta = meta or {}
         current = _id_list(meta.get(relationship))
         meta[relationship] = ([p for p in current if p != pid] + [pid]) \
@@ -1106,7 +1167,11 @@ def associate(name: str, place_id: str, *, source_kind: str,
                 "place_id": pid, **result}
 
     if source_kind in ("event", "faction"):
-        # both live in simulation/state.yaml — one file, one publish
+        # both live in simulation/state.yaml — one file, one publish.
+        # The baseline is captured BEFORE the parse: an external edit in
+        # between then makes the parse NEWER than the baseline, which the
+        # publish-time check refuses — never the silent-overwrite order
+        # (parse old, hash new)
         rel = "simulation/state.yaml"
         if source_kind == "event" and not expected_revision:
             raise PlaceError(
@@ -1152,6 +1217,11 @@ def associate(name: str, place_id: str, *, source_kind: str,
                 "relationship": relationship, "place_id": pid, **result}
 
     if source_kind == "fact":
+        # baseline BEFORE the load (same reasoning as the state branch):
+        # parse-then-hash could accept a write over a newer external edit
+        rel = knowledge.KNOWLEDGE_FILE
+        base_revision = expected_revision or publication.file_revision(
+            d / Path(*rel.split("/")))
         doc = knowledge.load(name)
         fact = next((f for f in doc.get("facts", [])
                      if f.get("id") == source_id), None)
@@ -1160,9 +1230,6 @@ def associate(name: str, place_id: str, *, source_kind: str,
         current = _id_list(fact.get("place_ids"))
         fact["place_ids"] = ([p for p in current if p != pid] + [pid]) \
             if add else [p for p in current if p != pid]
-        rel = knowledge.KNOWLEDGE_FILE
-        base_revision = expected_revision or publication.file_revision(
-            d / Path(*rel.split("/")))
         result = _locked_publish(
             name, [{"path": rel, "text": spine.dump_yaml(doc)}],
             operation=f"fact {source_id} about <- {pid}",
@@ -1171,18 +1238,35 @@ def associate(name: str, place_id: str, *, source_kind: str,
                 "relationship": relationship, "place_id": pid, **result}
 
     # source_kind == "map": companion note + params.yaml in ONE publish —
-    # the generated SVG/PNG/GeoJSON are never touched
-    att = next((a for a in _map_attachments(name)
-                if a["slug"] == source_id), None)
-    if att is None:
+    # the generated SVG/PNG/GeoJSON are never touched. A bare slug may be
+    # ambiguous (maps/cities/ruins AND maps/sites/ruins): the dir-qualified
+    # form ("cities/<slug>" or "sites/<slug>", optionally "maps/...") picks
+    # one exactly; an ambiguous bare slug is REFUSED, never first-match.
+    wanted = source_id.strip().strip("/")
+    wanted = wanted.removeprefix("maps/")
+    matches = [a for a in _map_attachments(name)
+               if a["slug"] == wanted or a["dir"] == f"maps/{wanted}"]
+    if len(matches) > 1:
+        raise PlaceError(
+            f"map '{source_id}' is ambiguous: "
+            f"{', '.join(a['dir'] for a in matches)} — qualify it as "
+            "'cities/<slug>' or 'sites/<slug>'")
+    if not matches:
         raise PlaceNotFound(f"no such map attachment: {source_id}")
+    att = matches[0]
+    if not add and att["place_id"] and att["place_id"] != pid:
+        # detaching from the wrong place would silently rewrite another
+        # page's relationship
+        raise PlaceError(
+            f"map {att['dir']} is attached to place '{att['place_id']}', "
+            f"not '{pid}' — detach it from its own place page")
     writes, base = [], {}
     note_path = d / Path(*att["note_file"].split("/"))
     if note_path.is_file():
-        meta, body = _frontmatter_of(note_path.read_text(encoding="utf-8"))
+        raw, base[att["note_file"]] = _page_snapshot(
+            note_path, expected_revision)
+        meta, body = _frontmatter_of(raw)
         meta = meta or {}
-        base[att["note_file"]] = expected_revision or \
-            publication.file_revision(note_path)
     else:
         meta, body = {}, ""
     meta["place_id"] = pid if add else None
@@ -1191,17 +1275,18 @@ def associate(name: str, place_id: str, *, source_kind: str,
     params_rel = f"{att['dir']}/params.yaml"
     params_path = d / Path(*params_rel.split("/"))
     if params_path.is_file():
+        params_data = params_path.read_bytes()
+        base[params_rel] = expected_revision or \
+            hashlib.sha256(params_data).hexdigest()
         try:
-            params = yaml.safe_load(params_path.read_text(encoding="utf-8"))
-        except yaml.YAMLError:
+            params = yaml.safe_load(params_data.decode("utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError):
             params = None
         if isinstance(params, dict):
             params["place_id"] = pid if add else None
             params = {k: v for k, v in params.items() if v is not None}
             writes.append({"path": params_rel,
                            "text": spine.dump_yaml(params)})
-            base[params_rel] = expected_revision or \
-                publication.file_revision(params_path)
     result = _locked_publish(
         name, writes,
         operation=f"map {source_id} depicts <- {pid}",
@@ -1358,7 +1443,9 @@ def _cli(argv) -> int:
     add_common(assoc)
     assoc.add_argument("--source", required=True,
                        choices=sorted(_ASSOCIATION_SOURCES))
-    assoc.add_argument("--id", required=True, dest="source_id")
+    assoc.add_argument("--id", required=True, dest="source_id",
+                       help="record id (for maps: cities/<slug> or "
+                            "sites/<slug> when the bare slug is ambiguous)")
     assoc.add_argument("--relationship", required=True)
     assoc.add_argument("--remove", action="store_true")
 

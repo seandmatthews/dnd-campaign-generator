@@ -35,6 +35,7 @@ from starlette.staticfiles import StaticFiles
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import publication
+import proposal_flows
 import sessions
 import spine
 from routers import (
@@ -48,6 +49,7 @@ from routers import (
     system,
 )
 from routers import sessions as sessions_router
+import engines  # boot-time engine-home restore lives with the home manager
 
 STUDIO_DIR = Path(__file__).resolve().parent
 PORT = int(os.environ.get("STUDIO_PORT", "8765"))
@@ -95,10 +97,10 @@ log = logging.getLogger("studio.server")
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Boot repair, before serving: a .week-run-flag left by a crashed week
-    run restores the engine home (routers/simulation.restore_interrupted_week);
+    run restores the engine home (engines.restore_interrupted_week);
     open publication transactions roll forward or park as conflicts
     (publication.recover_campaign)."""
-    simulation.restore_interrupted_week()
+    engines.restore_interrupted_week()
     for camp in spine.list_campaigns():
         try:
             recovered = publication.recover_campaign(camp["name"])
@@ -186,6 +188,14 @@ async def campaign_file_error(request: Request, exc: spine.CampaignFileError):
     """A campaign file that does not parse is the DM's input problem, not a
     server fault: readable 422 naming the file, never an opaque 500."""
     return JSONResponse({"error": str(exc)}, status_code=422)
+
+
+@app.exception_handler(proposal_flows.ProposalFlowError)
+async def proposal_flow_error(request: Request,
+                              exc: proposal_flows.ProposalFlowError):
+    """The proposal service raises typed errors (status + detail) — the
+    router stays a mapping-free caller and the CLI catches the same type."""
+    return JSONResponse({"error": exc.detail}, status_code=exc.status)
 
 
 @app.exception_handler(sessions.SessionConflict)

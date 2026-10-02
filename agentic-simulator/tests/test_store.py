@@ -23,20 +23,32 @@ def test_save_load_round_trip():
     print("  store: save/load round trip  OK")
 
 
+def _faction(**over):
+    f = {"id": "a", "name": "The Assembly", "goal": "hold the crossing",
+         "resources": {"coin": "low"}}
+    f.update(over)
+    return f
+
+
 def test_validate_state_accepts_a_spendable_state():
     doc = {"meta": {"clock": {"week": 4, "season": "spring"}},
-           "city": {"name": "Testburg"}, "factions": [{"id": "a"}],
+           "city": {"name": "Testburg"}, "factions": [_faction()],
            "events": [], "rumors": []}
     validate_state(doc)  # must not raise
     print("  validate: a spendable state passes  OK")
 
 
 def test_validate_state_names_the_first_missing_piece():
-    """Each of these used to crash AFTER the faction calls' spend: events
-    (apply_mechanical's append), the clock (write_chronicle's f-string),
-    the city (faction_view), factions/ids (scheduler + apply_outcomes)."""
+    """Each of these used to crash AFTER the faction calls' spend — or,
+    for goal/resources, AFTER the canon write (write_chronicle's state
+    summary direct-indexes them). Element shape, not container existence:
+    a null optional (disposition:, knows:) defeats every .get() default
+    downstream, and the rumor mill direct-indexes event actor and rumor
+    id/claim/fidelity."""
     base = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
-            "factions": [{"id": "a"}], "events": []}
+            "factions": [_faction()], "events": []}
+    no = lambda k, **over: {**base, "factions": [  # noqa: E731
+        _faction(**{k: None, **over})]}
     cases = [
         (None, "not a mapping"),
         ({**base, "city": {}}, "city.name"),
@@ -44,7 +56,22 @@ def test_validate_state_names_the_first_missing_piece():
         ({**base, "meta": {}}, "not an integer"),
         ({**base, "factions": []}, "factions"),
         ({**base, "factions": [{"goal": "no id"}]}, "id"),
+        (no("name"), "non-empty name"),
+        (no("goal"), "non-empty goal"),
+        (no("resources"), "resources mapping"),
+        (no("resources", resources={"coin": "loads"}), "not one of"),
+        (no("disposition"), "disposition must be a mapping"),
+        (no("knows"), "knows must be a list"),
         ({**base, "events": None}, "events"),
+        ({**base, "events": [{"week": 4, "text": "no actor"}]},
+         "non-empty actor"),
+        ({**base, "rumors": ["not a mapping"]}, "not a mapping"),
+        ({**base, "rumors": [{"claim": "x", "fidelity": "hearsay"}]},
+         "missing id"),
+        ({**base, "rumors": [{"id": "rumor_0001", "claim": "x",
+                              "fidelity": "gospel", "heard_by": [],
+                              "transmissions": [], "born_week": 3}]},
+         "fidelity"),
     ]
     for doc, expected in cases:
         try:

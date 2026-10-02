@@ -549,7 +549,7 @@ def test_extraction_malformed_response_is_an_error(client, tmp_spine_root,
     assert r.status_code == 404 or r.status_code == 422
 
 
-def test_cli_import_prepare_accept(client, tmp_spine_root):
+def test_cli_import_prepare_accept(client, tmp_spine_root, tmp_path):
     import session_notes
     rc = session_notes.main([
         "import", "testvale", "--title", "CLI session",
@@ -558,9 +558,17 @@ def test_cli_import_prepare_accept(client, tmp_spine_root):
     assert rc == 0
     rows = session_store.list_sessions("testvale")
     sid = rows[0]["session_id"]
-    # manual draft via the service (the CLI has no editor), then CLI prepare
-    draft = _manual_draft(client, tmp_spine_root, sid,
-                          [_wardens_resource_sug()])
+    # manual drafting through the CLI itself (the documented no-LLM path):
+    # add reads a YAML file and creates the session's first draft
+    sug_file = tmp_path / "suggestions.yaml"
+    sug_file.write_text(yaml.safe_dump(
+        {"suggestions": [_wardens_resource_sug()]}), encoding="utf-8")
+    rc = session_notes.main(
+        ["add", "testvale", sid, "--from", str(sug_file)])
+    assert rc == 0
+    detail = session_store.session_detail("testvale", sid)
+    assert detail["drafts"] and detail["drafts"][0]["origin"] == "manual"
+    draft = detail["drafts"][0]
     rc = session_notes.main([
         "prepare", "testvale", sid, "--select", draft["suggestions"][0]["id"],
         "--draft", draft["draft_id"]])
