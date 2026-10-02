@@ -302,9 +302,21 @@ def _validate_reply(raw: str, places: list, log):
             if not isinstance(f, dict):
                 issues.append(f"faction {i + 1}: not a mapping")
                 continue
+            raw_resources = f.get("resources")
+            if raw_resources is None or isinstance(raw_resources, dict):
+                resources = raw_resources or {}
+            else:
+                # a scalar/list resources survives `or {}` and crashes
+                # validate_faction_docs (.items()) with an AttributeError
+                # the re-ask cannot catch — name the shape as an issue so
+                # the ValueError -> re-ask path owns it (ticket 21)
+                resources = {}
+                issues.append(
+                    f"faction {i + 1}: 'resources' must be a mapping of "
+                    "resource to level (coin, muscle, legitimacy), not a "
+                    f"{type(raw_resources).__name__}")
             entry = {"name": f.get("name"), "goal": f.get("goal"),
-                     "kind": f.get("kind"),
-                     "resources": f.get("resources") or {}}
+                     "kind": f.get("kind"), "resources": resources}
             want = str(f.get("place") or "").strip()
             if want:
                 if spine.slugify(want) in place_slugs:

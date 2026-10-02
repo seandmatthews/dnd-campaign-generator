@@ -10,6 +10,8 @@ projects, per the CLI-equivalence rule.
 import json
 from pathlib import Path
 
+import pytest
+
 import llm_client
 import simdesign
 import spine
@@ -494,3 +496,53 @@ def test_reask_quotes_are_clamped(tmp_spine_root, monkeypatch):
     assert len(calls) == 2
     re_ask = calls[1]
     assert "INJECT" not in re_ask or         len(re_ask) < len(calls[0]) + simdesign._REASK_QUOTE_MAX + 200
+
+
+# ----------------------------------------------- ticket 21: reply shapes
+
+
+def test_scalar_resources_reasks_then_succeeds(client, tmp_spine_root,
+                                               monkeypatch):
+    """A reply with scalar `resources` ("high") takes the bounded re-ask
+    path with the issue named in the quote, then succeeds — never the
+    AttributeError 500 the raw value used to cause in
+    spine.validate_faction_docs (.items())."""
+    _fresh(tmp_spine_root)
+    doc = json.loads(json.dumps(DESIGN_DOC))
+    doc["factions"][0]["resources"] = "high"
+    calls = _fake_llm(monkeypatch, [json.dumps(doc), json.dumps(DESIGN_DOC)])
+    r = client.post(DESIGN_URL, json={"premise": PREMISE,
+                                      "places": ["Provis"]})
+    assert r.status_code == 200, r.text
+    assert len(calls) == 2
+    assert "must be a mapping of resource to level" in calls[1]
+    assert "not a str" in calls[1]
+    assert r.json()["usage"]["calls"] == 2
+
+
+def test_list_resources_reasks_once_then_502_with_the_issue(
+        client, tmp_spine_root, monkeypatch):
+    """A list `resources` is the same shape class: one re-ask, then 502
+    quoting the issue — not a 500."""
+    _fresh(tmp_spine_root)
+    doc = json.loads(json.dumps(DESIGN_DOC))
+    doc["factions"][1]["resources"] = ["coin", "muscle"]
+    calls = _fake_llm(monkeypatch, [json.dumps(doc), json.dumps(doc)])
+    r = client.post(DESIGN_URL, json={"premise": PREMISE,
+                                      "places": ["Provis"]})
+    assert r.status_code == 502, r.text
+    assert len(calls) == 2
+    assert "must be a mapping of resource to level" in r.json()["error"]
+    assert "not a list" in r.json()["error"]
+
+
+def test_spine_rejects_non_dict_resources_as_campaign_error():
+    """The spine guard behind the coercion: validate_faction_docs answers a
+    non-dict resources with CampaignError (4xx on every route), never an
+    AttributeError."""
+    factions = [
+        {"name": "First", "goal": "hold the bridge", "resources": "high"},
+        {"name": "Second", "goal": "burn the bridge"},
+    ]
+    with pytest.raises(spine.CampaignError, match="not a str"):
+        spine.validate_faction_docs(factions)

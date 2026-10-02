@@ -900,7 +900,17 @@ def validate_faction_docs(factions: list) -> list[dict]:
                 "distinct names")
         seen_ids[fid] = name
         resources = {}
-        for key, level in (f.get("resources") or {}).items():
+        raw_resources = f.get("resources")
+        if raw_resources is None:
+            raw_resources = {}
+        if not isinstance(raw_resources, dict):
+            # a scalar/list resources is a schema violation, not a crash:
+            # CampaignError maps to 4xx on every route (ticket 21)
+            raise CampaignError(
+                f"faction '{name}': resources must be a mapping of "
+                "resource to level (coin, muscle, legitimacy), not a "
+                f"{type(raw_resources).__name__}")
+        for key, level in raw_resources.items():
             if key not in RESOURCE_KEYS:
                 raise CampaignError(
                     f"faction '{name}': unknown resource '{key}' "
