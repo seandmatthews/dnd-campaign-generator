@@ -37,10 +37,10 @@ The exporter carefully excludes `.git/*`, `llm.env*`, `.studio-jobs/*`,
 
 ## Acceptance criteria
 
-- [ ] Restore of an archive containing `.git`, `llm.env` (top-level and
+- [x] Restore of an archive containing `.git`, `llm.env` (top-level and
       nested), and a forecast manifest: none land on disk; the response
       names what was skipped.
-- [ ] A studio-exported archive restores identically to today (the
+- [x] A studio-exported archive restores identically to today (the
       exclusion list is shared, so nothing legitimately in an export is
       dropped) — round-trip test.
-- [ ] `excluded('sessions/llm.env')` is True (unit test on the pattern).
+- [x] `excluded('sessions/llm.env')` is True (unit test on the pattern).
