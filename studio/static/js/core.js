@@ -133,16 +133,40 @@
       init.headers['Content-Type'] = 'application/json';
       init.body = JSON.stringify(opts.body);
     }
-    let res;
+    // opts.timeoutMs (rare — callers must opt in): a ceiling on the WAIT.
+    // Aborting the fetch does not cancel the server-side work, so anything
+    // using this must say so in what it shows the user (the design form does).
+    let abort = null;
+    if (opts.timeoutMs) {
+      abort = new AbortController();
+      init.signal = abort.signal;
+    }
+    const timer = abort
+      ? setTimeout(() => abort.abort(), opts.timeoutMs) : null;
+    let res, text;
     try {
       res = await fetch(path, init);
+      text = await res.text();
     } catch (e) {
+      if (abort && e && e.name === 'AbortError') {
+        const n = opts.timeoutMs >= 60000
+          ? Math.round(opts.timeoutMs / 60000) + ' min'
+          : Math.round(opts.timeoutMs / 1000) + ' s';
+        throw {
+          status: 504,
+          timedOut: true,
+          error: 'Gave up waiting for the studio server after ' + n +
+            '. The server-side work is NOT cancelled — it may still finish. ' +
+            'Check before retrying.'
+        };
+      }
       throw {
         status: 0,
         error: 'Cannot reach the studio server (' + (e && e.message ? e.message : 'network error') + ')'
       };
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    const text = await res.text();
     let data = null;
     if (text) {
       try { data = JSON.parse(text); } catch (_) { data = null; }

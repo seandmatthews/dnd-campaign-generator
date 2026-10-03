@@ -68,10 +68,19 @@ if _node:
     FAST_SUITES.append(
         ("studio-js-toast", [_node,
                              "studio/tests/js/test_sim_toast.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-design", [_node,
+                              "studio/tests/js/test_design_feedback.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-prep", [_node,
+                            "studio/tests/js/test_prep_feedback.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-api-timeout", [_node,
+                                   "studio/tests/js/test_api_timeout.cjs"]))
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
           "handoff/sessions/staging/durations/world/sessions-tab/banners/"
-          "toast) suites")
+          "toast/design/prep/api-timeout) suites")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").

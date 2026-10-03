@@ -249,7 +249,62 @@
      The design fills the create form below; NOTHING is created or staged
      until Create simulation is clicked (the unchanged free path), and the
      secret drafts stay out of the faction rows — they are proposed DM-only
-     knowledge facts for the Knowledge tab, after the sandbox exists. */
+     knowledge facts for the Knowledge tab, after the sandbox exists.
+
+     The endpoint is synchronous BY DESIGN (its docstring, ticket 15), and
+     a wedged provider used to turn that into a silent wedge: the buttons
+     sat dimmed with no other state change, the disabled-guard swallowed
+     every re-click, and a reload-and-retry started a SECOND server-side
+     pass (duplicate spend). Three pieces of client-side honesty fix that
+     without touching the sync architecture — a live elapsed line, a
+     talking guard, and a reload marker (found 2026-10-03). */
+
+  // The server's own worst case: at most two llm_client.complete() calls
+  // (the pass + one bounded re-ask), each 3 attempts x 300 s — ~30 min.
+  // The client ceiling must sit ABOVE it so it never kills a legal pass;
+  // it only fires when the request is wedged beyond every server timeout.
+  S.DESIGN_TIMEOUT_MS = 35 * 60 * 1000;
+  // how long a reload marker stays believable (a little past the ceiling)
+  S.DESIGN_STALE_MS = 45 * 60 * 1000;
+
+  /* Pure — "1m 05s" for the elapsed line and the reload warning. Pinned
+     by studio/tests/js/test_design_feedback.cjs. */
+  S.designElapsed = function (ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(s / 60);
+    return m ? m + 'm ' + String(s % 60).padStart(2, '0') + 's' : s + 's';
+  };
+
+  /* Pure — the reload warning for a possibly-still-running pass, or null
+     when there is nothing to warn about (no marker, another campaign,
+     garbage, or past the believable window). Pinned by
+     studio/tests/js/test_design_feedback.cjs. */
+  S.designInflightWarning = function (marker, camp, now) {
+    if (!marker || marker.camp !== camp) return null;
+    if (typeof marker.at !== 'number') return null;
+    const age = now - marker.at;
+    if (!(age >= 0) || age > S.DESIGN_STALE_MS) return null;
+    return 'A design pass was started ' + S.designElapsed(age) + ' ago. ' +
+      'If it is still running, clicking Design now starts a SECOND pass ' +
+      'and spends credits twice — wait for this to age out first.';
+  };
+
+  const DESIGN_MARK_KEY = 'studio-design-inflight';
+  function markDesignStart() {
+    try {
+      sessionStorage.setItem(DESIGN_MARK_KEY, JSON.stringify(
+        { camp: S.state.campaign, at: Date.now() }));
+    } catch (_) {}
+  }
+  // cleared only when the SERVER answered — a timeout or a dropped
+  // connection leaves the marker up, because the pass may still be running
+  function clearDesignMark() {
+    try { sessionStorage.removeItem(DESIGN_MARK_KEY); } catch (_) {}
+  }
+  function readDesignMark() {
+    try { return JSON.parse(sessionStorage.getItem(DESIGN_MARK_KEY)); }
+    catch (_) { return null; }
+  }
 
   function copyHint(text) {
     const done = () => S.toast('Copied — paste it where you want it.', 'ok');
@@ -327,6 +382,7 @@
             '<span class="muted form-note">One metered LLM pass — it spends a ' +
               'little API credit and fills the form below.</span>' +
           '</div>' +
+          '<div class="design-status"></div>' +
           '<div class="design-error"></div>' +
           '<div class="design-result"></div>' +
         '</div>' +
@@ -364,6 +420,27 @@
     const regenBtn = panel.querySelector('.design-regenerate');
     const designErr = panel.querySelector('.design-error');
     const designResult = panel.querySelector('.design-result');
+    const designStatus = panel.querySelector('.design-status');
+
+    // a reload during a pass abandons the fetch but NOT the server-side
+    // work — the marker (kept on any non-answer, cleared only when the
+    // server responded) turns that into a warning on the fresh panel
+    const inflight = S.designInflightWarning(
+      readDesignMark(), S.state.campaign, Date.now());
+    if (inflight) {
+      const warn = S.el(
+        '<div class="design-inflight" role="status">' +
+          '<p class="panel-note">' + S.esc(inflight) + '</p>' +
+          '<button type="button" class="btn design-inflight-ignore">' +
+            'Nothing is running — dismiss</button>' +
+        '</div>');
+      warn.querySelector('.design-inflight-ignore')
+        .addEventListener('click', () => {
+          clearDesignMark();
+          warn.remove();
+        });
+      designStatus.appendChild(warn);
+    }
 
     function setFactionRows(factions) {
       host.innerHTML = '';
@@ -407,7 +484,13 @@
     }
 
     async function runDesign() {
-      if (designBtn.disabled) return;
+      if (designBtn.disabled) {
+        // the guard used to be a silent return — a re-click during a long
+        // pass read exactly like a dead button
+        S.toast('A design pass is already running — the form is waiting ' +
+          'on it. Watch the elapsed line under the buttons.', 'info');
+        return;
+      }
       const premise = panel.querySelector('.design-premise').value.trim();
       if (!premise) {
         S.toast('Describe the tension first — one paragraph is enough.', 'error');
@@ -416,17 +499,52 @@
       designBtn.disabled = true;
       regenBtn.disabled = true;
       designErr.innerHTML = '';
+      designResult.innerHTML = '';
+      markDesignStart();
+      const startedAt = Date.now();
+      const tick = S.el('<p class="panel-note design-elapsed" role="status"></p>');
+      const renderTick = () => {
+        tick.textContent = 'Designing the sandbox… ' +
+          S.designElapsed(Date.now() - startedAt) + ' elapsed. One metered ' +
+          'LLM pass — a slow provider can take 10+ minutes. Reloading ' +
+          'abandons the WAIT, not the pass.';
+      };
+      renderTick();
+      designStatus.innerHTML = '';
+      designStatus.appendChild(tick);
+      const tickTimer = setInterval(renderTick, 1000);
+      const stopTick = () => {
+        clearInterval(tickTimer);
+        designStatus.innerHTML = '';
+      };
       const places = panel.querySelector('.design-places').value.split(',')
         .map((s) => s.trim()).filter(Boolean);
       try {
         const r = await S.api(S.campUrl('/simulation/design'), {
-          method: 'POST', body: { premise: premise, places: places }
+          method: 'POST', body: { premise: premise, places: places },
+          timeoutMs: S.DESIGN_TIMEOUT_MS
         });
+        clearDesignMark();
+        stopTick();
         applyDesign(r, places);
         regenBtn.classList.remove('hidden');
       } catch (err) {
+        stopTick();
+        // a real server answer (success or error) ends the pass; a timeout
+        // or a dropped connection does not — the marker stays as a warning
+        if (!(err && err.timedOut)) clearDesignMark();
         designErr.innerHTML = '';
-        designErr.appendChild(S.errorPanel(err));
+        if (err && err.timedOut) {
+          designErr.appendChild(S.errorPanel(
+            { status: 504,
+              error: 'Gave up waiting after ' +
+                S.designElapsed(S.DESIGN_TIMEOUT_MS) + '.' },
+            'The pass is NOT cancelled — it may still finish and fill the ' +
+            'form on a later reload. Do not re-click Design right away: a ' +
+            'second pass spends credits twice.'));
+        } else {
+          designErr.appendChild(S.errorPanel(err));
+        }
       } finally {
         designBtn.disabled = false;
         regenBtn.disabled = false;

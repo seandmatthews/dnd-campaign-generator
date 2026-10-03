@@ -377,6 +377,35 @@
     return panel;
   }
 
+  /* ---------- next-session prep feedback ----------
+     The write used to answer with ONE 4.2 s toast, after a multi-second
+     git snapshot — miss the toast and the only trace was a new file in
+     the vault (found 2026-10-03). The write now also lands as a
+     persistent line in the panel, linked to the written file, and the
+     line survives tab re-renders via sessionStorage keyed by campaign. */
+
+  const PREP_STORE_KEY = 'studio-prep-last';
+
+  function readPrepStore() {
+    try {
+      const rec = JSON.parse(sessionStorage.getItem(PREP_STORE_KEY));
+      return (rec && rec.camp === S.state.campaign) ? rec : null;
+    } catch (_) { return null; }
+  }
+
+  /* Pure — the persistent confirmation line for one prep write record
+     {camp, file, committed, at}. The file path sits verbatim right after
+     "Prep written: " so the panel render can split the line around it and
+     link just the path. Pinned by studio/tests/js/test_prep_feedback.cjs. */
+  S.prepStoredLine = function (rec) {
+    if (!rec || !rec.file) return '';
+    const when = (typeof rec.at === 'number')
+      ? ' at ' + new Date(rec.at).toTimeString().slice(0, 5) : '';
+    return 'Prep written: ' + rec.file +
+      (rec.committed ? ' — snapshot committed' : ' — snapshot NOT committed') +
+      when + '. A re-run takes the next free -N name, never overwrites.';
+  };
+
   function statusMark(status) {
     if (status === 'pending') {
       return ' <span class="pill pill-stale">proposed, NOT canon</span>';
@@ -430,12 +459,34 @@
           '<a class="btn briefing-markdown" target="_blank" rel="noopener">Markdown</a>' +
           '<button type="button" class="btn btn-primary briefing-prep">Next session prep</button>' +
         '</div>' +
+        '<div class="prep-status"></div>' +
         '<div class="briefing-body"><p class="loading">Building&hellip;</p></div>' +
       '</section>');
     const body = panel.querySelector('.briefing-body');
     const since = panel.querySelector('.briefing-since');
     const focus = panel.querySelector('.briefing-focus');
     const mdLink = panel.querySelector('.briefing-markdown');
+    const prepStatus = panel.querySelector('.prep-status');
+
+    // the persistent confirmation: prepStoredLine's copy with the file
+    // path split out and linked (opens the written page from the vault)
+    function renderPrepLine(rec) {
+      prepStatus.innerHTML = '';
+      const line = S.prepStoredLine(rec);
+      if (!line) return;
+      const p = S.el('<p class="panel-note prep-written"></p>');
+      const at = line.indexOf(rec.file);
+      p.appendChild(document.createTextNode(line.slice(0, at)));
+      const a = document.createElement('a');
+      a.href = S.fileUrl(rec.file);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = rec.file;
+      p.appendChild(a);
+      p.appendChild(document.createTextNode(line.slice(at + rec.file.length)));
+      prepStatus.appendChild(p);
+    }
+    renderPrepLine(readPrepStore());
 
     async function load() {
       body.innerHTML = '';
@@ -470,20 +521,43 @@
        -N name instead of overwriting. */
     panel.querySelector('.briefing-prep').addEventListener('click', async (ev) => {
       const btn = ev.currentTarget;
+      if (btn.disabled) return;
       btn.disabled = true;
+      const idleLabel = btn.textContent;
+      btn.textContent = 'Writing prep…';
+      prepStatus.innerHTML = '';
+      // immediate state: the server takes the lock, writes, then commits
+      // the git snapshot — seconds of dead air without this line
+      prepStatus.appendChild(S.el(
+        '<p class="panel-note prep-writing">Writing the prep page — ' +
+        'compiling the briefing into one vault file, then committing the ' +
+        'history snapshot. A few seconds.</p>'));
       try {
         const out = await S.api(S.campUrl('/prep?since_week=' +
           encodeURIComponent(since.value || '0')), { method: 'POST', body: {} });
         const snap = out.snapshot || {};
-        const committed = snap.state === 'committed';
+        const rec = {
+          camp: S.state.campaign,
+          file: out.file,
+          committed: snap.state === 'committed',
+          at: Date.now()
+        };
+        try {
+          sessionStorage.setItem(PREP_STORE_KEY, JSON.stringify(rec));
+        } catch (_) {}
+        renderPrepLine(rec);
         S.toast('Wrote ' + out.file + ' into the vault' +
-          (committed ? ' — snapshot ' + snap.commit + ' committed.' : '.') +
+          (rec.committed ? ' — snapshot ' + snap.commit + ' committed.' : '.') +
           ' A re-run never overwrites it.', 'ok');
       } catch (err) {
+        prepStatus.innerHTML = '';
+        prepStatus.appendChild(S.errorPanel(err, 'The prep write failed — ' +
+          'check the vault (lore/prep/) before re-clicking.'));
         S.toast('Prep could not be written' +
           (err && err.error ? ': ' + err.error : '') + '.', 'error');
       } finally {
         btn.disabled = false;
+        btn.textContent = idleLabel;
       }
     });
 
