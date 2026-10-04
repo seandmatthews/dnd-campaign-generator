@@ -183,7 +183,7 @@ def _apply_upsert(name: str, doc: dict, faction_ids: set, *, fact_id=None,
     if subjects is not None:
         fact["subjects"] = [str(s) for s in subjects]
     if place_ids is not None:
-        # the places this fact is ABOUT (place-centered-campaign-view.md):
+        # the places this fact is ABOUT (the place-centered view):
         # structured join metadata alongside the free-text subjects. Ids are
         # not checked against a registry here — the store must work before
         # any place page exists; the place view reports unknown ids as

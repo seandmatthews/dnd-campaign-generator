@@ -1,6 +1,6 @@
 """Faction projects: the pure rules, the week application, and the CLI.
 
-Acceptance tests from docs/plans/faction-projects.md, engine side.
+Acceptance tests from the faction-projects plan (shipped 2026-09-28), engine side.
 Zero dependencies — run directly:  python tests/test_projects.py
 """
 

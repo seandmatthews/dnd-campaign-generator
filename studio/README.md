@@ -6,7 +6,7 @@ and write campaign folders full of YAML. No database, no accounts, no
 internet required: the server binds `127.0.0.1`, and a campaign is one
 directory you can zip and move.
 
-New here? Follow [`TUTORIAL.md`](../TUTORIAL.md) (served live at
+New here? Follow [`TUTORIAL.md`](../docs/for-new-gms/TUTORIAL.md) (served live at
 `/tutorial` once the app runs) — it walks a first campaign end to end.
 The **?** button in the app header has the short version, and on boot the
 page shows a setup strip whenever the doctor finds something missing.
@@ -138,7 +138,7 @@ Work through the app, or copy the state back into the campaign yourself.
 - **World Building** — the campaign's grounding: geography, timeline,
   entities, naming voice. Entities are markdown pages
   (`lore/entities/One Page Per Entity.md`, wiki-links as relationships —
-  obsidian-integration.md §1); click a row to read the page with its
+  docs/design/obsidian-integration.md §1); click a row to read the page with its
   backlinks ("mentioned in"). Generates backstory entries that are
   constrained to those files, staged as *pending* lore. Missing a culture's
   name seed list? The name helper offers to stage one from the page.

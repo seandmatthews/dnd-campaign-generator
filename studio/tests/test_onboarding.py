@@ -1,7 +1,8 @@
 """The onboarding wave: create-a-simulation from the UI, staging a name
 seed list, the /tutorial route, and the doctor's quick mode.
 
-These cover the first-campaign path a newcomer walks (TUTORIAL.md): a
+These cover the first-campaign path a newcomer walks
+(docs/for-new-gms/TUTORIAL.md): a
 fresh campaign has no simulation/state.yaml and no names-<culture>.txt —
 until now there was no way to create either from the app.
 """
@@ -238,7 +239,7 @@ def test_stage_style_rejects_bad_filenames(client, tmp_spine_root, fresh_campaig
 
 # --------------------------------------------------------- /tutorial route
 
-def test_tutorial_route_serves_repo_readme_sibling(client):
+def test_tutorial_route_serves_the_real_file(client):
     from conftest import STUDIO_DIR
     r = client.get("/tutorial")
     assert r.status_code == 200
@@ -246,7 +247,8 @@ def test_tutorial_route_serves_repo_readme_sibling(client):
     body = r.text
     assert "first campaign" in body.lower()
     # the route reads the real file, never a copy
-    disk = (STUDIO_DIR.parent / "TUTORIAL.md").read_text(encoding="utf-8")
+    disk = (STUDIO_DIR.parent / "docs" / "for-new-gms" / "TUTORIAL.md").read_text(
+        encoding="utf-8")
     assert body == disk
 
 

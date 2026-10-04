@@ -1,7 +1,7 @@
 # Campaign Studio — REST + frontend contract (v1)
 
 The single coordination artifact for everyone building studio pieces.
-The design doc is `../campaign-studio-design.md` (decisions D1–D7,
+The design doc is `../docs/design/campaign-studio-design.md` (decisions D1–D7,
 iterations M0–M5, guardrails). This file adds exact API shapes on top of it.
 If code and this file disagree, fix the code or update this file in the same
 change — never let them drift.
@@ -793,8 +793,8 @@ shapes in this document true.
 - `GET /api/doctor?quick=1` → same shape, but the LLM key check is
   presence-only (no live probe, no tokens, no network wait) — what the
   page's setup strip polls on boot.
-- `GET /tutorial` → the repo-root `TUTORIAL.md` as `text/plain` (the help
-  modal links here); 404 with a pointer to the repo root if the file is
+- `GET /tutorial` → `docs/for-new-gms/TUTORIAL.md` as `text/plain` (the help
+  modal links here); 404 with a pointer to docs/for-new-gms/ if the file is
   missing.
 
 ### Shared file shapes

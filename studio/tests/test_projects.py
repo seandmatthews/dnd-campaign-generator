@@ -1,6 +1,6 @@
 """Faction projects through the studio: staging, review, acceptance.
 
-The DM workflow from docs/plans/faction-projects.md:
+The DM workflow from the faction-projects plan (shipped 2026-09-28):
   1. prepare typed operations -> a project_changes proposal (no LLM spend);
   2. nothing in the campaign changes until the proposal is accepted;
   3. acceptance applies through the engine's own rules, exactly once;

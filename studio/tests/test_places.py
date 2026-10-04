@@ -1,5 +1,5 @@
-"""Place-centered campaign view tests (docs/plans/place-centered-campaign-
-view.md acceptance list, the deterministic slice).
+"""Place-centered campaign view tests (the plan's acceptance list, the
+deterministic slice, shipped 2026-09-28).
 
 Covers: lore-only places read with no simulation; legacy-city campaigns
 read without writing; suggested joins never merge on name alone; the Link

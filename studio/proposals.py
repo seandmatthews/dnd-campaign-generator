@@ -349,7 +349,7 @@ def diff_states(before: dict, after: dict, entries: list) -> dict:
                 {"week": e.get("week"), "actor": e.get("actor"),
                  "text": str(e.get("text") or ""),
                  "source": e.get("source"), "effect": e.get("effect"),
-                 # explicit event locations (place-centered-campaign-view.md):
+                 # explicit event locations (the place-centered view):
                  # the place page's pending section joins on these — never on
                  # the actor's current place
                  "place_ids": [str(x) for x in (e.get("place_ids") or [])]})

@@ -13,7 +13,9 @@ one of: `proposed`, `in-progress`, `superseded`, `completed`, `abandoned`
 `docs/tickets/archive/` in the same change; `proposed` and `in-progress`
 tickets stay in `docs/tickets/`. There is no tickets index — the status
 line in each file is the record. Format, numbering, and the rest of the
-conventions (with the template): `docs/tickets/CONVENTIONS.md`.
+conventions (with the template): `docs/tickets/CONVENTIONS.md`. The
+implement → verify → review → merge loop, test tiers and traps, and
+severity definitions: `docs/WORKFLOW.md`.
 
 ## Kill dev processes when work concludes
 

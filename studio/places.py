@@ -1,4 +1,4 @@
-"""Place-centered campaign view (docs/plans/place-centered-campaign-view.md).
+"""Place-centered campaign view (shipped 2026-09-28; the plan is retired).
 
 One deterministic read model that answers the DM's real question when the
 party is headed somewhere: "what is here, what changed, and what needs my
@@ -294,7 +294,7 @@ def _page_snapshot(path: Path, expected: str | None) -> tuple[str, str, str]:
 def _map_attachments(name: str) -> list[dict]:
     """Every map attachment with its explicit/implicit place references:
     the companion note's `place:` wiki-link (the human-readable join) and
-    `place_id:` (the precise one, place-centered-campaign-view.md)."""
+    `place_id:` (the precise one, the place-centered view)."""
     d = spine.campaign_dir(name)
     out = []
     for map_kind, scale in (("cities", "city map"), ("sites", "battlemap")):

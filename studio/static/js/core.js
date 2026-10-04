@@ -727,7 +727,7 @@
             'expected duration before it starts. Full walkthrough with ' +
             'troubleshooting: ' +
             '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
-            '(also at <code>TUTORIAL.md</code> in the repo). Something not ' +
+            '(also at <code>docs/for-new-gms/TUTORIAL.md</code> in the repo). Something not ' +
             'booting? Run <code>python studio/doctor.py</code>.</p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-primary" data-act="close">Close</button>' +
@@ -995,7 +995,7 @@
   // gave it one home): every NUMBER the UI shows about how long something
   // takes reads from here, so a re-measured estimate is updated once.
   // 'a few minutes' stays prose in place — it carries no number that can
-  // contradict another string. TUTORIAL.md mirrors these in prose.
+  // contradict another string. docs/for-new-gms/TUTORIAL.md mirrors these in prose.
   Studio.DURATIONS = {
     minutesPerWeek: 10,   // the honest midpoint; the band is half-to-full
     band: function (weeks) {

@@ -1,8 +1,7 @@
 # Session notes to reviewed campaign changes
 
-Status: implementation specification, not implemented by this document. Written 2026-09-27 against the current working tree, including its in-progress multi-place support. Re-check interfaces before coding; do not revert unrelated edits to match this plan.
+Status: implemented 2026-09-29 (sessions store, session_changes proposals, bounded LLM extraction, Sessions tab, CLI) — except one item: the session-editor place picker (the server accepts place_ids; the create form does not yet expose them). Written 2026-09-27; re-check interfaces before coding the remainder.
 
-Related plans: [Faction projects](faction-projects.md), [Place-centered campaign view](place-centered-campaign-view.md).
 
 ## Outcome
 

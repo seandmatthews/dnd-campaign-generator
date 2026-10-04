@@ -1,7 +1,7 @@
 """Phase 1: revision checks, recoverable multi-file publication, receipts,
 and visible snapshot status.
 
-Behavior under test (IMPLEMENTATION-HANDOFF.md Phase 1):
+Behavior under test (Phase 1 of the original implementation handoff):
 - a revision is sha256 of exact bytes with an explicit absent sentinel;
   creating/deleting a source page invalidates a generated draft's
   directory fingerprint;

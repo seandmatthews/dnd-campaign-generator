@@ -57,7 +57,7 @@ class FactBody(BaseModel):
     # from). A real campaign week is >= 1 — the form's min is advisory,
     # the route is the gate (ticket 14)
     week: int | None = None
-    # place ids this fact is about (place-centered-campaign-view.md)
+    # place ids this fact is about (the place-centered view)
     place_ids: list[str] | None = None
     id: str | None = None        # present = update the existing fact
 

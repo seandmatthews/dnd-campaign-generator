@@ -158,7 +158,7 @@ def build_stage(node_zip):
         shutil.rmtree(p) if p.is_dir() else p.unlink()
     (worlds / "raw").mkdir(exist_ok=True)
     copy_tree(REPO / "verification", STAGE / "verification")
-    shutil.copy2(REPO / "TUTORIAL.md", STAGE / "TUTORIAL.md")
+    shutil.copy2(REPO / "docs" / "for-new-gms" / "TUTORIAL.md", STAGE / "TUTORIAL.md")
     shutil.copy2(REPO / "llm.env.example", STAGE / "llm.env.example")
 
     (STAGE / "campaigns" / ".locks").mkdir(parents=True)

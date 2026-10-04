@@ -715,7 +715,7 @@ def parse_entity_page(path: Path) -> dict:
         "body": body.strip(),
         "file": f"lore/entities/{path.name}",
     }
-    # place-view identity fields (place-centered-campaign-view.md): present
+    # place-view identity fields (the place-centered view): present
     # on place pages, absent (None/[]) everywhere else. The full raw
     # frontmatter is NOT carried — PATCH round-trips preserve unknown keys
     # via the places module's own raw reader instead.

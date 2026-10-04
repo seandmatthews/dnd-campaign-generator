@@ -127,13 +127,13 @@ for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, 
 
 @app.get("/tutorial", response_class=PlainTextResponse)
 def tutorial():
-    """The first-campaign walkthrough, served straight from the repo root —
+    """The first-campaign walkthrough, served from docs/for-new-gms/ —
     the help modal links here; one file, never a stale copy."""
-    path = STUDIO_DIR.parent / "TUTORIAL.md"
+    path = STUDIO_DIR.parent / "docs" / "for-new-gms" / "TUTORIAL.md"
     if not path.is_file():
         raise StarletteHTTPException(
-            404, "TUTORIAL.md is missing from the repo root — it lives "
-                 "next to README.md")
+            404, "TUTORIAL.md is missing — it lives at "
+                 "docs/for-new-gms/TUTORIAL.md")
     return PlainTextResponse(path.read_text(encoding="utf-8"))
 
 

@@ -13,7 +13,9 @@ tested on its own; the studio is the only one that invokes the others.
 
 ## Start here
 
-- **New here? Follow [`TUTORIAL.md`](TUTORIAL.md)** — from zero to a
+- **New here? Everything a human needs lives in
+  [`docs/for-new-gms/`](docs/for-new-gms/). Start with
+  [`the tutorial`](docs/for-new-gms/TUTORIAL.md)** — from zero to a
   living campaign (world, maps, lore, a simulated week): days or weeks of
   world history, compressed into a couple of hours at the keyboard, with
   a "you should see" checkpoint at every step and each long step's
@@ -34,7 +36,7 @@ tested on its own; the studio is the only one that invokes the others.
 - **Run every test:** `python run-tests.py` (fast tier, seconds) or
   `python run-tests.py --all` (adds the real-engine integration tier).
   CI runs the fast tier on push (`.github/workflows/ci.yml`).
-- **The design doc:** [`campaign-studio-design.md`](campaign-studio-design.md)
+- **The design doc:** [`docs/design/campaign-studio-design.md`](docs/design/campaign-studio-design.md)
   — the spine (campaign = a directory of files), the cross-tab contracts,
   and the guardrails (CLI equivalence, fed-or-refused, nothing lands
   unreviewed).

@@ -1,5 +1,6 @@
 # 35 — campaign-data root: one gitignored home for all runtime data
 
+**Status:** proposed — written 2026-10-04, not started.
 **Priority:** P2 (layout/hygiene — no product behavior change, but it closes
 the whole "data lands in tracked space" class)
 **Area:** `studio/spine.py`, `studio/engines.py`, `studio/doctor.py`,
