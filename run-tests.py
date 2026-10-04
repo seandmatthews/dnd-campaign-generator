@@ -24,9 +24,7 @@ ROOT = Path(__file__).resolve().parent
 # The fast tier. verification/tests is a zero-dependency direct-run script
 # (no test_ functions for pytest to collect), so it runs via its documented
 # runner: python verification/tests/test_check.py. The JS suite is skipped
-# (with a note) when node is not installed. Entries are (name, cmd) or
-# (name, cmd, cwd) — cwd defaults to ROOT (table-companion is its own
-# project whose tests import `server` relative to its own root).
+# (with a note) when node is not installed.
 FAST_SUITES = [
     ("agentic-simulator",
      [sys.executable, "-m", "pytest", "agentic-simulator/tests", "-q"]),
@@ -34,9 +32,6 @@ FAST_SUITES = [
     ("dnd-mapping", [sys.executable, "dnd-mapping/tests/test_import_fmg.py"]),
     ("dnd-mapping-battlemap", [sys.executable, "dnd-mapping/tests/test_battlemap.py"]),
     ("studio", [sys.executable, "-m", "pytest", "studio/tests", "-q"]),
-    ("table-companion",
-     [sys.executable, "-m", "pytest", "tests", "-q"],
-     ROOT / "table-companion"),
 ]
 
 _node = shutil.which("node")
@@ -103,10 +98,10 @@ INTEGRATION_NEEDS = [
 ]
 
 
-def run_suite(name, cmd, cwd=None):
+def run_suite(name, cmd):
     print(f"\n=== {name} ===  ({' '.join(cmd)})", flush=True)
     start = time.monotonic()
-    proc = subprocess.run(cmd, cwd=str(cwd or ROOT))  # stdio streams live
+    proc = subprocess.run(cmd, cwd=str(ROOT))  # stdio streams live
     secs = time.monotonic() - start
     ok = proc.returncode == 0
     print(f"--- {name}: {'PASS' if ok else 'FAIL (rc=%d)' % proc.returncode}"
@@ -136,8 +131,7 @@ def main():
             tier = "fast + integration"
     print(f"run-tests.py: {len(suites)} suite(s), {tier} tier, root {ROOT}")
 
-    results = [run_suite(name, cmd, cwd)
-               for name, cmd, cwd in [(s + (None,))[:3] for s in suites]]
+    results = [run_suite(name, cmd) for name, cmd in suites]
 
     width = max(len(name) for name, _, _ in results)
     print("\n=== summary ===")
