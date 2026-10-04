@@ -1,6 +1,7 @@
 # 39 — Frontend honesty polish: strip, logs, and copy drift from the 2026-10-04 pass
 
-**Status:** proposed
+**Status:** completed — implemented + verified 2026-10-04, fast tier green,
+manual click-through done (see Implementation notes).
 **Priority:** P3 (each item individually small; all are "what the UI claims ≠ what is true")
 **Area:** `studio/static/js/` (sim.js, maps.js, core.js), `studio/static/index.html`
 **Found by:** computer-use first-DM pass, 2026-10-04

@@ -36,11 +36,21 @@
         boxEl.textContent = '';
       },
       push(line) {
-        boxEl.textContent += String(line == null ? '' : line) + '\n';
+        boxEl.textContent += stripAnsi(String(line == null ? '' : line)) + '\n';
         boxEl.scrollTop = boxEl.scrollHeight;
       }
     };
   };
+
+  // The headless generators color their console output; the job logs stream
+  // the raw lines, and a <pre> renders the SGR codes as visible "[32m[39m"
+  // junk (ticket 39b). Strip real CSI sequences AND the stripped-ESC
+  // leftovers ("[32m") — one choke point for every log box in the app.
+  const ANSI_RE = /\u001b\[[0-9;]*[A-Za-z]|\[[0-9;]{1,8}m/g;
+  function stripAnsi(s) {
+    return s.replace(ANSI_RE, '');
+  }
+  Studio.stripAnsi = stripAnsi;
 
   // The one job-run flow shared by every form that POSTs a job: disable the
   // button, clear the error box, open the log, POST, poll (log lines pushed
@@ -276,6 +286,11 @@
       if (est) parts.push(' <span class="muted">(' + esc(etaText(est)) + ')</span>');
     }
     (snap.queued || []).forEach((j) => {
+      // a cancelled-while-queued job stays in the queue's pending list
+      // until its turn would come — the API marks it status "cancelled"
+      // (with no position); rendering it as "Queued (position ?)" was a
+      // lie the toast had already corrected (ticket 39a)
+      if (j && j.status && j.status !== 'queued') return;
       const pos = (j.position != null) ? j.position : '?';
       parts.push('<strong>Queued:</strong> ' + esc(j.kind) +
         ' <span class="muted">(position ' + esc(String(pos)) + ')</span>');
@@ -516,13 +531,18 @@
 
   /* ---------- modal + toasts ---------- */
 
-  function confirmRun(message) {
+  // The modal header states what the click does: spenders keep the
+  // credits header; accepts/discards/staging pass their own — "This
+  // costs real credits" on an accept was a false claim (the meter never
+  // moves) (ticket 39d).
+  function confirmRun(message, title) {
     return new Promise((resolve) => {
       const root = document.getElementById('modal-root');
       const overlay = el(
         '<div class="modal-overlay">' +
           '<div class="modal" role="dialog" aria-modal="true" aria-label="Confirm">' +
-            '<h3 class="modal-title">This costs real credits</h3>' +
+            '<h3 class="modal-title">' +
+              esc(title || 'This costs real credits') + '</h3>' +
             '<p class="modal-body">' + esc(message) + '</p>' +
             '<div class="modal-actions">' +
               '<button type="button" class="btn" data-act="cancel">Cancel</button>' +
@@ -729,6 +749,11 @@
             '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
             '(also at <code>docs/for-new-gms/TUTORIAL.md</code> in the repo). Something not ' +
             'booting? Run <code>python studio/doctor.py</code>.</p>' +
+          '<p class="modal-body"><strong>Export</strong> is a command, not a ' +
+            'button: <code>python studio/export_campaign.py &lt;campaign&gt;</code> ' +
+            'writes a zip of the whole campaign (with a hash manifest). The ' +
+            'Foundry-ready <code>.uvtt</code> files drop from the Maps tab as ' +
+            'each map finishes.</p>' +
           '<div class="modal-actions">' +
             '<button type="button" class="btn btn-primary" data-act="close">Close</button>' +
           '</div>' +
@@ -833,7 +858,12 @@
     const select = document.getElementById('campaign-select');
     try {
       const data = await api('/api/campaigns');
-      const list = (data && Array.isArray(data.campaigns)) ? data.campaigns : [];
+      // display order, not slug order — "The Cinder Vale" sorted last
+      // under "R" was slug sorting showing through (ticket 39f)
+      const list = ((data && Array.isArray(data.campaigns)) ? data.campaigns : [])
+        .slice()
+        .sort((a, b) => String(a.title || a.name)
+          .localeCompare(String(b.title || b.name)));
       Studio.state.campaigns = list;
       select.innerHTML = '';
       if (!list.length) {
@@ -1033,6 +1063,8 @@
   Studio.helpModal = helpModal;
   Studio.loading = loading;
   Studio.showTab = showTab;
+  // exposed for studio/tests/js/test_campaign_select_order.cjs (39f/g)
+  Studio.refreshCampaigns = refreshCampaigns;
 
   document.addEventListener('DOMContentLoaded', init);
 }());

@@ -58,6 +58,34 @@ async function main() {
     return null;
   });
 
+  await ok('the seed that made the current world stays visible (ticket 39e)', async () => {
+    // geography.yaml records the seed, but after a reload the Seed input
+    // is empty and no surface named what made the world — the Maps panel
+    // now shows it next to the generate form
+    installFetch([
+      { method: 'GET', match: (u) => /\/geography$/.test(u),
+        reply: () => ({ meta: { seed: '12345' }, nations: [],
+                        major_settlements: [] }) }
+    ]);
+    const sec = await renderMaps();
+    const note = sec.querySelector('.current-seed-note');
+    assert.ok(note, 'the seed note rendered');
+    assert.ok(note.textContent.includes('12345'),
+      'the note names the seed: ' + JSON.stringify(note.textContent));
+    return null;
+  });
+
+  await ok('no seed note when there is no world yet', async () => {
+    installFetch([
+      { method: 'GET', match: (u) => /\/geography$/.test(u),
+        reply: () => ({ __status: 404, error: 'none' }) }
+    ]);
+    const sec = await renderMaps();
+    assert.strictEqual(sec.querySelector('.current-seed-note'), null,
+      'a campaign with no geography has no seed to show');
+    return null;
+  });
+
   await ok('a real seed still submits the job exactly as before', async () => {
     installFetch([
       { method: 'GET', match: (u) => /\/geography$/.test(u),

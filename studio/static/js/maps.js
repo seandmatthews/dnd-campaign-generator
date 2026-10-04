@@ -356,7 +356,15 @@
     setVal('opt-south', temps.south_pole);
   }
 
-  function worldGenForm(hasGeography) {
+  function worldGenForm(geoData) {
+    const hasGeography = !!geoData;
+    // the seed that made the CURRENT world — geography.yaml records it,
+    // but nothing surfaced it after the input cleared on reload (39e)
+    const currentSeed = (geoData && geoData.meta && geoData.meta.seed)
+      ? '<p class="muted form-note current-seed-note">This world came from ' +
+        'seed <strong>' + S.esc(String(geoData.meta.seed)) + '</strong> &mdash; ' +
+        'the seed drove every roll; the same seed regenerates the same map.</p>'
+      : '';
     const wrap = S.el(
       '<div class="form-block">' +
         '<form class="inline-form">' +
@@ -387,7 +395,8 @@
         (hasGeography
           ? '<p class="muted form-note">This campaign already has a generated world. Regenerating ' +
             'replaces <code>world/source.*</code> and <code>world/geography.yaml</code> &mdash; existing ' +
-            'city maps and lore keep naming the old world. Without force, the server refuses (409).</p>'
+            'city maps and lore keep naming the old world. Without force, the server refuses (409).</p>' +
+            currentSeed
           : '<p class="muted form-note">Type a seed, get a world: this runs a ' +
             'headless map generator — expect a few minutes, its log streaming ' +
             'below. FMG runs the genesis pipeline, ' +
@@ -605,7 +614,7 @@
     }
 
     worldSlot.innerHTML = '';
-    worldSlot.appendChild(worldGenForm(!!geoData));
+    worldSlot.appendChild(worldGenForm(geoData));
 
     burgSlot.innerHTML = '';
     const burgs = geoData

@@ -217,6 +217,37 @@ async function main() {
     }
     return null;
   });
+
+  /* ----- cancelled jobs drop off the strip (ticket 39a) ----- */
+
+  await ok('a cancelled-while-queued job is not rendered as still queued', async () => {
+    global.document = newPage();
+    // the server keeps a cancelled job in the queue's pending list until
+    // its turn would come, with status "cancelled" and no position — the
+    // strip used to render it as "Queued: map-site (position ?)" for as
+    // long as the polls kept coming
+    installFetch([
+      { method: 'GET', match: (u) => /\/jobs$/.test(u),
+        reply: () => ({ running: { id: 'j-live', kind: 'week' },
+          running_estimate: { low_s: 480, high_s: 900 },
+          queued: [
+            { id: 'j-dead', kind: 'map-site', status: 'cancelled' },
+            { id: 'j-wait', kind: 'forecast', status: 'queued', position: 1 }
+          ] }) }
+    ]);
+    S.pollQueueStrip();
+    await flush();
+    const strip = document.querySelector('.queue-strip');
+    assert.ok(strip, 'the strip rendered');
+    assert.ok(strip.textContent.indexOf('Cancelled') === -1,
+      'no cancelled label: the toast already told the DM');
+    assert.ok(strip.textContent.indexOf('map-site') === -1,
+      'the cancelled job is dropped, not mislabeled');
+    assert.ok(strip.textContent.indexOf('Queued: forecast') !== -1,
+      'the genuinely queued job still shows, with its position');
+    assert.ok(strip.textContent.indexOf('position 1') !== -1);
+    return null;
+  });
 }
 
 main().then(() => {

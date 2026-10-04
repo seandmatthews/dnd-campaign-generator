@@ -327,7 +327,7 @@
     const card = S.el(
       '<section class="panel panel-card">' +
         '<h3 class="panel-title">Generate backstory</h3>' +
-        '<p class="panel-note">One metered LLM call: a few minutes, then the entries wait in Review. Constrained to geography + existing lore; output is staged as pending, never auto-applied.</p>' +
+        '<p class="panel-note">A couple of metered LLM passes (generation + audit): a few minutes, then the entries wait in Review. Constrained to geography + existing lore; output is staged as pending, never auto-applied.</p>' +
         '<div class="form-block">' +
           '<form class="inline-form">' +
             '<label class="field grow"><span class="field-label">Focus</span>' +

@@ -78,10 +78,20 @@ if _node:
     FAST_SUITES.append(
         ("studio-js-api-timeout", [_node,
                                    "studio/tests/js/test_api_timeout.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-log-clean", [_node,
+                                 "studio/tests/js/test_maps_log_clean.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-copy-claims", [_node,
+                                   "studio/tests/js/test_copy_claims.cjs"]))
+    FAST_SUITES.append(
+        ("studio-js-campaign-select-order",
+         [_node, "studio/tests/js/test_campaign_select_order.cjs"]))
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
           "handoff/sessions/staging/durations/world/sessions-tab/banners/"
-          "toast/design/design-restore/maps-seed/prep/api-timeout) suites")
+          "toast/design/design-restore/maps-seed/prep/api-timeout/"
+          "log-clean/copy-claims/campaign-select-order) suites")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").

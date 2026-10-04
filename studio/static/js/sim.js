@@ -1001,7 +1001,8 @@
                   'state — exactly once. Completion counters reached this way ' +
                   'complete through the same rules a weekly tick uses.'
                 : 'Accepting publishes the whole proposed week into the campaign — ' +
-                  'clock, resources, chronicle, timeline — exactly once.'
+                  'clock, resources, chronicle, timeline — exactly once.',
+          'This becomes canon — no credits are spent'
         );
         if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
@@ -1031,7 +1032,8 @@
         acceptBtn.disabled = true; discardBtn.disabled = true;
         const ok = await S.confirmRun(
           'Discard this proposal? Nothing was ever written to the ' +
-          'campaign; the bundle stays as an audit receipt.'
+          'campaign; the bundle stays as an audit receipt.',
+          'Nothing was ever written'
         );
         if (!ok) { acceptBtn.disabled = false; discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
@@ -1103,7 +1105,8 @@
         discardBtn.disabled = true;
         const ok = await S.confirmRun(
           'Discard this forecast? It was never canon — the campaign has ' +
-          'not changed by one line because of it.');
+          'not changed by one line because of it.',
+          'Nothing was ever written');
         if (!ok) { discardBtn.disabled = false; return; }
         errBox.innerHTML = '';
         try {
@@ -1613,7 +1616,8 @@
   async function prepareProjectOp(project, errBox, op) {
     const ok = await S.confirmRun(
       'Stage this project operation (' + op.op + ')? Nothing changes until ' +
-      'you accept the proposal above.'
+      'you accept the proposal above.',
+      'Staging is free — accept later'
     );
     if (!ok) return;
     if (errBox) errBox.innerHTML = '';
