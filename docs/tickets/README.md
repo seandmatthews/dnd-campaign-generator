@@ -86,6 +86,18 @@ engine 243 tests). Tickets 32–33 (table-companion) are PARKED — the owner
 is not using table-companion currently; they stay here as the backlog for
 whenever that changes.
 
+## Batch 4 — user-requested layout work (35–)
+
+Tickets from direct user requests rather than a review batch.
+
+| # | ticket | priority |
+|---|---|---|
+| 35 | [Campaign-data root: one gitignored home for all runtime data](35-campaign-data-root.md) | P2 |
+
+Status: ticket 35 is OPEN (written 2026-10-04, not started). It is one
+lane: introduce `campaign-data/`, resolve every runtime-data path through
+one `CAMPAIGN_DATA_ROOT` rule, migrate once via doctor.
+
 ## Explicit non-goals (rulings, not backlog)
 
 - **No in-app lore editor. Ruled out 2026-10-01.** The answer to "where do I
