@@ -432,8 +432,16 @@
 
     form.addEventListener('submit', (ev) => {
       ev.preventDefault();
+      if (btn.disabled) return; // force-gated regen: the checkbox note explains it
       const seed = seedIn.value.trim();
-      if (!seed || btn.disabled) return;
+      if (!seed) {
+        // an empty seed used to return silently — the click read exactly
+        // like a dead button (the silent-failure class, 2026-10-03)
+        errBox.textContent = 'Type a seed first — the seed drives every roll '
+          + 'of the generator, so an empty field has nothing to run.';
+        S.toast('Type a seed first — the form needs a seed.', 'error');
+        return;
+      }
       const body = { seed: seed, force: forceTgl ? !!forceTgl.checked : false };
       const options = collectSteerOptions(wrap);
       if (options) body.options = options;

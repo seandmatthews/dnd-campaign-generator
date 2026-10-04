@@ -16,7 +16,10 @@ This module makes the sequence recoverable:
      target matching NEITHER is an external edit we never overwrite — the
      transaction is parked as a conflict and the campaign's publication-path
      writers answer 409 until the DM resolves it (apply the staged outcome,
-     or discard the transaction and keep the external bytes).
+     or discard the transaction and keep the external bytes). Applying
+     finalizes the publication: the forced bytes are git-snapshotted, the
+     transaction's bookkeeping completes, and the snapshot outcome rides
+     in the resolve answer.
   3. Receipts make approvals idempotent across retries and restarts: a
      completed approval records its API result keyed by a caller-supplied
      idempotency key; the same key returns the recorded result instead of
@@ -89,6 +92,10 @@ ABSENT = "absent"
 # conflicts (PublicationConflictError -> 409). Reads stay open: the summary
 # and review payloads report the conflict so the DM can resolve it.
 NO_SNAPSHOT_STATES = ("failed", "unavailable")
+
+# The snapshot outcomes that finish a publication's bookkeeping — the
+# complement of NO_SNAPSHOT_STATES: history recorded, or nothing differed.
+SNAPSHOT_OK_STATES = ("committed", "no_change")
 
 
 class PublicationError(Exception):
@@ -247,7 +254,13 @@ def _write_image(tx_dir: Path, kind: str, rel: str, text: str) -> None:
 
 
 def _read_image(tx_dir: Path, kind: str, rel: str) -> str:
-    return (tx_dir / kind / Path(*rel.split("/"))).read_text(encoding="utf-8")
+    """A staged image read back EXACTLY as _write_image stored it: bytes +
+    decode, never text mode — universal-newline reads fold CRLF into LF,
+    and the re-applied file would no longer hash to the manifest's
+    after-revision (recovery must reproduce the staged bytes byte for
+    byte)."""
+    return (tx_dir / kind / Path(*rel.split("/"))).read_bytes().decode(
+        "utf-8")
 
 
 def _tmp_in(target: Path) -> Path:
@@ -481,12 +494,17 @@ def publish(name: str, writes: list[dict], *, operation: str,
 
 
 def _read_live(d: Path, rel: str) -> str:
+    """The live file's exact bytes as text — no universal-newline folding,
+    so a before-image round-trips like the after-image does."""
+    p = d / Path(*rel.split("/"))
     try:
-        return (d / Path(*rel.split("/"))).read_text(encoding="utf-8")
+        data = p.read_bytes()
     except FileNotFoundError:
         return ""
+    try:
+        return data.decode("utf-8")
     except UnicodeDecodeError:
-        return (d / Path(*rel.split("/"))).read_text(encoding="latin-1")
+        return data.decode("latin-1")
 
 
 # ----------------------------------------------------------------- recovery
@@ -568,9 +586,21 @@ def _recover_campaign_locked(name: str, root: Path, out: dict) -> dict:
                     if t.get("delete"):
                         _apply_delete(target)
                     else:
-                        _apply_text(target, _read_image(tx_dir, "after",
-                                                        t["path"]))
+                        text = _read_image(tx_dir, "after", t["path"])
+                        # the staged image must hash to the manifest's
+                        # after-revision BEFORE it may overwrite anything:
+                        # a corrupt image parks as a conflict instead of
+                        # writing bytes the transaction can never complete
+                        # over
+                        if revision_of_bytes(text) != t["after"]:
+                            conflicts.append(t["path"])
+                            continue
+                        _apply_text(target, text)
                 else:
+                    conflicts.append(t["path"])
+                    continue
+                # completing requires the live bytes to BE the after-state
+                if file_revision(target) != t["after"]:
                     conflicts.append(t["path"])
         except (PublicationError, OSError) as e:
             log.error("recovery of %s could not proceed (%s) — parked", tx_id, e)
@@ -602,7 +632,7 @@ def _retry_snapshot(name: str, tx_dir: Path, manifest: dict, out: dict) -> None:
     snap = canon.snapshot_result(
         name, str(manifest.get("operation") or "campaign publication")
         + " (snapshot retry)")
-    if snap["state"] in ("committed", "no_change"):
+    if snap["state"] in SNAPSHOT_OK_STATES:
         manifest["snapshot"] = snap
         _write_json(tx_dir / "manifest.json", manifest)
         _prune(tx_dir)
@@ -613,7 +643,10 @@ def resolve(name: str, tx_id: str, resolution: str) -> dict:
     """DM decision for a conflict-parked transaction: 'apply' forces the
     staged outcome over the external edit (an explicit choice — recovery
     never does this on its own); 'discard' abandons the transaction and
-    keeps the live bytes. Caller holds the campaign lock."""
+    keeps the live bytes. Apply finalizes like any completed publication —
+    the git snapshot is taken, recorded in the manifest, and returned — so
+    the DM-forced outcome lands in the undo history instead of sitting on
+    disk uncommitted. Caller holds the campaign lock."""
     d = spine.campaign_dir(name)
     tx_dir = _tx_path(d, tx_id)
     if not tx_dir.is_dir():
@@ -635,12 +668,36 @@ def resolve(name: str, tx_id: str, resolution: str) -> dict:
         if t.get("delete"):
             _apply_delete(target)
         else:
-            _apply_text(target, _read_image(tx_dir, "after", t["path"]))
+            # same gate as recovery: a staged image that does not hash to
+            # the manifest's after-revision never touches the live bytes
+            text = _read_image(tx_dir, "after", t["path"])
+            if revision_of_bytes(text) != t["after"]:
+                raise PublicationError(
+                    f"staged image for {t['path']} does not match the "
+                    "manifest — the transaction cannot be applied; discard "
+                    "it to keep the live bytes")
+            _apply_text(target, text)
+        current = file_revision(target)
+        if current != t["after"]:
+            raise PublicationError(
+                f"verification failed for {t['path']} after apply "
+                f"(expected {t['after'][:12]}, found {current[:12]}) — the "
+                "transaction stays parked; discard it or try again")
+    import canon  # deferred: canon imports spine; publication must not
     m["status"] = "complete"
     m["conflicts"] = []
+    m["snapshot"] = canon.snapshot_result(
+        name, f"campaign/{name}: recovery apply ({tx_id})")
     _write_json(tx_dir / "manifest.json", m)
+    if m["snapshot"].get("state") in SNAPSHOT_OK_STATES:
+        _prune(tx_dir)
+    else:
+        log.warning("recovery apply %s for %s: history snapshot %s — "
+                    "payload retained for the snapshot retry",
+                    tx_id, name, m["snapshot"].get("state"))
     log.info("transaction %s applied over external edits for %s", tx_id, name)
-    return {"resolved": tx_id, "resolution": "apply"}
+    return {"resolved": tx_id, "resolution": "apply",
+            "snapshot": m["snapshot"]}
 
 
 def _prune(tx_dir: Path) -> None:
@@ -743,7 +800,7 @@ def after_snapshot(name: str, tx_id: str | None, snap: dict) -> None:
         return
     m["snapshot"] = snap
     _write_json(tx_dir / "manifest.json", m)
-    if snap.get("state") in ("committed", "no_change"):
+    if snap.get("state") in SNAPSHOT_OK_STATES:
         _prune(tx_dir)
     else:
         log.warning("publication %s: history snapshot %s — payload retained "

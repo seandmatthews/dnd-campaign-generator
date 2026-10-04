@@ -80,6 +80,12 @@ silent-wrong-write and gate classes), then the P2 tail, P3s last. Ticket 20
 and 24 each contain one explicit GM ruling (resolve overextension semantics;
 same-campaign engine queuing vs documented 409).
 
+**Status (2026-10-02, end of day):** tickets 17–31 and 34 are implemented,
+reviewed, and merged (three sweep runs, all gates green; studio 552 /
+engine 243 tests). Tickets 32–33 (table-companion) are PARKED — the owner
+is not using table-companion currently; they stay here as the backlog for
+whenever that changes.
+
 ## Explicit non-goals (rulings, not backlog)
 
 - **No in-app lore editor. Ruled out 2026-10-01.** The answer to "where do I

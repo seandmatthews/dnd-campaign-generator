@@ -361,3 +361,69 @@ def test_approve_retry_after_crash_between_publish_and_receipt(
     r2 = client.post("/api/campaign/testvale/review/approve", json=body)
     assert r2.status_code == 200 and r2.json() == r.json()
     assert len(_timeline_entries(tmp_spine_root)) == 3,         "t0003 landed exactly once across all three calls"
+
+
+# ------------------------------------------------- stale-draft advice (2026-10-03)
+
+def _stale_fingerprint_draft(tmp_spine_root, rel):
+    """A generated draft whose pinned lore/entities fingerprint went stale:
+    a page landed in the directory AFTER the draft was generated (the map
+    companion-note case). Returns the pending file path."""
+    import publication
+    d = tmp_spine_root / "testvale"
+    doc = {
+        "entries": [dict(LORE_PENDING["entries"][0], id="st1")],
+        "created": "2026-09-22T00:00:00+00:00", "focus": "",
+        "input_fingerprints": {
+            "lore/entities": publication.fingerprint_dir(
+                d / "lore" / "entities")},
+    }
+    path = _write_pending(tmp_spine_root, rel, doc)
+    # the canon under the draft moves AFTER generation
+    (d / "lore" / "entities" / "The New Arrival.md").write_text(
+        "# The New Arrival\n\nLinked in after the draft was cut.\n",
+        encoding="utf-8")
+    return path
+
+
+def test_stale_fingerprint_approve_advises_delete_and_regenerate(
+        client, tmp_spine_root):
+    """The stale-draft 409 used to say "refresh the queue, re-read, submit
+    again" — but a GENERATED draft pins its inputs, so once the canon under
+    it moved, resubmitting failed identically forever (several confused
+    clicks, 2026-10-03). The approve 409 must name the only real fix."""
+    path = _stale_fingerprint_draft(tmp_spine_root,
+                                    "lore/pending-entries-9.yaml")
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-entries-9.yaml", "all": True})
+    assert r.status_code == 409, r.json()
+    msg = r.json()["error"]
+    assert "membership changed" in msg, "the underlying cause stays named"
+    assert "delete the draft" in msg, "the only real fix is named"
+    assert "generate a fresh one" in msg
+    assert "submit again" not in msg, "the wrong advice is gone"
+    assert path.exists(), "nothing was written or removed"
+
+
+def test_stale_viewed_draft_delete_advises_refresh(client, tmp_spine_root):
+    """The delete path never pins the draft's generation inputs — its
+    stale 409 means the pending FILE changed since the DM viewed it — so
+    there the refresh-and-retry advice is the honest one (the approve
+    path's regenerate advice would be wrong here)."""
+    import publication
+    doc = dict(LORE_PENDING, entries=[
+        dict(LORE_PENDING["entries"][0], id="st1")])
+    path = _write_pending(tmp_spine_root, "lore/pending-entries-8.yaml", doc)
+    viewed = publication.file_revision(path)
+    # the pending file changes after the DM viewed it
+    path.write_text(yaml.safe_dump(dict(
+        doc, entries=[dict(doc["entries"][0], text="edited while open")]),
+        sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+    r = client.post("/api/campaign/testvale/review/delete",
+                    json={"file": "lore/pending-entries-8.yaml", "all": True,
+                          "expected_revision": viewed})
+    assert r.status_code == 409, r.json()
+    msg = r.json()["error"]
+    assert "refresh the review queue, re-read the draft, and delete" in msg
+    assert path.exists(), "nothing was written or removed"

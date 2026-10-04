@@ -80,6 +80,19 @@ ok('the warning stays silent for other campaigns, garbage, and stale marks', () 
     'a future timestamp (clock skew) is not a valid age');
 });
 
+ok('designRestoreNote describes the restored draft inside the window', () => {
+  const w = S.designRestoreNote(90 * 1000);
+  assert.ok(w, 'a 90 s-old answer restores');
+  assert.ok(/restored/.test(w), 'it says what happened: ' + w);
+  assert.ok(/form resets/.test(w), 'it explains WHY the form refilled');
+  assert.ok(/1m 30s ago/.test(w), 'it carries the age');
+  assert.strictEqual(S.designRestoreNote(S.DESIGN_STALE_MS + 1000), null,
+    'past the window a self-filling form surprises more than it helps');
+  assert.strictEqual(S.designRestoreNote(-5), null,
+    'a negative age (clock skew) is not a valid age');
+  assert.strictEqual(S.designRestoreNote('x'), null, 'garbage is refused');
+});
+
 if (failed) {
   console.log(`\n${failed} test(s) FAILED`);
   process.exit(1);

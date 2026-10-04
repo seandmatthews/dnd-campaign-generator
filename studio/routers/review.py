@@ -466,11 +466,28 @@ def _prior_result(name: str, body: ReviewBody, op: str,
     return {**result, "idempotent": True}
 
 
-def _revision_conflict_409(e: publication.RevisionConflict) -> HTTPException:
+def _revision_conflict_409(e: publication.RevisionConflict,
+                           op: str) -> HTTPException:
+    """The stale-draft 409, with advice split by operation (2026-10-03):
+    the old one-size message said "refresh the queue, re-read, submit
+    again" — but a GENERATED draft pins its inputs (byte revisions +
+    directory fingerprints), so once the canon under it moved, resubmitting
+    an approve fails identically forever; the only fix is delete +
+    regenerate. (The delete path never pins the draft's inputs — its 409
+    means the pending file changed since it was viewed — so there the
+    refresh-and-retry advice is the honest one.)"""
+    if op == "approve":
+        remedy = ("this draft was generated from canon that has since "
+                  "changed, and submitting it again cannot succeed while "
+                  "that is true: delete the draft (Delete / Delete all) "
+                  "and generate a fresh one from the current pages")
+    else:
+        remedy = ("refresh the review queue, re-read the draft, and "
+                  "delete again — deleting a stale draft is the right "
+                  "move regardless")
     return HTTPException(
         status_code=409,
-        detail=f"stale review: {e} — refresh the review queue, re-read the "
-               f"draft, and submit again. Nothing was written.")
+        detail=f"stale review: {e} — {remedy}. Nothing was written.")
 
 
 @router.post("/api/campaign/{name}/review/approve")
@@ -603,7 +620,7 @@ def approve_items(name: str, d, body: ReviewBody, *,
                       + (" (auto-accepted)" if auto else ""),
             base_revisions=base, idempotency_key=key, auto=auto)
     except publication.RevisionConflict as e:
-        raise _revision_conflict_409(e)
+        raise _revision_conflict_409(e, "approve")
     except publication.PublicationConflictError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except HTTPException:
@@ -667,7 +684,7 @@ def post_delete(name: str, body: ReviewBody):
                 operation=f"delete {len(chosen_idx)} pending entries",
                 base_revisions=base, idempotency_key=key)
         except publication.RevisionConflict as e:
-            raise _revision_conflict_409(e)
+            raise _revision_conflict_409(e, "delete")
         except publication.PublicationConflictError as e:
             raise HTTPException(status_code=409, detail=str(e))
         except HTTPException:

@@ -306,6 +306,47 @@
     catch (_) { return null; }
   }
 
+  /* The COMPLETED answer gets the same treatment: the await runs 10+
+     minutes, and showTab re-renders the panel out from under it — the
+     response used to fill detached nodes while the form reset to empty,
+     so leaving the tab (checking the map, the lore) cost the whole pass.
+     The answer is saved when it arrives, restored onto the fresh panel
+     until it ages out, and consumed by Create (found 2026-10-03). */
+  const DESIGN_RESULT_KEY = 'studio-design-result';
+  function saveDesignResult(r, namedPlaces) {
+    try {
+      sessionStorage.setItem(DESIGN_RESULT_KEY, JSON.stringify({
+        camp: S.state.campaign, at: Date.now(),
+        design: (r && r.design) || {}, places: namedPlaces || []}));
+    } catch (_) {}
+  }
+  // storage + shape + campaign match; the AGE window lives in
+  // S.designRestoreNote so it stays pure and pinned
+  function readDesignResult() {
+    try {
+      const d = JSON.parse(sessionStorage.getItem(DESIGN_RESULT_KEY));
+      if (!d || d.camp !== S.state.campaign || typeof d.at !== 'number'
+          || !d.design || !Array.isArray(d.design.factions)
+          || !d.design.factions.length) return null;
+      return d;
+    } catch (_) { return null; }
+  }
+  function clearDesignResult() {
+    try { sessionStorage.removeItem(DESIGN_RESULT_KEY); } catch (_) {}
+  }
+
+  /* Pure — the restore note for a cached design answered ageMs ago, or
+     null outside the believable window (same ceiling as the reload
+     marker: past it, a self-filling form surprises more than it helps).
+     Pinned by studio/tests/js/test_design_feedback.cjs. */
+  S.designRestoreNote = function (ageMs) {
+    if (typeof ageMs !== 'number' || !(ageMs >= 0)
+        || ageMs > S.DESIGN_STALE_MS) return null;
+    return 'Design from ' + S.designElapsed(ageMs) + ' ago restored — the '
+      + 'form resets when you leave the tab, so the draft is re-applied. '
+      + 'Edit anything, then Create simulation.';
+  };
+
   function copyHint(text) {
     const done = () => S.toast('Copied — paste it where you want it.', 'ok');
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -466,8 +507,7 @@
       });
     }
 
-    function applyDesign(r, namedPlaces) {
-      const d = (r && r.design) || {};
+    function fillDesignForm(d, namedPlaces) {
       if (d.premise) panel.querySelector('.sand-premise').value = d.premise;
       setFactionRows(d.factions);
       // the sandbox's own places are the ones the DM named: the first leads
@@ -479,8 +519,12 @@
       }
       designResult.innerHTML = '';
       designResult.appendChild(designExtras(d));
-      ((r && r.notes) || []).forEach((n) => S.toast(n, 'info'));
-      S.toast('Design drafted below — edit anything, then Create simulation.', 'ok');
+    }
+
+    function applyDesign(r, namedPlaces) {
+      fillDesignForm((r && r.design) || {}, namedPlaces);
+      // rides out navigation: the next panel render restores this answer
+      saveDesignResult(r, namedPlaces);
     }
 
     async function runDesign() {
@@ -528,6 +572,15 @@
         stopTick();
         applyDesign(r, places);
         regenBtn.classList.remove('hidden');
+        ((r && r.notes) || []).forEach((n) => S.toast(n, 'info'));
+        if (panel.isConnected) {
+          S.toast('Design drafted below — edit anything, then Create simulation.', 'ok');
+        } else {
+          // the DM tabbed away during the pass: this response filled a
+          // detached panel, and the next Simulation render restores it
+          S.toast('Design finished — reopen the Simulation tab; the draft '
+            + 'is restored there.', 'ok');
+        }
       } catch (err) {
         stopTick();
         // a real server answer (success or error) ends the pass; a timeout
@@ -566,6 +619,22 @@
     }
     addRow();
     addRow();
+
+    // a pass that finished while the DM was on another tab answers into a
+    // detached panel — restore its cached result onto this fresh one so
+    // the form they come back to is never empty (after the default rows,
+    // which the restore replaces)
+    const savedDesign = readDesignResult();
+    const restoreNote = savedDesign
+      ? S.designRestoreNote(Date.now() - savedDesign.at) : null;
+    if (savedDesign && restoreNote) {
+      fillDesignForm(savedDesign.design, savedDesign.places || []);
+      regenBtn.classList.remove('hidden');
+      const note = S.el(
+        '<p class="panel-note design-restored" role="status"></p>');
+      note.textContent = restoreNote;
+      designStatus.appendChild(note);
+    }
     addBtn.addEventListener('click', () => {
       if (host.children.length >= 5) {
         S.toast('Five factions is plenty — more than that and weeks get muddy.', 'info');
@@ -611,6 +680,7 @@
       errBox.innerHTML = '';
       try {
         await S.api(S.campUrl('/simulation/state'), { method: 'POST', body: body });
+        clearDesignResult(); // the design served its purpose: it is canon now
         S.toast('Simulation created — factions are live below. Propose week 1 when ready.', 'ok');
         S.rerenderIfCurrent('sim'); // re-render: the real sim view with the run button
       } catch (err) {

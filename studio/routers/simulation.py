@@ -54,6 +54,7 @@ from routers.common import (
     blocking_findings,
     campaign_lock_nowait,
     ensure_publishable_409,
+    pending_proposal_409,
     require_campaign,
     store_errors,
     strict_confirm,
@@ -463,11 +464,7 @@ def post_week(name: str, body: WeekBody):
                    "sandbox first ('Create a simulation' on this tab)")
     pending = proposals.find_pending(name)
     if pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a proposed week {pending.get('proposed_week')} is "
-                   f"awaiting review ({pending.get('proposal_id')}) — accept "
-                   f"or discard it before generating another")
+        raise pending_proposal_409(name, pending, "generating another")
     ensure_publishable_409(name)  # a parked conflict blocks campaign writes
     auto_accept = bool(body.auto_accept)
     # fast-fail courtesy for CROSS-campaign contention: the engine home is
@@ -631,11 +628,7 @@ def post_session(name: str, body: SessionBody):
                    "sandbox first")
     pending = proposals.find_pending(name)
     if pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a proposal is awaiting review "
-                   f"({pending.get('proposal_id')}) — accept or discard it "
-                   f"before recording a session")
+        raise pending_proposal_409(name, pending, "recording a session")
     ensure_publishable_409(name)
     source = (body.source or "").strip()
     if not source:
@@ -821,11 +814,7 @@ def prepare_projects(name: str, body: ProjectPrepareBody):
                             detail="no simulation/state.yaml in this campaign")
     pending = proposals.find_pending(name)
     if pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a proposal is awaiting review "
-                   f"({pending.get('proposal_id')}) — accept or discard it "
-                   f"before preparing project changes")
+        raise pending_proposal_409(name, pending, "preparing project changes")
     ensure_publishable_409(name)
     if not body.operations:
         raise HTTPException(status_code=422,
@@ -934,11 +923,7 @@ def post_goal_review(name: str, body: GoalReviewBody | None = None):
                    "sandbox first ('Create a simulation' on this tab)")
     pending = proposals.find_pending(name)
     if pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a proposal is awaiting review "
-                   f"({pending.get('proposal_id')}) — accept or discard it "
-                   f"before running a goal review")
+        raise pending_proposal_409(name, pending, "running a goal review")
     ensure_publishable_409(name)
 
     def job(log):
@@ -1079,12 +1064,10 @@ def post_forecast(name: str, body: ForecastBody):
                    "sandbox first ('Create a simulation' on this tab)")
     pending = proposals.find_pending(name)
     if pending:
-        raise HTTPException(
-            status_code=409,
-            detail=f"a proposal is awaiting review "
-                   f"({pending.get('proposal_id')}) — accept or discard it "
-                   f"before forecasting (the forecast reads the canon the "
-                   f"proposal would change)")
+        raise pending_proposal_409(
+            name, pending,
+            "forecasting (the forecast reads the canon the proposal would "
+            "change)")
     active = forecasts.find_active(name)
     if active:
         raise HTTPException(

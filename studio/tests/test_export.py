@@ -10,6 +10,7 @@
 
 import json
 import pathlib
+import unittest.mock as mock
 import zipfile
 
 import export_campaign
@@ -359,3 +360,80 @@ def test_export_excludes_every_documented_noise_pattern(client,
                 "sessions/session-0001.md",
                 "simulation/proposals/p1/proposal.yaml"):
         assert not export_campaign.excluded(rel), f"{rel} must ride along"
+
+
+# ---------------- consistency rules (2026-10-02 bug pass)
+
+
+def test_export_archives_the_bytes_it_hashed(client, tmp_spine_root,
+                                             monkeypatch, tmp_path):
+    """The manifest hash and the zip member must come from ONE read: an
+    edit landing between the hash pass and the zip pass used to leave an
+    export that reported success but failed every restore (hash mismatch
+    on the edited file)."""
+    root = _make_campaigns(tmp_spine_root, monkeypatch)
+    victim = root / "testvale" / "lore" / "timeline.yaml"
+    before = victim.read_bytes()
+    real_writestr = zipfile.ZipFile.writestr
+    fired = {"yes": False}
+
+    def editing_writestr(self, name, data, *a, **k):
+        # land a concurrent edit just before the first member is written
+        if not fired["yes"] and name != "manifest.json":
+            fired["yes"] = True
+            victim.write_bytes(before + b"# concurrent edit\n")
+        return real_writestr(self, name, data, *a, **k)
+
+    with mock.patch.object(zipfile.ZipFile, "writestr", editing_writestr):
+        out = export_campaign.export("testvale", tmp_path / "race.zip")
+    assert fired["yes"], "the race window was never exercised"
+
+    with zipfile.ZipFile(out) as z:
+        manifest = json.loads(z.read("manifest.json").decode("utf-8"))
+        for rel, digest in manifest["files"].items():
+            assert export_campaign.sha256(z.read("campaign/" + rel)) == \
+                digest, f"{rel}: archived bytes differ from the manifest"
+    # the archive restores whole even though the live file moved on
+    fresh = tmp_path / "restored"
+    assert export_campaign.main(["--restore", str(out), "--into",
+                                 str(fresh)]) == 0
+
+
+def test_export_refuses_to_race_a_locked_campaign(client, tmp_spine_root,
+                                                  monkeypatch, tmp_path,
+                                                  capsys):
+    """Export runs under the campaign lock: while another writer holds it,
+    export fails honestly instead of walking a tree that is changing under
+    it; with the lock free, the same export succeeds."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    with mock.patch.object(export_campaign, "EXPORT_LOCK_WAIT_S", 0.2), \
+            spine.campaign_lock("testvale"):
+        try:
+            export_campaign.export("testvale", tmp_path / "busy.zip")
+        except SystemExit as e:
+            assert e.code == 1
+        else:  # pragma: no cover
+            raise AssertionError("export ran while the campaign was locked")
+    assert "locked by another writer" in capsys.readouterr().err
+    out = export_campaign.export("testvale", tmp_path / "busy.zip")
+    assert out == tmp_path / "busy.zip" and out.is_file()
+
+
+def test_export_refuses_a_destination_inside_the_campaign(
+        client, tmp_spine_root, monkeypatch, capsys):
+    """Writing the zip into the campaign being zipped truncates a file the
+    walk already hashed and archives the zip's own half-written bytes — a
+    self-swallowing export that can never restore. Refused outright."""
+    root = _make_campaigns(tmp_spine_root, monkeypatch)
+    camp = root / "testvale"
+    for bad in (camp / "backup.zip", camp / "lore" / "nested" / "backup.zip",
+                camp / "lore"):
+        try:
+            export_campaign.export("testvale", bad)
+        except SystemExit as e:
+            assert e.code == 2, bad
+        else:  # pragma: no cover
+            raise AssertionError(f"export accepted a destination inside the "
+                                 f"campaign: {bad}")
+    assert "inside the campaign directory" in capsys.readouterr().err
+    assert not (camp / "backup.zip").exists()

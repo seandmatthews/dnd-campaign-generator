@@ -681,3 +681,123 @@ def test_different_campaigns_do_not_block_each_other(tmp_spine_root):
             operation="parallel campaign")
     assert pub["state"] == "published"
     assert (other / "lore" / "x.yaml").read_text(encoding="utf-8") == "x\n"
+
+
+# ------------------- recovery byte-exactness + finalize (2026-10-02)
+
+
+def test_recovery_reproduces_staged_crlf_bytes_exactly(tmp_spine_root):
+    """A staged write whose bytes contain CRLF must come back from recovery
+    byte for byte: _read_image used text mode, whose universal-newline read
+    folded CRLF into LF — recovery then marked the transaction complete
+    over a file that no longer hashed to the manifest's after-revision."""
+    staged = "entries:\r\n  - id: w1\r\n    title: T\r\n"
+    with _crash_after(0):
+        try:
+            publication.publish(
+                "testvale",
+                [{"path": "lore/crlf-entry.yaml", "text": staged}],
+                operation="crlf recovery")
+        except RuntimeError:
+            pass
+    out = publication.recover_campaign("testvale")
+    assert out["recovered"] and not out["conflicts"], out
+    target = tmp_spine_root / "testvale" / "lore" / "crlf-entry.yaml"
+    assert target.read_bytes() == staged.encode("utf-8"), \
+        "recovery must reproduce the staged bytes exactly, CRLF included"
+    # and "complete" means it: the live file hashes to the manifest's after
+    m = json.loads(
+        (tmp_spine_root / "testvale" / publication.TX_DIR_NAME
+         / out["recovered"][0] / "manifest.json").read_text(encoding="utf-8"))
+    assert m["status"] == "complete"
+    assert publication.file_revision(target) == m["targets"][0]["after"]
+
+
+def test_recovery_parks_a_corrupt_staged_image_instead_of_completing(
+        tmp_spine_root):
+    """A staged after-image that does not hash to the manifest must never
+    be written over the live bytes, and the transaction must park as a
+    conflict — not complete — so nothing silently lands wrong."""
+    d = tmp_spine_root / "testvale"
+    with _crash_after(0):
+        try:
+            publication.publish(
+                "testvale",
+                [{"path": "lore/kept.yaml", "text": "staged\n"}],
+                operation="corrupt image")
+        except RuntimeError:
+            pass
+    tx = next(t for t in publication.transactions("testvale")
+              if t["status"] == "open")["transaction"]
+    image = d / publication.TX_DIR_NAME / tx / "after" / "lore" / "kept.yaml"
+    image.write_bytes(b"not what the manifest promised\n")
+    out = publication.recover_campaign("testvale")
+    assert out["conflicts"] and not out["recovered"], out
+    assert not (d / "lore" / "kept.yaml").exists(), \
+        "the corrupt image never touched the live tree (still at before)"
+    conflict = publication.unresolved_conflicts("testvale")[0]
+    assert "lore/kept.yaml" in conflict["conflicts"]
+
+
+def test_resolve_apply_reproduces_crlf_and_finalizes_the_snapshot(
+        tmp_spine_root):
+    """resolve('apply') must (a) put the staged CRLF bytes back exactly and
+    (b) finalize like any completed publication: git snapshot taken and
+    recorded, payload pruned on success, snapshot in the answer — the
+    forced outcome used to sit on disk uncommitted forever."""
+    staged = "# staged with windows newlines\r\n"
+    with _crash_immediately():
+        try:
+            publication.publish(
+                "testvale",
+                [{"path": "lore/crlf-apply.yaml", "text": staged}],
+                operation="apply crlf")
+        except RuntimeError:
+            pass
+    d = tmp_spine_root / "testvale"
+    (d / "lore" / "crlf-apply.yaml").write_bytes(b"external\r\nedit\r\n")
+    publication.recover_campaign("testvale")
+    tx = publication.unresolved_conflicts("testvale")[0]["transaction"]
+
+    out = publication.resolve("testvale", tx, "apply")
+    assert (d / "lore" / "crlf-apply.yaml").read_bytes() == \
+        staged.encode("utf-8"), "apply reproduces the staged bytes exactly"
+    assert out["snapshot"]["state"] in publication.SNAPSHOT_OK_STATES, out
+    # the undo trail really carries the applied bytes: a fresh snapshot has
+    # nothing left to commit
+    probe = canon.snapshot_result("testvale", "campaign/testvale: probe")
+    assert probe["state"] == "no_change", probe
+    assert not (d / publication.TX_DIR_NAME / tx).exists(), \
+        "a committed snapshot prunes the payload"
+    assert publication.unresolved_conflicts("testvale") == []
+
+
+def test_resolve_apply_refuses_a_staged_image_that_does_not_hash(
+        tmp_spine_root):
+    """The same hash gate recovery has: a tampered after-image never
+    touches the live bytes, the transaction stays parked and retryable."""
+    with _crash_immediately():
+        try:
+            publication.publish(
+                "testvale",
+                [{"path": "lore/bad-image.yaml", "text": "staged\n"}],
+                operation="corrupt resolve")
+        except RuntimeError:
+            pass
+    d = tmp_spine_root / "testvale"
+    (d / "lore" / "bad-image.yaml").write_text("external\n", encoding="utf-8")
+    publication.recover_campaign("testvale")
+    tx = publication.unresolved_conflicts("testvale")[0]["transaction"]
+    image = d / publication.TX_DIR_NAME / tx / "after" / "lore" \
+        / "bad-image.yaml"
+    image.write_bytes(b"tampered staging\n")
+    try:
+        publication.resolve("testvale", tx, "apply")
+    except publication.PublicationError as e:
+        assert "bad-image.yaml" in str(e) and "discard" in str(e)
+    else:  # pragma: no cover
+        raise AssertionError("apply accepted a corrupt staged image")
+    # nothing moved: still parked, live bytes untouched
+    assert publication.unresolved_conflicts("testvale")
+    assert (d / "lore" / "bad-image.yaml").read_text(
+        encoding="utf-8") == "external\n"

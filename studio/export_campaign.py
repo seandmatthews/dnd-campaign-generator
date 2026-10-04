@@ -14,6 +14,14 @@ What the export does and does not guarantee (stated plainly):
 - The shared undo history lives at campaigns/.git — NOT inside the campaign
   folder. Exporting one folder does NOT include git history; the zip is a
   snapshot of the files as they stand.
+- The export runs under the campaign lock and reads every file exactly
+  once: the bytes hashed into the manifest are the bytes archived, so an
+  approval or edit landing mid-export cannot produce an archive that
+  restores as "corrupt". A lock disciplines the app's writers, not an
+  editor that takes none — the single read is what makes the archive
+  self-consistent either way.
+- The archive destination must be OUTSIDE the campaign directory; the
+  export refuses one inside it (the zip would swallow itself).
 - A same-disk archive is an EXPORT, not protection from disk loss. Copy the
   zip to a separate destination yourself; this tool does not upload
   anything anywhere and does not claim a copy happened.
@@ -41,6 +49,7 @@ import datetime
 import fnmatch
 import hashlib
 import json
+import os
 import pathlib
 import sys
 import zipfile
@@ -71,6 +80,12 @@ EXCLUDES = [
 ]
 SCHEMA_VERSION = 1
 
+# How long export waits for the campaign lock (a week job holds it for the
+# job's whole run — past this, refusing honestly beats blocking a watched
+# CLI for an hour). The wait itself covers brief holders: snapshots and the
+# short interactive writers.
+EXPORT_LOCK_WAIT_S = 10.0
+
 
 def excluded(rel: str) -> bool:
     return any(fnmatch.fnmatch(rel, pat) for pat in EXCLUDES)
@@ -80,8 +95,28 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _inside(path: pathlib.Path, directory: pathlib.Path) -> bool:
+    """True when path IS directory or lies somewhere under it
+    (case-insensitive — Windows paths compare case-blind)."""
+    p = os.path.normcase(str(path))
+    d = os.path.normcase(str(directory))
+    return p == d or p.startswith(d + os.sep)
+
+
 def export(campaign: str, out: pathlib.Path) -> pathlib.Path:
-    """Zip one campaign + manifest. Returns the archive path."""
+    """Zip one campaign + manifest. Returns the archive path.
+
+    Consistency rules (the 2026-10-02 bug pass):
+    - the campaign lock is held for the whole walk: an approval or snapshot
+      landing mid-export used to produce an archive whose members no longer
+      matched the manifest hashes — an export that reported success but
+      failed every restore;
+    - every file is read exactly ONCE, into memory, and those same bytes
+      are both hashed and archived (a lock disciplines app writers, not an
+      editor that takes none);
+    - the output path must live OUTSIDE the campaign directory: writing
+      the zip into the tree being zipped truncates a file the walk already
+      hashed and swallows the archive's own half-written bytes."""
     import spine
     root = spine.campaigns_root()
     camp_dir = root / campaign
@@ -89,14 +124,30 @@ def export(campaign: str, out: pathlib.Path) -> pathlib.Path:
         print(f"error: no such campaign: {campaign} (under {root})",
               file=sys.stderr)
         raise SystemExit(1)
-    files = {}
-    for p in sorted(camp_dir.rglob("*")):
-        if not p.is_file():
-            continue
-        rel = p.relative_to(camp_dir).as_posix()
-        if excluded(rel):
-            continue
-        files[rel] = sha256(p.read_bytes())
+    if _inside(out.resolve(), camp_dir.resolve()):
+        print(f"error: --out {out} is inside the campaign directory "
+              f"({camp_dir}) — the archive would swallow itself; choose a "
+              "destination outside the campaign",
+              file=sys.stderr)
+        raise SystemExit(2)
+    lock = spine.campaign_lock(campaign)
+    if not lock.acquire(timeout=EXPORT_LOCK_WAIT_S):
+        print(f"error: {campaign} is locked by another writer (a running "
+              f"job?) — gave up after {EXPORT_LOCK_WAIT_S:.0f}s; export "
+              "again once it finishes",
+              file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        payloads = {}
+        for p in sorted(camp_dir.rglob("*")):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(camp_dir).as_posix()
+            if excluded(rel):
+                continue
+            payloads[rel] = p.read_bytes()
+    finally:
+        lock.release()
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "campaign": campaign,
@@ -108,15 +159,15 @@ def export(campaign: str, out: pathlib.Path) -> pathlib.Path:
                 "same-disk archive is an export, not a backup — copy it "
                 "somewhere else yourself.",
         "excluded_patterns": EXCLUDES,
-        "files": files,
+        "files": {rel: sha256(data) for rel, data in payloads.items()},
     }
     out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr(MANIFEST, json.dumps(manifest, indent=2,
                                         ensure_ascii=False))
-        for rel in sorted(files):
-            z.write(camp_dir / rel, CAMPAIGN_PREFIX + rel)
-    print(f"exported {len(files)} file(s) -> {out}")
+        for rel in sorted(payloads):
+            z.writestr(CAMPAIGN_PREFIX + rel, payloads[rel])
+    print(f"exported {len(payloads)} file(s) -> {out}")
     print("note: git history (campaigns/.git) is NOT included; a same-disk "
           "archive is an export, not a backup — copy it elsewhere yourself.")
     return out

@@ -649,3 +649,41 @@ def test_session_route_guards(client, tmp_spine_root):
     r = client.post("/api/campaign/testvale/simulation/session",
                     json={"source": "session:1"})
     assert r.status_code == 422 and "nothing to record" in r.json()["error"]
+
+
+# ------------------------------------------------- blocker honesty (2026-10-03)
+
+def test_pending_week_409_names_a_running_generation_job(
+        client, tmp_spine_root, monkeypatch):
+    """The pre-lock pending-proposal 409 used to lead with the proposal
+    alone — while a generation job held the campaign, the follow-up it
+    points at (accept/discard) 409'd too, and the actual blocker was only
+    visible in the studio log. The 409 must carry the Blocked-by line."""
+    import jobs
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    assert job["status"] == "done", job["error"]
+
+    # a missing-pages generation is RUNNING in this campaign (injected
+    # directly: the registry shape is exactly what running_jobs answers from)
+    fake = jobs._new_job("lore-missing-pages", "testvale")
+    fake["status"] = "running"
+    with jobs._LOCK:
+        jobs._JOBS[fake["id"]] = fake
+    try:
+        r = client.post("/api/campaign/testvale/simulation/week",
+                        json={"confirm": True})
+        assert r.status_code == 409, r.text
+        msg = r.json()["error"]
+        assert "awaiting review" in msg, "the correctness blocker stays named"
+        assert "Blocked by: a missing-pages generation" in msg, \
+            f"the running job must be visible in the error text: {msg}"
+        assert "accept or discard it before generating another" in msg
+    finally:
+        with jobs._LOCK:
+            jobs._JOBS.pop(fake["id"], None)
+
+    # nothing running again: the plain pending message, no Blocked-by line
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    assert r.status_code == 409 and "awaiting review" in r.json()["error"]
+    assert "Blocked by" not in r.json()["error"]

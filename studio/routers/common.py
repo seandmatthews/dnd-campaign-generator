@@ -204,6 +204,32 @@ def busy_409(action: str, name: str | None = None) -> HTTPException:
                "Nothing was changed.")
 
 
+def running_job_line(name: str) -> str:
+    """The " Blocked by: …" line for a generation job RUNNING in this
+    campaign, or "". The 409s raised BEFORE the lock (the pending-proposal
+    gates) must name it too: while a job runs, the follow-up its message
+    points at (accept/discard) 409s as well, and the job itself was
+    otherwise visible only in the studio log — the silent-blocker class
+    (2026-10-03)."""
+    running = jobs.running_jobs(campaign=name) if name else []
+    return blocked_by_line(running) if running else ""
+
+
+def pending_proposal_409(name: str, pending: dict, what: str) -> HTTPException:
+    """The one implementation of the pre-lock pending-proposal gate (the
+    submit-side checks that run before campaign_lock_nowait): the pending
+    proposal is the correctness blocker, and when a generation job is also
+    running the 409 says so — that job finishes first in practice, since
+    even the accept/discard it points at takes the campaign lock."""
+    detail = (f"a proposal is awaiting review ({pending.get('proposal_id')})"
+              f" — accept or discard it before {what}")
+    line = running_job_line(name)
+    if line:
+        detail += (". Another job is also running and finishes first:"
+                   + line)
+    return HTTPException(status_code=409, detail=detail)
+
+
 @contextlib.contextmanager
 def campaign_lock_nowait(name: str, action: str):
     """The campaign lock for a SHORT interactive writer, or 409 — never a
