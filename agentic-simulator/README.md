@@ -44,7 +44,7 @@ no code reads. Remove it and everything here still runs.
 ## Layout
 
 ```
-agentic-simulator/  (in Documents/D&D)
+agentic-simulator/  (in Documents/dnd-campaign-generator)
   README.md                  this file
   requirements.txt           PyYAML — the only dependency, until that hurts
   world/

@@ -11,7 +11,7 @@
 ## 0. Relationship to the Existing Prototype
 
 This document generalizes a working prototype that already lives in this
-directory (`Documents/D&D/agentic-simulator`). Reconciliation notes, so the spec and
+directory (`agentic-simulator/`). Reconciliation notes, so the spec and
 the code do not drift apart:
 
 - **Phase 1 is largely complete.** Five factions, a weekly tick, LLM-driven

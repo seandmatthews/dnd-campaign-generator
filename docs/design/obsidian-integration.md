@@ -94,8 +94,8 @@ matters more than it looks:
 - *Slugs* (`house-ferrand.md`) — matches repo kebab-case discipline, but
   hand-written links need aliases (`[[house-ferrand|House Ferrand]]`), taxing
   exactly the surface we are optimizing for the human. The repo's `&`-in-path
-  scars came from shell plumbing, not filenames; nothing here goes through a
-  shell.
+  scars (pre-rename, gone 2026-10-04) came from shell plumbing, not
+  filenames; nothing here goes through a shell.
 
 **Open decision — `entities.yaml` fate.** Either migrate once and delete, or
 keep the loader tolerant of a legacy file. Recommendation: migrate once,

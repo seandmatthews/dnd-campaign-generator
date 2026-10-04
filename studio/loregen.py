@@ -15,7 +15,7 @@ Output is staged to lore/pending-entries-N.yaml (lowest free N). timeline.yaml
 is never touched here — approval does that (M4, guardrail 3). After staging,
 two advisory findings passes run and are merged into the job result:
 verification's structural layer (check.py via subprocess, list-form args —
-the parent path contains `&`) and one canon-audit LLM pass. NOTHING blocks:
+the parent path contained `&` until 2026-10-04) and one canon-audit LLM pass. NOTHING blocks:
 findings are a review queue for the DM.
 """
 

@@ -11,7 +11,7 @@ git-ignored, so a worktree starts without them and the fakes stand in.
 import importlib.util
 from pathlib import Path
 
-PARENT = Path(__file__).resolve().parents[2]  # .../Documents/D&D (or worktree)
+PARENT = Path(__file__).resolve().parents[2]  # repo root (or worktree)
 
 _spec = importlib.util.spec_from_file_location(
     "setup_tools", PARENT / "setup-tools.py")

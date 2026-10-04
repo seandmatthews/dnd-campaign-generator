@@ -8,8 +8,8 @@
                                marked `integration`)
 
 Stdlib only. Every engine invocation is list-form args with cwd set
-explicitly — the parent path contains `&`, so nothing ever goes through a
-shell. Output streams live; each suite gets a summary line and the final
+explicitly — nothing ever goes through a shell (a rule kept from when
+the parent path contained `&`). Output streams live; each suite gets a summary line and the final
 table; the run exits nonzero if any suite failed.
 """
 

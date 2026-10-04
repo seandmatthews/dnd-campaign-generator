@@ -3,7 +3,7 @@
 GET unions every pending ENTRY across lore/pending-*.yaml and
 simulation/pending-week-*.yaml into items, and runs verification's
 structural layer (check.py, subprocess list-form args — the parent path
-contains `&`) ONCE per pending file per request. Findings that cite a line
+contained `&` until 2026-10-04) ONCE per pending file per request. Findings that cite a line
 inside an entry's span attach to that entry; the rest become synthetic
 {"kind": "finding"} items. The whole GET keeps a soft time budget: if the
 checks blow it, remaining findings are skipped and noted — the queue must

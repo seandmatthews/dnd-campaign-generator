@@ -253,9 +253,10 @@ def smoke(port):
     run([node, "--version"])
     env = {**os.environ, "STUDIO_PORT": str(port), "STUDIO_NO_BROWSER": "1"}
     log = (WORK / "smoke.log").open("w")
-    # The repo path contains "&" (Documents\D&D) and cmd /c mangles quoted
-    # absolute paths containing it. Invoke launch.cmd by RELATIVE name with
-    # the stage as cwd — no absolute path ever reaches cmd's parser.
+    # cmd /c mangles quoted absolute paths containing "&" — the repo's own
+    # path did until the 2026-10-04 rename, and users' paths still can.
+    # Invoke launch.cmd by RELATIVE name with the stage as cwd — no
+    # absolute path ever reaches cmd's parser.
     proc = subprocess.Popen(["cmd", "/c", "launch.cmd"], env=env,
                             cwd=STAGE, stdout=log, stderr=subprocess.STDOUT)
     try:

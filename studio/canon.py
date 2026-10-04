@@ -10,8 +10,9 @@ itself is pushed somewhere private. The undo trail the README promises
 <name>` is the audit trail.
 
 Rules of the road:
-- cwd is the campaigns root, args are list-form (the parent path contains
-  `&`), and the commit is `--only` the campaign's directory: nothing else
+- cwd is the campaigns root, args are list-form (a rule kept from when
+  the parent path contained `&`), and the commit is `--only` the
+  campaign's directory: nothing else
   the user has staged there is ever swept into a snapshot.
 - The repo is created on demand: the first snapshot `git init`s the
   campaigns root (idempotent) and, if git has no configured identity,

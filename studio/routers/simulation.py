@@ -654,7 +654,8 @@ def post_session(name: str, body: SessionBody):
         record["effects"].append(eff)
 
     # the engine's own validator decides — same code the standalone CLI
-    # path uses (list-form args; the parent path contains `&`)
+    # path uses (list-form args; the parent path contained `&` until
+    # 2026-10-04)
     import tempfile
     tmp_dir = Path(tempfile.mkdtemp(prefix="studio-session-"))
     try:

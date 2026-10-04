@@ -16,7 +16,8 @@ premise into suggested form values.
 
 City generation: `node scripts/gen-city.mjs --world <campaign
 world/source.*> --burg "<name>" --out <tmp>` with cwd=dnd-mapping (D3:
-list-form args — the parent path contains `&`), then copy outputs into the
+list-form args — the parent path contained `&` until 2026-10-04), then
+copy outputs into the
 campaign's maps/cities/<slug>/.
 
 Site generation: the full documented battlemap chain — gen-<kind> → render

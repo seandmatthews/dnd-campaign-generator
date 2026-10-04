@@ -3,8 +3,8 @@ interrupted-week flag + restore-on-boot, git-backed canon snapshots, the
 Host allowlist middleware, and the rotating studio log.
 
 Everything runs against temp dirs / temp git repos — no real engine, and
-the real Documents/D&D repo is never committed to (canon skips campaigns
-that live outside the repo root)."""
+the real repo is never committed to (canon skips campaigns that live
+outside the repo root)."""
 
 import json
 import logging

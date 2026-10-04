@@ -26,7 +26,8 @@ and setup removes it for a clean npm reinstall. Engines invoke binaries as
 `node node_modules/<pkg>/...` directly, so the package manager is needed
 only here and in doctor --fix.
 
-Stdlib only, list-form subprocess throughout (the parent path contains `&`),
+Stdlib only, list-form subprocess throughout (a rule kept from when the
+parent path contained `&`),
 and .cmd/.bat shims are run through cmd /c on Windows — the same discipline
 as run-tests.py and studio/doctor.py. Idempotent: an existing, complete
 tree is left alone unless --force. Network needed for the first run only.
@@ -137,8 +138,9 @@ def fmg_apply():
                  d / "src" / "generators" / "headless-export.test.ts")
     # --ignore-scripts: FMG's only install-time script is "prepare":
     # simple-git-hooks (dev-only git hooks), and npm runs scripts through
-    # cmd.exe — which cannot handle the `&` in this repo's default path
-    # (Documents\D&D). Nothing the headless pipeline needs is scripted:
+    # cmd.exe — which cannot handle the `&` this repo's path carried until
+    # the 2026-10-04 rename (the flag stays). Nothing the headless
+    # pipeline needs is scripted:
     # esbuild/rollup ship platform binaries as optional deps.
     print("  npm install (this can take a few minutes) ...")
     _run(["npm", "install", "--ignore-scripts", "--no-audit", "--no-fund"],

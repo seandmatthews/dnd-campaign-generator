@@ -76,8 +76,9 @@ path.
   install (temp extraction + robocopy).
 - **`&` in the Windows user name** breaks cmd's batch quoting for the
   installed path (`%LOCALAPPDATA%` would contain `&`) — exotic, but the
-  whole build pipeline is haunted by this because the dev repo lives in
-  `Documents\D&D`; every path that crosses a cmd command line here is
-  quoted by hand (see comments in `build_release.py` / `install.cmd`).
+  whole build pipeline is haunted by it because the dev repo lived in
+  `Documents\D&D` until the 2026-10-04 rename; every path that crosses a
+  cmd command line here is quoted by hand (see comments in
+  `build_release.py` / `install.cmd`).
 - Test ports: 8791 (stage smoke), 8793 (installer verify) — the launcher
   honors `STUDIO_PORT` and `STUDIO_NO_BROWSER` for headless runs.

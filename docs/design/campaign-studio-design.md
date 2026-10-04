@@ -1,8 +1,8 @@
 # Campaign Studio
 ## One application, five tabs, one shared spine
 
-**Status:** design / iteration plan — built as `Documents/D&D/studio/` when
-commissioned
+**Status:** design / iteration plan — built as `dnd-campaign-generator/studio/`
+when commissioned
 **Serves:** a newcomer who boots one app, sees one pretty page, and moves
 between Maps, World Building, and Agent Simulation without ever learning the
 incantations behind them
@@ -100,7 +100,7 @@ spine exists.
 ## 3. Architecture
 
 **D1 — The engines stay untouched, headless CLIs.** The studio is a fourth
-child (`Documents/D&D/studio/`) that *invokes* the other three. No imports
+child (`studio/`) that *invokes* the other three. No imports
 across projects, no shared Python package. The tested seam stays intact;
 every app feature retains a CLI equivalent, forever. (Guardrail: if a
 feature can only be reached through the app, we built it wrong.)
@@ -113,8 +113,8 @@ static files, and long-running job management. One `index.html`, one
 own. Tabs are sections; data flows over `fetch`.
 
 **D3 — Engine invocation: subprocess, list-form args, never `shell=True`.**
-The parent path contains `&` (`Documents/D&D`) — shell-string commands
-*will* break on it. Every engine call is `[python, "-X", "utf8", "src/tick.py",
+The parent path contained `&` (`Documents/D&D`) until the 2026-10-04
+rename — shell-string commands *will* break on one. Every engine call is `[python, "-X", "utf8", "src/tick.py",
 "--live"]` style. Where the app needs machine-readable output, we add small
 `--json` flags to the engines (back-compatible; the human-readable output
 stays the default). Known offenders today: `tick.py` prints YAML views
@@ -149,9 +149,9 @@ Both LLM clients (studio and simulator) carry the same small reader, per
 D1: no imports across projects.
 
 **D7 — Windows machine realities, written down where we'll hit them.**
-The parent path contains `&` (`Documents/D&D`), and npm runs install
-scripts through cmd.exe, which cannot parse it — FMG's tool install uses
-`npm install --ignore-scripts` (its only install-time script is dev-only
+The parent path contained `&` (`Documents/D&D`) until the 2026-10-04
+rename, and npm runs install scripts through cmd.exe, which cannot parse
+one — FMG's tool install keeps `npm install --ignore-scripts` (its only install-time script is dev-only
 git hooks; the pipeline needs no scripts). Engines invoke binaries as
 `node node_modules/<pkg>/...` directly, so the package manager is needed
 only at setup/repair time, and there are no pnpm junctions left to break

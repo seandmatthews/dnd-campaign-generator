@@ -759,7 +759,7 @@ def main(argv=None):
         "--root",
         default=None,
         help="studio root override (default: the parent of this file's "
-        "directory, i.e. Documents/D&D)",
+        "directory, i.e. the repo root)",
     )
     ap.add_argument(
         "--check",

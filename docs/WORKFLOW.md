@@ -37,8 +37,8 @@ agentic-simulator pytest suite, the verification ladder, the FMG
 importer on synthetic fixtures, the two dnd-mapping direct-run scripts,
 and the plain-node JS harness suites (auto-skipped with a note when
 node is absent). Stdlib-only runner; every engine invocation is
-list-form args with cwd set — the repo path contains `&`, so nothing
-ever goes through a shell.
+list-form args with cwd set — nothing ever goes through a shell
+(a rule kept from when the repo path contained `&`).
 
 **Integration tier:** real engine CLIs, real bytes, temp dirs
 (`studio/tests` marked `integration`; pytest.ini excludes it by

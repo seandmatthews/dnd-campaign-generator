@@ -13,9 +13,9 @@ seams the studio depends on — one test per engine entry point:
                               + wrap, FMG headless-export.test.ts
   studio/loregen.py     -> verification      check.py
 
-Ground rules (D3): subprocess list args only (the parent path contains
-`&`), `-X utf8` for python, explicit timeouts, assertions on exit codes and
-bytes — never an LLM, never the network. Ruravaqan is read-only here; the
+Ground rules (D3): subprocess list args only (the parent path contained
+`&` until 2026-10-04), `-X utf8` for python, explicit timeouts, assertions on
+exit codes and bytes — never an LLM, never the network. Ruravaqan is read-only here; the
 engine homes are documented scratch (D4): state is copied in exactly as the
 routers do, the generated battlemap site is mirrored into a tmp dir and its
 scratch copy removed, and import_fmg.py's candidate yaml is left where the
@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-PARENT = Path(__file__).resolve().parents[2]  # .../Documents/D&D
+PARENT = Path(__file__).resolve().parents[2]  # repo root
 DND_MAPPING = PARENT / "dnd-mapping"
 AGENTIC_SIMULATOR = PARENT / "agentic-simulator"
 VERIFICATION = PARENT / "verification"
@@ -66,7 +66,8 @@ pytestmark = [
 
 
 def run(cmd, cwd, timeout, env=None):
-    """List-form args (the parent path contains `&`), captured, hard cap."""
+    """List-form args (the parent path contained `&` until 2026-10-04),
+    captured, hard cap."""
     if env is not None:
         env = {**os.environ, **env}
     return subprocess.run(

@@ -115,8 +115,8 @@ the things that break):
 Engines never invoke package-manager shims: binaries run as
 `node node_modules/vitest/vitest.mjs …` directly. Installs are plain
 `npm install` (FMG's adds `--ignore-scripts` — npm runs install scripts
-through cmd.exe, which cannot parse the `&` in this repo's default path;
-nothing the pipeline needs is scripted). npm's flat node_modules has no
+through cmd.exe, which cannot parse the `&` this repo's path carried
+until the 2026-10-04 rename; nothing the pipeline needs is scripted). npm's flat node_modules has no
 junctions, so moving this directory breaks nothing — re-run the install
 if in doubt.
 

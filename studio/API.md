@@ -64,7 +64,7 @@ change — never let them drift.
   admits "no duration history yet" when nothing has finished. Estimates
   are labeled as estimates; the job log remains the source of truth.
 - Engine invocation (D3): subprocess with **list-form args, never `shell=True`**
-  (the parent path contains `&`). Pattern: `[sys.executable, "-X", "utf8",
+  (the parent path contained `&` until the 2026-10-04 rename). Pattern: `[sys.executable, "-X", "utf8",
   "src/thing.py", ...]` with `cwd=<engine root>`. Node engines:
   `["node", "scripts/thing.mjs", ...]` with `cwd=dnd-mapping`. Capture stdout
   lines into the job's `log_tail`.

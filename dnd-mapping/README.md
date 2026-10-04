@@ -5,7 +5,8 @@ simulator, no game state, no LLM in the loop — every artifact is derived
 from a recorded seed + parameters, so anything can be regenerated.
 
 Split out of the sibling `agentic-simulator` project on 2026-09-21 (all three
-projects now live under the common parent `Documents/D&D/`) so
+projects live under the common parent
+`Documents/dnd-campaign-generator/`) so
 the maps can be used on their own. That project consumes this one as an
 **optional input** (a provenance block in its `world/state.yaml`); this
 project never reads game state.

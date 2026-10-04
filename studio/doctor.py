@@ -52,8 +52,9 @@ FMG_DIR = DND_MAPPING_TOOLS / "Fantasy-Map-Generator"
 NPM_INSTALL_CMD = ["npm", "install", "--no-audit", "--no-fund"]
 # FMG adds --ignore-scripts: its only install-time script is "prepare":
 # simple-git-hooks (dev-only git hooks), and npm runs scripts through
-# cmd.exe, which cannot handle the `&` in this repo's default path
-# (Documents\D&D). Nothing the headless pipeline needs is scripted.
+# cmd.exe, which cannot handle the `&` this repo's path carried until
+# the 2026-10-04 rename (the flag stays). Nothing the headless pipeline
+# needs is scripted.
 NPM_INSTALL_FMG = NPM_INSTALL_CMD + ["--ignore-scripts"]
 
 # a live/interrupted week leaves a flag in the engine home (the engine
@@ -171,7 +172,7 @@ def check_engines():
     and exits 1, tick.py prints the faction views and exits 0, check.py
     prints argparse usage and exits 2 — any of those means "runnable".
     List-form args, cwd=engine root, never shell=True (the parent path
-    contains `&`).
+    contained `&` until 2026-10-04).
 
     While a week run is in flight the simulator probe is skipped: tick.py's
     parting save_state replaces state.yaml, and a concurrent reader can make
@@ -505,7 +506,7 @@ def _node_import_ok(entry: Path, timeout: int = ENGINE_PROBE_TIMEOUT_S):
     """(loads, why) — can node import this module at all? Broken or
     half-installed node_modules shows up as a resolution error here.
     Dynamic import works for ESM and CJS alike. List-form args (the parent
-    path contains `&`)."""
+    path contained `&` until 2026-10-04)."""
     probe = ("import(require('url').pathToFileURL(process.argv[1]).href)"
              ".then(function () {}, function (e) {"
              "console.error(String(e)); process.exit(3); })")
@@ -655,7 +656,7 @@ def apply_fixes(plans, dry=False, out=print):
 
 def _run_repair(cmd, cwd=None, env=None, timeout=600):
     """List-form subprocess for repairs — never shell=True (the parent path
-    contains `&`)."""
+    contained `&` until 2026-10-04)."""
     if env:
         env = {**os.environ, **{k: str(v) for k, v in env.items()}}
     return subprocess.run(cmd, cwd=str(cwd) if cwd else None, env=env,

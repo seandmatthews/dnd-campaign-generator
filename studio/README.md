@@ -71,7 +71,7 @@ same report the `/api/doctor` route serves. Plain doctor only advises;
 That repairs a broken tool tree with plain `npm install` (FMG's install
 adds `--ignore-scripts` — its only install-time script is dev-only git
 hooks, and npm runs scripts through cmd.exe, which cannot handle the `&`
-in this repo's default path) and runs
+this repo's path carried until the 2026-10-04 rename) and runs
 `pip install -r studio/requirements.txt` when the imports fail. Everything
 else stays printed advice — in particular it never auto-runs
 `assemble.py`, because that writes canon.

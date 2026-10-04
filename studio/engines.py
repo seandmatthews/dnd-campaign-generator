@@ -1,8 +1,9 @@
 """Subprocess wrappers for the three engines (D3, D4) + the shared engine
 home's orchestration.
 
-The parent path contains `&` (Documents/D&D), so every invocation is
-list-form args with cwd=<engine root> — never shell=True. Both wrappers
+The parent path contained `&` (Documents/D&D) until the 2026-10-04
+rename; every invocation stays list-form args with cwd=<engine root> —
+never shell=True. Both wrappers
 capture stdout+stderr line by line (stderr is merged into stdout so engine
 tracebacks land in the job log) and stream each line to an optional
 on_line callback, which is what keeps a live week's log tail moving.

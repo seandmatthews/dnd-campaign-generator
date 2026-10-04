@@ -46,5 +46,6 @@ tested on its own; the studio is the only one that invokes the others.
 - `dnd-mapping/tools/` is git-ignored (third-party clones) — but the custom
   FMG headless runner is NOT vanilla; tracked copies live in
   [`dnd-mapping/vendor-patches/fmg/`](dnd-mapping/vendor-patches/fmg/).
-- `run-tests.py` is stdlib-only, list-form subprocess throughout (the parent
-  path contains `&` — nothing ever goes through a shell).
+- `run-tests.py` is stdlib-only, list-form subprocess throughout — nothing
+  ever goes through a shell (a rule kept from when the parent path
+  contained `&`).

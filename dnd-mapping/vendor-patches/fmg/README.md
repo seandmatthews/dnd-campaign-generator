@@ -34,8 +34,8 @@ npm install --ignore-scripts --no-audit --no-fund
 ```
 
 `--ignore-scripts` is load-bearing on machines whose path contains `&`
-(e.g. `Documents\D&D`): npm runs install scripts through cmd.exe, which
-cannot parse the ampersand. FMG's only install-time script is
+(this repo's did until the 2026-10-04 rename): npm runs install scripts
+through cmd.exe, which cannot parse the ampersand. FMG's only install-time script is
 `"prepare": simple-git-hooks` — dev-only git hooks nothing here needs;
 esbuild/rollup ship their platform binaries as optional dependencies, so
 the headless pipeline is script-free by construction.
