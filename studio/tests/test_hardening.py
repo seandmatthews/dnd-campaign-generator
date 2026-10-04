@@ -50,11 +50,11 @@ def _no_leaked_campaign_locks():
 
 def fake_tick_ok(engine_root, script, *args, timeout=600, on_line=None, **kw):
     """The smallest engine that advances the clock to week 4."""
-    world = engine_root / "world"
+    world = engines.ENGINE_HOME
     world.mkdir(parents=True, exist_ok=True)
     world.joinpath("state.yaml").write_text(
         "meta:\n  clock:\n    week: 4\n", encoding="utf-8")
-    chron = engine_root / "chronicle"
+    chron = engines.engine_chronicle_dir()
     chron.mkdir(exist_ok=True)
     (chron / "0004-the-gate.md").write_text("# Week 4 — The Gate\n",
                                             encoding="utf-8")
@@ -73,8 +73,10 @@ def test_week_queues_while_campaign_lock_held(client, tmp_spine_root,
     same through the lock file); the queued job stays queued, is cancelled
     rather than leaking past the monkeypatches, and a fresh submission on
     the free campaign runs and releases the lock."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     monkeypatch.setattr(engines, "run_py", fake_tick_ok)
     lock = spine.campaign_lock("testvale")
     assert lock.acquire(blocking=False)
@@ -239,15 +241,16 @@ def test_host_allowlist_studio_extra_hosts_env(client, monkeypatch):
 
 def _fake_engine_home(tmp_path):
     home = tmp_path / "engine-home"
-    world = home / "world"
-    world.mkdir(parents=True, exist_ok=True)
-    return home, world
+    home.mkdir(parents=True, exist_ok=True)
+    return home, home
 
 
 def test_week_job_writes_flag_and_clears_it_in_finally(client, tmp_spine_root,
                                                        monkeypatch):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     seen = {}
 
     def fake_tick(engine_root, script, *args, timeout=600, on_line=None, **kw):
@@ -271,8 +274,10 @@ def test_week_job_writes_flag_and_clears_it_in_finally(client, tmp_spine_root,
 
 
 def test_week_job_failure_clears_flag(client, tmp_spine_root, monkeypatch):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
 
     def failing_tick(*args, **kw):
         return 1, ["boom"]
@@ -287,7 +292,7 @@ def test_week_job_failure_clears_flag(client, tmp_spine_root, monkeypatch):
 
 def test_restore_restores_engine_state_from_bak(tmp_path, monkeypatch):
     home, world = _fake_engine_home(tmp_path)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    monkeypatch.setattr(engines, "ENGINE_HOME", home)
     (world / "state.yaml").write_text("half a tick", encoding="utf-8")
     (world / "state.yaml.bak").write_text("pre-week engine state",
                                           encoding="utf-8")
@@ -304,7 +309,7 @@ def test_restore_restores_engine_state_from_bak(tmp_path, monkeypatch):
 
 def test_restore_without_bak_still_clears_flag(tmp_path, monkeypatch):
     home, world = _fake_engine_home(tmp_path)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    monkeypatch.setattr(engines, "ENGINE_HOME", home)
     (world / "state.yaml").write_text("half a tick", encoding="utf-8")
     write_week_flag("othervale")
 
@@ -316,7 +321,7 @@ def test_restore_without_bak_still_clears_flag(tmp_path, monkeypatch):
 
 
 def test_restore_noop_without_flag(tmp_path, monkeypatch):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         _fake_engine_home(tmp_path)[0])
     assert restore_interrupted_week() is None
 
@@ -325,7 +330,7 @@ def test_boot_lifespan_restores_and_reports_health(tmp_path, monkeypatch):
     from fastapi.testclient import TestClient
 
     home, world = _fake_engine_home(tmp_path)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
+    monkeypatch.setattr(engines, "ENGINE_HOME", home)
     (world / "state.yaml").write_text("mid-tick garbage", encoding="utf-8")
     (world / "state.yaml.bak").write_text("last good engine state",
                                           encoding="utf-8")
@@ -340,8 +345,10 @@ def test_boot_lifespan_restores_and_reports_health(tmp_path, monkeypatch):
 
 
 def test_health_reflects_flag_outside_boot(client, tmp_spine_root, monkeypatch):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     write_week_flag("testvale")
     try:
         assert client.get("/api/health").json()["week_run_in_progress"] is True
@@ -449,14 +456,15 @@ def test_log_file_created_with_rotating_handler():
 
 def test_log_path_env_override(tmp_path, monkeypatch):
     """STUDIO_LOG_FILE decides where the rotating log lives (absolute or
-    studio-relative); the default stays the user's studio/logs/studio.log."""
+    studio-relative); the default is the data root's logs/ dir (ticket 35)."""
     custom = tmp_path / "logs" / "custom.log"
     monkeypatch.setenv("STUDIO_LOG_FILE", str(custom))
     assert server._log_file_path() == custom
     monkeypatch.setenv("STUDIO_LOG_FILE", "logs/relative.log")
     assert server._log_file_path() == server.STUDIO_DIR / "logs" / "relative.log"
     monkeypatch.delenv("STUDIO_LOG_FILE")
-    assert server._log_file_path() == server.STUDIO_DIR / "logs" / "studio.log"
+    assert server._log_file_path() == \
+        spine.data_root() / "logs" / "studio.log"
 
 
 def test_job_log_lines_mirror_into_the_log(client):

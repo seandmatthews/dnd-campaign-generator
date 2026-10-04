@@ -21,6 +21,7 @@ The PNG is rasterized from scene.svg with sharp
 import base64
 import json
 import math
+import os
 import pathlib
 import re
 import sys
@@ -29,6 +30,16 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 GEOJSON = ROOT / "worlds/ruravaqan/ruravaqan.geojson"
 SCENE_DIR = ROOT / "worlds/ruravaqan/scenes/harbour-quay"
 SCENE_FILE = SCENE_DIR / "scene.json"
+
+# Scratch home for generated sites: campaign-data/maps/sites — under the
+# campaign-data root ($CAMPAIGN_DATA_ROOT when set — the studio sets it on
+# every subprocess it launches — else the repo's campaign-data/). This home
+# is regenerated on demand; canon copies live in the campaign repos
+# (ticket 35). worlds/ruravaqan above is a tracked generation record and
+# stays in the tree.
+DATA_ROOT = pathlib.Path(
+    os.environ.get("CAMPAIGN_DATA_ROOT") or (ROOT.parent / "campaign-data"))
+SITES_DIR = DATA_ROOT / "maps" / "sites"
 
 PIXELS_PER_GRID = 70
 METERS_PER_GRID = 1.524  # a 5-foot square
@@ -157,11 +168,9 @@ def extract():
 # ---------------------------------------------------------------- site generators
 # Dungeons/caves/camps bypass the settlemaker GeoJSON: their own geometry
 # feeds the SAME scene schema, so render and wrap work unchanged.
-# Output: worlds/sites/<name>/.
+# Output: <campaign-data>/maps/sites/<name>/ (SITES_DIR, top of file).
 
 import random
-
-SITES_DIR = ROOT / "worlds/sites"
 
 
 def _save_site(name, scene):

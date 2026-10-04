@@ -6,10 +6,10 @@ self-extracting installer (7-Zip's 7zSD stub + 7z payload + config,
 concatenated). Double-clicking it extracts the payload to a temp dir and
 runs install.cmd there, which mirrors the app into
 "%LOCALAPPDATA%\Campaign Studio" (robocopy /MIR, but never touching the
-campaigns/ data) and starts launch.cmd from there; the browser opens.
-Re-running a same-version exe just relaunches; a new version refreshes
-the program in place and keeps the campaigns. The target machine needs
-nothing installed:
+campaign-data/ data dir) and starts launch.cmd from there; the browser
+opens. Re-running a same-version exe just relaunches; a new version
+refreshes the program in place and keeps the campaign data. The target
+machine needs nothing installed:
 
   runtime/python      embeddable CPython 3.11 + requirements.txt installed
   runtime/node        official node.exe (the FMG tool tree wants >= 24)
@@ -144,28 +144,30 @@ def build_stage(node_zip):
     STAGE.mkdir(parents=True)
 
     copy_tree(REPO / "studio", STAGE / "studio", ("logs", "tests"))
-    (STAGE / "studio" / "logs").mkdir()
     copy_tree(REPO / "agentic-simulator", STAGE / "agentic-simulator",
-              ("world", "chronicle", "tests"))
-    for d in ("world/replay", "chronicle"):
-        (STAGE / "agentic-simulator" / d).mkdir(parents=True, exist_ok=True)
-    copy_tree(REPO / "dnd-mapping", STAGE / "dnd-mapping",
-              ("docs", "out-gen-city-smoke"))
+              ("tests",))
+    copy_tree(REPO / "dnd-mapping", STAGE / "dnd-mapping", ("docs",))
     worlds = STAGE / "dnd-mapping" / "worlds"
+    # tracked generation records only: runtime data lives under
+    # campaign-data/ (ticket 35) and is staged fresh below
     shutil.rmtree(worlds / "sites", ignore_errors=True)
-    (worlds / "sites").mkdir()
-    for p in (worlds / "candidates").glob("*"):  # build-machine scratch
-        shutil.rmtree(p) if p.is_dir() else p.unlink()
+    if (worlds / "candidates").is_dir():
+        for p in (worlds / "candidates").iterdir():  # build-machine scratch
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
     (worlds / "raw").mkdir(exist_ok=True)
     copy_tree(REPO / "verification", STAGE / "verification")
     shutil.copy2(REPO / "docs" / "for-new-gms" / "TUTORIAL.md", STAGE / "TUTORIAL.md")
     shutil.copy2(REPO / "llm.env.example", STAGE / "llm.env.example")
 
-    (STAGE / "campaigns" / ".locks").mkdir(parents=True)
+    # the data home: seeded empty (launch.cmd points CAMPAIGN_DATA_ROOT
+    # here; install.cmd keeps it across updates and seeds it on first
+    # install). --campaigns copies your campaigns into it.
+    (STAGE / "campaign-data" / "campaigns" / ".locks").mkdir(parents=True)
     if ARGS.campaigns:
-        for camp in (REPO / "campaigns").iterdir():
+        for camp in (REPO / "campaign-data" / "campaigns").iterdir():
             if camp.name != ".locks" and camp.is_dir():
-                copy_tree(camp, STAGE / "campaigns" / camp.name)
+                copy_tree(camp,
+                          STAGE / "campaign-data" / "campaigns" / camp.name)
 
     step("stage: bundled python (embeddable + pip + requirements.txt)")
     pydir = STAGE / "runtime" / "python"
@@ -271,14 +273,14 @@ def smoke(port):
     if kill_port(port):
         raise SystemExit(f"FAILED: port {port} still busy after kill")
     step("smoke: clean test artifacts out of the stage before packing")
-    shutil.rmtree(STAGE / "studio" / "logs", ignore_errors=True)
-    (STAGE / "studio" / "logs").mkdir()
-    shutil.rmtree(STAGE / "campaigns", ignore_errors=True)
-    (STAGE / "campaigns" / ".locks").mkdir(parents=True)
+    # the smoke boot ran with CAMPAIGN_DATA_ROOT pointed at the stage's
+    # campaign-data/ (launch.cmd) — reset it wholesale to the seeded state
+    shutil.rmtree(STAGE / "campaign-data", ignore_errors=True)
+    (STAGE / "campaign-data" / "campaigns" / ".locks").mkdir(parents=True)
     if ARGS.campaigns:  # smoke traffic may have touched campaign dirs
-        for camp in (REPO / "campaigns").iterdir():
+        for camp in (REPO / "campaign-data" / "campaigns").iterdir():
             if camp.name != ".locks" and camp.is_dir():
-                dst = STAGE / "campaigns" / camp.name
+                dst = STAGE / "campaign-data" / "campaigns" / camp.name
                 shutil.rmtree(dst, ignore_errors=True)
                 copy_tree(camp, dst)
 
@@ -420,7 +422,8 @@ def main():
     ap.add_argument("--no-smoke", action="store_true",
                     help="skip the boot smoke tests (not recommended)")
     ap.add_argument("--campaigns", action="store_true",
-                    help="copy your campaigns/ into the bundle (empty by default)")
+                    help="copy your campaign-data/campaigns/ into the "
+                         "bundle (empty by default)")
     ap.add_argument("--keep-work", action="store_true",
                     help="keep release/work (stage, payload, sfx test copy)")
     ap.add_argument("--sfx-only", action="store_true",

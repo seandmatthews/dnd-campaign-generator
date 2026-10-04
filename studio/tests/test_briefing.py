@@ -134,18 +134,20 @@ def test_briefing_labels_pending_proposals_as_proposed(
 
     def fake_tick(engine_root, script, *args, timeout=600, on_line=None,
                   env=None):
-        world = engine_root / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(
             "meta:\n  clock:\n    week: 4\n", encoding="utf-8")
-        (engine_root / "chronicle").mkdir(exist_ok=True)
-        (engine_root / "chronicle" / "0004-proposed.md").write_text(
+        engines.engine_chronicle_dir().mkdir(exist_ok=True)
+        (engines.engine_chronicle_dir() / "0004-proposed.md").write_text(
             "# Week 4 — Proposed\n\nNot canon.\n", encoding="utf-8")
         return 0, ["week 4 written"]
 
     monkeypatch.setattr(engines, "run_py", fake_tick)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     job = wait_for_job(client, r.json()["job_id"])

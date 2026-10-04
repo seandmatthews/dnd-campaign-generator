@@ -146,7 +146,7 @@ def test_cli_state_flag_applies_into_target_and_leaves_default_alone():
         write_pending(props, pending)
         # the default file may not exist on a fresh checkout — the guarantee
         # is "unchanged", so compare against whatever was there (or nothing)
-        default_path = ROOT / "world" / "state.yaml"
+        default_path = ingest.STATE_FILE
         default_before = default_path.read_bytes() \
             if default_path.is_file() else None
         buf = io.StringIO()
@@ -159,7 +159,7 @@ def test_cli_state_flag_applies_into_target_and_leaves_default_alone():
         default_after = default_path.read_bytes() \
             if default_path.is_file() else None
         assert default_after == default_before, \
-            "the default world/state.yaml must be untouched"
+            "the default engine-home state.yaml must be untouched"
     print("  --state: apply lands in the given file, default state.yaml untouched  OK")
 
 

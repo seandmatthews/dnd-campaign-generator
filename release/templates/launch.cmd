@@ -3,6 +3,11 @@ setlocal
 title Campaign Studio
 set "ROOT=%~dp0"
 if not defined STUDIO_PORT set "STUDIO_PORT=8765"
+rem ALL runtime campaign data (campaigns, engine home, logs, scratch) lives
+rem in the install dir's campaign-data/ — robocopy /MIR never touches it, so
+rem it survives version updates. The studio and its engine subprocesses all
+rem resolve paths from this variable.
+if not defined CAMPAIGN_DATA_ROOT set "CAMPAIGN_DATA_ROOT=%ROOT%campaign-data"
 set "PATH=%ROOT%runtime\node;%ROOT%runtime\python;%PATH%"
 
 rem First real run: leave a desktop shortcut for next time. Headless runs

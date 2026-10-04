@@ -74,8 +74,10 @@ def _run_review(client, monkeypatch, tmp_spine_root, updates_doc=UPDATES,
                 rc=0):
     monkeypatch.setattr(engines, "run_py",
                         _fake_engine(updates_doc, rc=rc))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/goal-review")
     assert r.status_code == 202, r.text
     return wait_for_job(client, r.json()["job_id"])

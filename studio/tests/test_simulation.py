@@ -60,7 +60,8 @@ def test_week_post_422_without_confirm_exactly_true(client, spine_root):
 
 
 def test_week_job_error_keeps_log_and_sets_error(client, tmp_spine_root, monkeypatch):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "ENGINE_HOME", tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME", tmp_spine_root / "chronicle")
 
     def failing_tick(*args, on_line=None, **kwargs):
         if on_line:
@@ -93,7 +94,7 @@ def test_week_job_happy_path_proposal_not_copy_out(
         calls["cwd"] = engine_root
         calls["args"] = (script,) + args
         # engine "wrote" its fixed home state + a new chronicle
-        world = engine_root / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         prev = world / "state.yaml"
         if prev.exists():
@@ -101,14 +102,15 @@ def test_week_job_happy_path_proposal_not_copy_out(
                                                   encoding="utf-8")
         prev.write_text("meta:\n  clock:\n    week: 4\n"
                         "meta_extra: kept\n", encoding="utf-8")
-        (engine_root / "chronicle").mkdir(exist_ok=True)
-        (engine_root / "chronicle" / "0004-the-gate.md").write_text(
+        engines.engine_chronicle_dir().mkdir(exist_ok=True)
+        (engines.engine_chronicle_dir() / "0004-the-gate.md").write_text(
             "# Week 4 — The Gate\n\nProse.\n\nHeld (scheduler): ferrymen\n",
             encoding="utf-8")
         return 0, ["wardens       HOLDS (quiet week)", "week 4 written"]
 
     monkeypatch.setattr(engines, "run_py", fake_tick)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "ENGINE_HOME", tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME", tmp_spine_root / "chronicle")
     campaign_state_before = (tmp_spine_root / "testvale" / "simulation" /
                              "state.yaml").read_bytes()
     r = client.post("/api/campaign/testvale/simulation/week",
@@ -123,7 +125,7 @@ def test_week_job_happy_path_proposal_not_copy_out(
     # held: from the log's HOLDS line and the chronicle's Held line
     assert job["result"]["held"] == ["ferrymen", "wardens"]
     # copy-in happened (the engine home saw the campaign state) ...
-    engine_state = (tmp_spine_root / "engine-home" / "world" / "state.yaml")
+    engine_state = engines.engine_state_path()
     assert engine_state.is_file()
     # ... but nothing was copied OUT: the campaign is byte-identical
     assert (tmp_spine_root / "testvale" / "simulation" / "state.yaml"
@@ -135,7 +137,7 @@ def test_week_job_happy_path_proposal_not_copy_out(
 def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatch,
                                                   tmp_path):
     # never touch the real engine home from tests (engine-home is scratch, D4)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "engine-home")
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "engine-home")  # run_py cwd only
     r = client.get("/api/campaign/testvale/simulation/views/ghosts")
     assert r.status_code == 404
 
@@ -166,7 +168,7 @@ def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatc
 
 def test_why_passthrough_and_engine_failure_502(client, spine_root, monkeypatch,
                                                 tmp_path):
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "engine-home")
+    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "engine-home")  # run_py cwd only
     body = {"week": 2, "faction": "ferrymen"}
     url = "/api/campaign/testvale/simulation/why"
 

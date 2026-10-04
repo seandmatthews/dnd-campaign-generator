@@ -549,10 +549,13 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
     state = ("meta:\n  clock:\n    week: 4\n"
              "factions:\n  - id: wardens\n    name: The Bridge Wardens\n"
              "events: []\nrumors: []\n")
-    engine_home = tmp_spine_root / "agentic-simulator"
-    (engine_home / "world").mkdir(parents=True, exist_ok=True)
-    (engine_home / "chronicle").mkdir(parents=True, exist_ok=True)
-    (engine_home / "world" / "state.yaml").write_text(state, encoding="utf-8")
+    engine_home = tmp_spine_root / "engine-home"
+    monkeypatch.setattr(eng, "ENGINE_HOME", engine_home)
+    monkeypatch.setattr(eng, "CHRONICLE_HOME",
+                        tmp_spine_root.parent / "chronicle")
+    engine_home.mkdir(parents=True, exist_ok=True)
+    engines.engine_chronicle_dir().mkdir(parents=True, exist_ok=True)
+    engines.engine_state_path().write_text(state, encoding="utf-8")
 
     def fake_run_py(engine_root, script, *args, timeout=None, on_line=None,
                     **kw):
@@ -560,18 +563,17 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
         # whatever the home held) and writes the NEW chronicle; it must not
         # exist before the run or the week job's before/after diff will
         # not see it
-        state_path = engine_root / "world" / "state.yaml"
+        state_path = engines.engine_state_path()
         live = yaml.safe_load(state_path.read_text(encoding="utf-8"))
         live["meta"]["clock"]["week"] = 4
         state_path.write_text(yaml.safe_dump(live, sort_keys=False),
                               encoding="utf-8")
-        (engine_root / "chronicle" / "0004-the-toll.md").write_text(
+        (engines.engine_chronicle_dir() / "0004-the-toll.md").write_text(
             "# Week 4 — The Toll\n\nThe wardens counted the carts again.\n",
             encoding="utf-8")
         return 0, []
 
     monkeypatch.setattr(eng, "run_py", fake_run_py)
-    monkeypatch.setattr(eng, "AGENTIC_SIMULATOR", engine_home)
     # the week job needs a simulation to copy in
     src = tmp_spine_root / "testvale" / "simulation" / "state.yaml"
     assert src.is_file()  # the fixture ships one
@@ -587,7 +589,7 @@ def test_week_chronicle_gets_linkified(client, tmp_spine_root, monkeypatch):
               "0004-the-toll.md")
     assert not copied.exists()
     # the engine home keeps its raw copy (scratch is never rewritten)
-    raw = (engine_home / "chronicle" / "0004-the-toll.md").read_text(
+    raw = (engines.engine_chronicle_dir() / "0004-the-toll.md").read_text(
         encoding="utf-8")
     assert "[[wardens]]" not in raw
 

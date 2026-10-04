@@ -58,7 +58,7 @@ def _campaign_bytes(tmp_spine_root):
 
 def _fake_tick(state_text, chronicle_name, log_lines):
     def tick(engine_root, script, *args, timeout=600, on_line=None, **kw):
-        world = engine_root / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         # capture what the engine actually received (copy-in)
         state_text["received"] = (world / "state.yaml").read_text(
@@ -76,7 +76,7 @@ def _fake_tick(state_text, chronicle_name, log_lines):
                      "wardens), margin -3"})
         world.joinpath("state.yaml").write_text(
             yaml.safe_dump(state, sort_keys=False), encoding="utf-8")
-        chron = engine_root / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         name = chronicle_name if n == 1 else \
             chronicle_name.replace(".md", "-2.md")

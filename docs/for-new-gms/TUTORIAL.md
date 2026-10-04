@@ -24,9 +24,9 @@ and writes the results as a chronicle you can read at the table.
 
 You are the DM. The machine *proposes*; **nothing enters the campaign
 until you approve it** in the Review tab. A campaign is one folder of
-readable YAML and Markdown under `campaigns/<name>/` — no database, no
-cloud, portable by zip. Every change is auto-committed to git, so history
-is your undo.
+readable YAML and Markdown under `campaign-data/campaigns/<name>/` — no
+database, no cloud, portable by zip. Every change is auto-committed to
+git, so history is your undo.
 
 It runs entirely on your machine (`http://127.0.0.1:8765`, localhost only).
 
@@ -125,13 +125,14 @@ Still on Maps:
   name (e.g. "The Drowned Crypt"), optionally attach it to a place, click
   **Generate scene** — another headless run, a few minutes. You get a
   scene image plus a `.uvtt` file under
-  `campaigns/<name>/maps/sites/…` — drop that into Foundry VTT and walls,
+  `campaign-data/campaigns/<name>/maps/sites/…` — drop that into Foundry
+  VTT and walls,
   doors and lights come with it. Each map also gets a small companion note
   (`<slug>.md`) embedding the image and linking its place; open the
   campaign folder in Obsidian and the links are live.
 
 **You should see:** thumbnails in both grids; the files on disk under
-`campaigns/<name>/maps/`.
+`campaign-data/campaigns/<name>/maps/`.
 
 ## Step 4 — lore: backstory, names, and the Review queue
 
@@ -237,7 +238,7 @@ immutable revision; it never rewrites the evidence behind a review.
 
 ## Step 7 — where everything lives, and your next campaign
 
-    campaigns/<name>/
+    campaign-data/campaigns/<name>/
       campaign.yaml          # name, title, created
       world/                 # geography.yaml, the map generator's dump, map.svg
       lore/                  # timeline.yaml, entities/ (one markdown page per
@@ -247,11 +248,13 @@ immutable revision; it never rewrites the evidence behind a review.
                              # .uvtt and each map's companion note <slug>.md)
 
 Every generation, approval and week auto-commits just that campaign folder
-to the campaigns workspace's own git repo — `git -C campaigns log -- <name>`
+to the campaigns workspace's own git repo —
+`git -C campaign-data/campaigns log -- <name>`
 is the audit trail, and a bad outcome is one checkout away from gone.
 
-Starting another campaign is Step 1 again. A fresh clone starts with an
-empty `campaigns/` folder — campaigns you create live there, and nothing
+Starting another campaign is Step 1 again. A fresh clone starts with no
+`campaign-data/` folder at all — it is created (git-ignored) on first use,
+campaigns you create live there, and nothing
 in them is precious: every campaign folder is its own git history, so you
 can always check out yesterday's world.
 

@@ -20,7 +20,7 @@ carry (unknown faction, empty or multi-line goal, goal unchanged, missing
 reason) is dropped with a finding, never applied. Zero valid updates is a
 fine answer — a quiet ledger justifies no changes.
 
-  python src/goals.py --state world/state.yaml --out goal-updates.yaml
+  python src/goals.py --state <engine-home>/state.yaml --out goal-updates.yaml
 
 Exit codes: 0 a file was written (updates may still be empty),
 1 state/IO error, 2 usage, 3 per-run budget exhausted (nothing written).

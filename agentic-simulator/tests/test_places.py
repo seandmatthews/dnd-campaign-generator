@@ -227,11 +227,12 @@ def test_run_live_multi_place_week_writes_one_chronicle():
     cross-level contest, one clock, one chronicle labeled with the places."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-places-"))
     saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
-             tick.llm.propose, tick.llm.narrate_week, tick.save_state,
-             resolve._rng)
+             tick.REPLAY_DIR, tick.llm.propose, tick.llm.narrate_week,
+             tick.save_state, resolve._rng)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     tick.CHRONICLE_DIR = root / "chronicle"
+    tick.REPLAY_DIR = root / "replay"
     real_save_state = tick.save_state
     tick.save_state = lambda doc, path=None: real_save_state(
         doc, path or tick.STATE_FILE)
@@ -279,15 +280,15 @@ def test_run_live_multi_place_week_writes_one_chronicle():
         assert contested, "the crown's levy contested the wardens cross-level"
         chron = list(tick.CHRONICLE_DIR.glob("0005-*.md"))
         assert chron and "The Levy Week" in chron[0].read_text(encoding="utf-8")
-        ok, msg = tick.replay_verify(root / "world" / "replay" / "week-5.yaml")
+        ok, msg = tick.replay_verify(tick.REPLAY_DIR / "week-5.yaml")
         assert ok, f"the multi-place week must replay: {msg}"
     finally:
         # restore resolve's RNG too: run_live set_rng()'d a per-week Random
         # instance, and a leaked instance silently deafens later tests'
         # random.seed() (it bit test_resolve, which runs right after this
         # file alphabetically)
-        (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose,
-         tick.llm.narrate_week, tick.save_state,
+        (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.REPLAY_DIR,
+         tick.llm.propose, tick.llm.narrate_week, tick.save_state,
          resolve._rng) = saved
         shutil.rmtree(root, ignore_errors=True)
     print("  live: a two-tier week resolves, chronicles, and replays  OK")

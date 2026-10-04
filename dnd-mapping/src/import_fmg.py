@@ -29,6 +29,7 @@ Usage:
 
 import hashlib
 import json
+import os
 import pathlib
 import re
 import sys
@@ -36,8 +37,16 @@ import sys
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# Derived geography.yamls land in a SCRATCH drop dir under the campaign-data
+# root ($CAMPAIGN_DATA_ROOT when set — the studio sets it on every subprocess
+# it launches — else the repo's campaign-data/): nothing a run produces can
+# land in tracked space by accident (ticket 35). Curated candidates stay
+# TRACKED in worlds/candidates/; promoting a drop is an ordinary copy there
+# + git add. worlds/raw/ keeps the tracked genesis records and stays put.
+DATA_ROOT = pathlib.Path(
+    os.environ.get("CAMPAIGN_DATA_ROOT") or (ROOT.parent / "campaign-data"))
 RAW_DIR = ROOT / "worlds" / "raw"
-OUT_DIR = ROOT / "worlds" / "candidates"
+OUT_DIR = DATA_ROOT / "scratch" / "map-candidates"
 
 # Every signature import_fmg matches on, and what a miss costs: a drifted
 # file imports with that section EMPTY — silently wrong. load_fmg reports

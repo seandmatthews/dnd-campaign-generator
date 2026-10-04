@@ -21,11 +21,11 @@ from conftest import wait_for_job
 def fake_tick_ok(engine_root, script, *args, timeout=600, on_line=None,
                  **kw):
     """The smallest engine that advances the clock to week 4."""
-    world = engine_root / "world"
+    world = engines.ENGINE_HOME
     world.mkdir(parents=True, exist_ok=True)
     world.joinpath("state.yaml").write_text(
         "meta:\n  clock:\n    week: 4\n", encoding="utf-8")
-    chron = engine_root / "chronicle"
+    chron = engines.engine_chronicle_dir()
     chron.mkdir(exist_ok=True)
     (chron / "0004-the-gate.md").write_text("# Week 4 — The Gate\n",
                                             encoding="utf-8")
@@ -79,8 +79,10 @@ def test_engine_lock_deadline_mid_queue_leaves_no_dangling_flag(
     must not leave the week flag behind — the flag is written only once
     the engine lock is HELD, so GET status stays honest afterwards (the
     old code wrote it before the wait and it dangled until reboot)."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
 
     # this campaign's own week holds the engine home (holder=testvale), so
     # the probe lets a second week QUEUE behind it instead of 409ing
@@ -124,8 +126,10 @@ def test_queued_week_waits_without_touching_the_running_flag(
     without overwriting the live flag (the old pre-lock write let a queued
     job rewrite it mid-run — a crash then made boot restore blame the
     wrong campaign)."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     monkeypatch.setattr(engines, "run_py", fake_tick_ok)
     entered = threading.Event()
     release = threading.Event()
@@ -162,7 +166,8 @@ def test_queued_week_waits_without_touching_the_running_flag(
 def test_clear_week_flag_leaves_a_foreign_flag_alone(tmp_path, monkeypatch):
     """The compare-and-unlink guard (module lock + attribution): clearing
     campaign A's flag must not delete the live flag a later run wrote."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", tmp_path / "home")
+    monkeypatch.setattr(engines, "ENGINE_HOME", tmp_path / "home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME", tmp_path / "chronicle")
     engines.write_week_flag("aval")
     engines.clear_week_flag("othervale")
     doc = json.loads(engines.week_flag_path().read_text(encoding="utf-8"))
@@ -180,8 +185,10 @@ def test_engine_job_holds_the_home_lock_and_marks_its_children(
     (what a standalone tick.py --live / effects.py --apply refuses on), and
     the engine child carries STUDIO_ENGINE_HOME_HELD so it does not
     re-take — and deadlock on — its parent's claim. Released after."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     seen = {}
 
     def fake_tick(engine_root, script, *args, timeout=600, on_line=None,
@@ -210,8 +217,10 @@ def test_engine_job_refuses_when_a_standalone_holds_the_home(
     (what tick.py --live / effects.py --apply do when run outside the
     studio) makes the studio's engine job fail with the readable message
     instead of interleaving — nothing run, nothing spent."""
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     monkeypatch.setattr(engines, "run_py", fake_tick_ok)
 
     fh, held = spine.try_file_lock(engines.engine_home_lock_path())

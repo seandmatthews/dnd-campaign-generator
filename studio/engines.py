@@ -9,7 +9,12 @@ tracebacks land in the job log) and stream each line to an optional
 on_line callback, which is what keeps a live week's log tail moving.
 
 Engine roots resolve relative to the studio parent — studio is a fourth
-sibling of dnd-mapping / agentic-simulator / verification (D1).
+sibling of dnd-mapping / agentic-simulator / verification (D1). The engine
+HOME (state, flags, locks, replay) and the chronicle output are DATA, not
+code: they live under the campaign-data root (spine.data_root(), ticket
+35), and every subprocess this module launches carries CAMPAIGN_DATA_ROOT
+so the engine/battlemap CLIs — which do not import spine — land on the
+same root.
 
 The engine-home half (below the subprocess wrappers) owns everything that
 touches the SHARED scratch: copy-in, the interrupted-week flag and its
@@ -48,6 +53,14 @@ PARENT = STUDIO_DIR.parent
 DND_MAPPING = PARENT / "dnd-mapping"
 AGENTIC_SIMULATOR = PARENT / "agentic-simulator"
 VERIFICATION = PARENT / "verification"
+
+# The shared engine home and chronicle output: DATA under the campaign-data
+# root, not inside the engine's code tree (ticket 35). Module globals so
+# tests can relocate them (patch engines.ENGINE_HOME / engines.CHRONICLE_HOME
+# the way spine.CAMPAIGNS_ROOT is patched); every helper below reads them at
+# call time.
+ENGINE_HOME = spine.data_root() / "engine-home"
+CHRONICLE_HOME = spine.data_root() / "chronicle"
 
 _log = logging.getLogger("studio.engines")
 
@@ -154,17 +167,17 @@ def week_flag_path() -> Path:
     """Marker for a week run in flight (the engine job writes it once it
     HOLDS the engine home and removes it on every exit path; server.py
     restores the engine home on boot when it is left behind). Read at call
-    time so tests can relocate engines.AGENTIC_SIMULATOR."""
-    return AGENTIC_SIMULATOR / "world" / WEEK_FLAG_NAME
+    time so tests can relocate engines.ENGINE_HOME."""
+    return ENGINE_HOME / WEEK_FLAG_NAME
 
 
 def engine_home_lock_path() -> Path:
-    """The cross-process lock over the shared engine home (world/):
+    """The cross-process lock over the shared engine home:
     ENGINE_LOCK excludes this process's threads only, and the home is also
     touched by the engine's standalone CLIs (tick.py --live, effects.py
     --apply) as separate processes. Read at call time so tests can
-    relocate engines.AGENTIC_SIMULATOR."""
-    return AGENTIC_SIMULATOR / "world" / ENGINE_HOME_LOCK_NAME
+    relocate engines.ENGINE_HOME."""
+    return ENGINE_HOME / ENGINE_HOME_LOCK_NAME
 
 
 def engine_home_lock_held() -> bool:
@@ -175,17 +188,17 @@ def engine_home_lock_held() -> bool:
 
 # The rest of the engine home's layout is owned HERE the same way: routers
 # and the doctor must rebuild none of it. All read at call time so tests can
-# relocate AGENTIC_SIMULATOR.
+# relocate ENGINE_HOME / CHRONICLE_HOME.
 
 def engine_state_path() -> Path:
     """The shared engine home's scratch state.yaml (campaigns own canon)."""
-    return AGENTIC_SIMULATOR / "world" / "state.yaml"
+    return ENGINE_HOME / "state.yaml"
 
 
 def engine_state_backup_path() -> Path:
     """The pre-copy-in engine state, kept so a boot after a crashed week can
     restore the home (restore_interrupted_week)."""
-    return AGENTIC_SIMULATOR / "world" / "state.yaml.bak"
+    return ENGINE_HOME / "state.yaml.bak"
 
 
 def engine_replay_path(week) -> Path:
@@ -193,7 +206,7 @@ def engine_replay_path(week) -> Path:
     the proposal bundle). Reruns version like chronicles — after a rewind
     and re-run the record is week-N-2.yaml — so return the highest suffix
     present; a fresh week still resolves to plain week-N.yaml."""
-    d = AGENTIC_SIMULATOR / "world" / "replay"
+    d = ENGINE_HOME / "replay"
     best = d / f"week-{week}.yaml"
     n = 2
     while (d / f"week-{week}-{n}.yaml").is_file():
@@ -203,7 +216,49 @@ def engine_replay_path(week) -> Path:
 
 
 def engine_chronicle_dir() -> Path:
-    return AGENTIC_SIMULATOR / "chronicle"
+    return CHRONICLE_HOME
+
+
+def map_sites_dir() -> Path:
+    """battlemap.py's scratch home for generated sites (ex
+    dnd-mapping/worlds/sites): campaign-data/maps/sites. Canon copies live
+    in the campaign repos; this home is regenerated on demand. The
+    battlemap CLI derives the same default from CAMPAIGN_DATA_ROOT (set on
+    every subprocess _run launches) and accepts an explicit --dir."""
+    return spine.data_root() / "maps" / "sites"
+
+
+def candidate_drop_dir() -> Path:
+    """import_fmg.py's candidate-yaml drop dir (ex
+    dnd-mapping/worlds/candidates): campaign-data/scratch/map-candidates.
+    The tracked half of the old dual-status dir — curated geography.yamls,
+    index.md, screenshots — stays put under worlds/candidates/; curation is
+    now an ordinary copy + git add (ticket 35)."""
+    return spine.data_root() / "scratch" / "map-candidates"
+
+
+def legacy_data_dirs(parent: Path | None = None,
+                     data_root: Path | None = None) -> list:
+    """Pre-ticket-35 data locations that still exist, as [(legacy, new)]
+    pairs: what the boot banner names and doctor --migrate-data-root moves.
+    Empty when everything already lives under the data root. Both roots
+    parameterizable so tests can fabricate a legacy tree in tmp; the
+    default derives today's layout. dnd-mapping/worlds/candidates is
+    deliberately NOT here: the dir legitimately survives the migration
+    (its tracked half stays); only its untracked contents move."""
+    parent = parent or PARENT
+    data_root = data_root or spine.data_root()
+    pairs = [
+        (parent / "campaigns", data_root / "campaigns"),
+        (parent / "agentic-simulator" / "world", data_root / "engine-home"),
+        (parent / "agentic-simulator" / "chronicle", data_root / "chronicle"),
+        (parent / "studio" / "logs", data_root / "logs"),
+        (parent / "dnd-mapping" / "worlds" / "sites",
+         data_root / "maps" / "sites"),
+        (parent / "dnd-mapping" / "out-gen-city-smoke",
+         data_root / "scratch" / "gen-city-smoke"),
+    ]
+    return [(old, new) for old, new in pairs if old.exists()]
 
 
 # Transcript cap: week staging re-parses for HOLDS lines, errors read the
@@ -219,9 +274,15 @@ def tail_detail(lines: list, n: int = 8) -> str:
 
 
 def _run(cmd: list, cwd: Path, timeout: int, on_line, env: dict = None) -> tuple:
+    # CAMPAIGN_DATA_ROOT is set on EVERY engine subprocess (ticket 35): the
+    # engine and battlemap CLIs resolve their homes from the env — they do
+    # not import spine — so this, not cwd, is what keeps them on the
+    # studio's root. The caller's env (FMG_SEED, STUDIO_ENGINE_HOME_HELD, a
+    # test override) merges over it.
+    merged = {"CAMPAIGN_DATA_ROOT": str(spine.data_root())}
     if env:
-        # merge over the parent env (PATH etc. must survive); never mutate it
-        env = {**os.environ, **{k: str(v) for k, v in env.items()}}
+        merged.update({k: str(v) for k, v in env.items()})
+    env = {**os.environ, **merged}
     try:
         proc = subprocess.Popen(
             cmd, cwd=str(cwd), env=env,

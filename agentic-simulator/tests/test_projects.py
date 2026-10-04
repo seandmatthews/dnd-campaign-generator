@@ -778,9 +778,10 @@ def test_cli_check_preview_apply_round_trip():
 
 def test_replay_with_projects_verifies_dice_and_mechanics():
     root = pathlib.Path(tempfile.mkdtemp(prefix="proj-replay-"))
-    saved = (tick.ROOT, tick.STATE_FILE)
+    saved = (tick.ROOT, tick.STATE_FILE, tick.REPLAY_DIR)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         s = state(week=8, projects_list=[])
         proj = mk(s, dict(ferry()))
@@ -808,7 +809,7 @@ def test_replay_with_projects_verifies_dice_and_mechanics():
         ok, msg = tick.replay_verify(path)
         assert not ok and "project mechanics" in msg, msg
     finally:
-        tick.ROOT, tick.STATE_FILE = saved
+        tick.ROOT, tick.STATE_FILE, tick.REPLAY_DIR = saved
         import shutil
         shutil.rmtree(root, ignore_errors=True)
     print("  replay: schema 3 verifies dice AND project mechanics  OK")
@@ -816,9 +817,10 @@ def test_replay_with_projects_verifies_dice_and_mechanics():
 
 def test_replay_without_projects_section_is_honest():
     root = pathlib.Path(tempfile.mkdtemp(prefix="proj-replay-old-"))
-    saved = (tick.ROOT, tick.STATE_FILE)
+    saved = (tick.ROOT, tick.STATE_FILE, tick.REPLAY_DIR)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         s = state(week=8, projects_list=[])
         tick.STATE_FILE.write_text(yaml.safe_dump(s), encoding="utf-8")
@@ -833,7 +835,7 @@ def test_replay_without_projects_section_is_honest():
         assert ok and "before project mechanics" in msg, \
             f"old records must not claim mechanics they never stored: {msg}"
     finally:
-        tick.ROOT, tick.STATE_FILE = saved
+        tick.ROOT, tick.STATE_FILE, tick.REPLAY_DIR = saved
         import shutil
         shutil.rmtree(root, ignore_errors=True)
     print("  replay: old records verify dice only, and say so  OK")
@@ -915,11 +917,12 @@ def test_ferry_scenario_four_weeks_through_run_live():
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="proj-ferry-"))
     saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
-             tick.llm.propose, tick.llm.narrate_week, tick.save_state,
-             resolve.set_rng, tick.random.SystemRandom)
+             tick.REPLAY_DIR, tick.llm.propose, tick.llm.narrate_week,
+             tick.save_state, resolve.set_rng, tick.random.SystemRandom)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     tick.CHRONICLE_DIR = root / "chronicle"
+    tick.REPLAY_DIR = root / "replay"
     real_save_state = tick.save_state
     tick.save_state = lambda doc, path=None: real_save_state(
         doc, path or tick.STATE_FILE)
@@ -1021,7 +1024,7 @@ def test_ferry_scenario_four_weeks_through_run_live():
         assert len(comp) == 1, "exactly one completion event"
         # every week's replay verifies dice AND project mechanics
         for week in (9, 10, 11, 12, 13, 14):
-            path = root / "world" / "replay" / f"week-{week}.yaml"
+            path = tick.REPLAY_DIR / f"week-{week}.yaml"
             ok, msg = tick.replay_verify(path)
             assert ok, f"week {week}: {msg}"
             doc = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -1044,7 +1047,7 @@ def test_ferry_scenario_four_weeks_through_run_live():
         assert errs and "terminal" in errs[0], \
             "a completed project takes no session effects"
     finally:
-        (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
+        (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.REPLAY_DIR,
          tick.llm.propose, tick.llm.narrate_week, tick.save_state,
          resolve.set_rng, tick.random.SystemRandom) = saved
         shutil.rmtree(root, ignore_errors=True)

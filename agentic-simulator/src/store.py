@@ -3,13 +3,13 @@
 One loader, one dumper, one default path — the per-module copies this
 replaces had diverged in signature only. `load_state(path=None)` /
 `save_state(state, path=None)`: omit the path for the engine's own
-world/state.yaml; ingest passes its --state target explicitly.
+engine-home state.yaml; ingest passes its --state target explicitly.
 
 save_state writes a per-writer UNIQUE tmp + os.replace: a crash or kill
-mid-write used to truncate world/state.yaml in place — for the standalone
-workflow that file is the single source of truth, so the write itself must
-be atomic — and two writers sharing one fixed tmp name could land a
-half-written file (one writer's replace consuming the other's tmp
+mid-write used to truncate the engine-home state.yaml in place — for the
+standalone workflow that file is the single source of truth, so the write
+itself must be atomic — and two writers sharing one fixed tmp name could
+land a half-written file (one writer's replace consuming the other's tmp
 mid-write), so the tmp is minted fresh per call (mkstemp).
 """
 
@@ -23,7 +23,16 @@ import time
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-STATE_FILE = ROOT / "world" / "state.yaml"
+
+# The engine home (state.yaml, the lock file, replay/, pending weeks) is
+# DATA, not code: it lives under the campaign-data root — $CAMPAIGN_DATA_ROOT
+# when set (the studio sets it on every subprocess it launches; standalone
+# runs may set it too), else the repo's gitignored campaign-data/ (the same
+# rule studio/spine.py resolves). The code tree keeps none of it (ticket 35).
+DATA_ROOT = pathlib.Path(
+    os.environ.get("CAMPAIGN_DATA_ROOT") or (ROOT.parent / "campaign-data"))
+ENGINE_HOME = DATA_ROOT / "engine-home"
+STATE_FILE = ENGINE_HOME / "state.yaml"
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
@@ -37,7 +46,8 @@ LEVEL_INDEX = {g: i for i, g in enumerate(RESOURCE_LEVELS)}
 RUMOR_FIDELITY = ("eyewitness", "reliable", "hearsay", "dead")
 
 # ------------------------------------------------- engine-home cross-process
-# The home (world/) is ONE scratch shared by the studio's week/forecast
+# The home (engine-home/ under the campaign-data root) is ONE scratch shared
+# by the studio's week/forecast
 # jobs — which copy a campaign state in, run this engine, and diff the
 # outputs back out — and this repo's standalone CLIs (tick.py --live,
 # effects.py --apply, ingest.py --apply). Two writers interleave
@@ -51,7 +61,7 @@ RUMOR_FIDELITY = ("eyewitness", "reliable", "hearsay", "dead")
 # standalone_home_lock() and refuses with a readable message while a
 # studio job (or another standalone run) holds it.
 
-HOME_LOCK_FILE = ROOT / "world" / ".engine-home.lock"
+HOME_LOCK_FILE = ENGINE_HOME / ".engine-home.lock"
 STUDIO_ENGINE_HOME_HELD = "STUDIO_ENGINE_HOME_HELD"
 
 try:
@@ -104,7 +114,7 @@ def standalone_home_lock():
                 "the engine home is busy — another process (a studio week "
                 "or forecast job, or another standalone run) holds "
                 f"{HOME_LOCK_FILE}. Wait for it to finish before running "
-                "standalone against the shared home (world/).")
+                "standalone against the shared engine home.")
         try:
             yield
         finally:

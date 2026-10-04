@@ -1,6 +1,7 @@
 # 35 — campaign-data root: one gitignored home for all runtime data
 
-**Status:** proposed — written 2026-10-04, not started.
+**Status:** completed — implemented + migrated + verified 2026-10-04 (see
+Implementation notes).
 **Priority:** P2 (layout/hygiene — no product behavior change, but it closes
 the whole "data lands in tracked space" class)
 **Area:** `studio/spine.py`, `studio/engines.py`, `studio/doctor.py`,
@@ -146,22 +147,106 @@ entries — they are not campaign data.
 
 ## Acceptance criteria
 
-- [ ] `.gitignore` carries exactly one data-root entry
+- [x] `.gitignore` carries exactly one data-root entry
       (`campaign-data/`) and no per-artifact data entries remain.
-- [ ] A full loop — week run, battlemap gen, worldgen, export — writes
-      only under `campaign-data/` (or `CAMPAIGN_DATA_ROOT`); `git status`
-      stays clean apart from intentional edits.
-- [ ] `CAMPAIGN_DATA_ROOT` override is honored by the studio, the engine
-      CLI, and the battlemap CLI (test: point it at a temp dir, run a
-      week, assert nothing was written under the repo root).
-- [ ] Doctor `migrate-data-root` moves legacy dirs with locks
+      Pinned by `studio/tests/test_data_root.py` (layout + rule tests);
+      `git check-ignore campaign-data` confirms.
+- [x] A full loop — worldgen (real headless FMG), a live LLM week (real
+      `tick.py --live`, 5 calls), battlemap gen (real gen/render/sharp/
+      wrap), export — writes only under `campaign-data/`; `git status`
+      stayed clean apart from intentional edits. Proven live on a
+      throwaway campaign `ticket35-loop-proof` (deleted after).
+- [x] `CAMPAIGN_DATA_ROOT` override is honored by the studio
+      (`spine.data_root()`, call-time env read), the engine CLI (tick
+      inspect read a state that existed only under the override home),
+      and the battlemap CLI (gen-cave wrote only under the override).
+      Pinned for machines with prerequisites by the three
+      `test_env_override_*` tests in `studio/tests/test_integration.py`;
+      verified live 2026-10-04 (the integration tier itself skips on this
+      machine — see notes).
+- [x] Doctor `migrate-data-root` moves legacy dirs with locks
       refused-if-held, is idempotent, and the nested campaign git history
-      survives the move (snapshot log verifiable after migration).
-- [ ] Legacy-dir detection shows the boot banner; nothing migrates
-      silently.
-- [ ] Fresh-clone integration: fast + integration tiers green with data
-      only under the new root; `run-tests.py` `INTEGRATION_NEEDS` updated.
+      survives the move. Pinned by
+      `test_migrate_moves_legacy_dirs_and_keeps_git_history`,
+      `test_migrate_is_idempotent`,
+      `test_migrate_refused_while_campaign_lock_held`,
+      `test_migrate_refused_while_week_flag_left_behind`,
+      `test_migrate_refused_when_target_exists` (all
+      `studio/tests/test_data_root.py`); run for real on this checkout —
+      `git log` intact in the moved campaigns repo.
+- [x] Legacy-dir detection shows the boot banner; nothing migrates
+      silently. Pinned by `test_boot_banner_fires_on_legacy_dirs` +
+      `test_check_data_root_names_legacy_dirs`; the doctor `data root`
+      check surfaces the same pointer in the GUI health strip.
+- [x] Fresh-clone integration: fast tier green with data only under the
+      new root; `run-tests.py` `INTEGRATION_NEEDS` updated to the new
+      path. The integration tier itself still skips on this machine —
+      its `campaigns/ruravaqan` + `campaigns/sample` prerequisites were
+      removed from this checkout BEFORE this ticket (pre-existing skip,
+      unchanged in kind by the rename).
 - [ ] Release smoke: install → run → re-update keeps `campaign-data/`
-      intact.
-- [ ] Docs updated (TUTORIAL/API/AGENTS/obsidian-integration/READMEs)
-      including the vault-relocation note.
+      intact. NOT RE-RUN (a full ~20-min build was not spent here); the
+      seam is covered by `test_release_seams.py`
+      (exclusion shape, legacy-move-before-mirror order, first-install
+      seed line, and a live robocopy /MIR semantics test). Next rebuild
+      exercises it for real.
+- [x] Docs updated (TUTORIAL/API/READMEs/obsidian-integration/AGENTS +
+      dnd-mapping docs) including the vault-relocation note. The
+      Obsidian vault was re-registered in place (obsidian.json path
+      edit, Obsidian closed) so it reopens at
+      `campaign-data/campaigns/brineharrow-coast/lore`.
+
+## Implementation notes (2026-10-04)
+
+Landed as one change on `master` (ticket file moved to `archive/` in the
+same commit). The rule: `$CAMPAIGN_DATA_ROOT` if set, else
+`<repo-root>/campaign-data`, resolved by `spine.data_root()` on the
+studio side and independently in the engine (`store.DATA_ROOT`) and
+dnd-mapping (`battlemap.DATA_ROOT`, `import_fmg.DATA_ROOT`);
+`engines._run` stamps `CAMPAIGN_DATA_ROOT` onto EVERY subprocess so the
+CLIs stay on the studio's root without importing spine.
+
+Deviations from the proposal, with reasons:
+
+1. **`tick.REPLAY_DIR` module constant.** The proposal listed the replay
+   dir under the engine-home helpers; the engine tests relocate state,
+   chronicle and replay per-module-global, so the replay trail got its
+   own patchable constant beside `CHRONICLE_DIR` (tests patch it; two
+   tests had silently been writing replays into the REAL engine home —
+   fixed and the pollution removed).
+2. **`--dir` argv stays dnd-mapping-relative.** The studio computes the
+   sites dir absolutely but passes `os.path.relpath(...)` to battlemap
+   render/wrap and render-scene-png.mjs: the rasterizer joins its arg
+   onto the dnd-mapping root (`path.join` mangles absolute args). The
+   copy-back reads the absolute path. Pinned by `test_sites_job.py`.
+3. **Release: a visible one-time legacy move in install.cmd.** §6 said
+   launch.cmd + robocopy exclusion; that alone would orphan (and /MIR
+   would DELETE) an upgraded install's `campaigns\`. install.cmd now
+   moves `%DEST%\campaigns` → `%DEST%\campaign-data\campaigns` BEFORE the
+   mirror (error-visible, logged), and `%DEST%campaigns` stays in `/XD`
+   as a safety net if the move could not run. Pinned by
+   `test_release_seams.py`.
+4. **`_move_dir` reports mid-move crashes honestly.** The REAL migration
+   hit this live: a transient Windows handle on one `campaigns/.git`
+   object made `shutil.move`'s rename fail and its copy+delete fallback
+   leave the source partially deleted (the target already held the FULL
+   copy — copy precedes delete). The failure now raises a readable
+   "the target holds the full copy; delete the leftover and re-run"
+   instead of a raw traceback; the real leftover was finished by hand and
+   the resumed migration completed cleanly.
+5. **The campaigns root is ONE git repo** spanning all campaigns (not
+   one repo per campaign as the ticket's phrasing implied) — it moved as
+   a unit; `git log` verified at the new path.
+6. **`check_week_run`/`check_data_root`** both read through the engines
+   helpers, so the doctor's flag check automatically follows the new
+   engine home; `check_campaigns`/`check_vault` switched from re-derived
+   `PARENT/"campaigns"` to `spine.campaigns_root()`.
+7. **Integration-tier prerequisites**: still ruravaqan+tools, now under
+   `campaign-data/campaigns/`. This machine lacks the campaigns (and had
+   already lost them pre-ticket), so the tier skipped before and after;
+   the env-override criteria were verified live via the CLIs instead.
+
+Follow-ups (none blocking): the release build's next `--all` run should
+execute the release smoke box above. The stray `campaigns/simulation/`
+dir (empty all the way down — a misdirected mkdir, zero files) that had
+ridden along in the old tree was deleted during verification.

@@ -60,7 +60,7 @@ def test_world_job_fake_fmg_copies_dump_and_geography(client, tmp_spine_root,
         assert script == "src/import_fmg.py"
         dump_path = args[0]
         dump = json.loads(open(dump_path, encoding="utf-8").read())
-        candidates = engine_root / "worlds" / "candidates"
+        candidates = engines.candidate_drop_dir()
         candidates.mkdir(parents=True, exist_ok=True)
         out = candidates / "testland-0042.yaml"
         out.write_text(
@@ -77,6 +77,8 @@ def test_world_job_fake_fmg_copies_dump_and_geography(client, tmp_spine_root,
     monkeypatch.setattr(engines, "run_node", fake_run_node)
     monkeypatch.setattr(engines, "run_py", fake_run_py)
     monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT",
+                        tmp_spine_root / "campaign-data")
 
     r = client.post("/api/campaign/testvale/world",
                     json={"seed": "42", "force": True})
@@ -126,7 +128,7 @@ def test_world_job_survives_unrenderable_dump(client, tmp_spine_root,
 
     def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
                     env=None):
-        candidates = engine_root / "worlds" / "candidates"
+        candidates = engines.candidate_drop_dir()
         candidates.mkdir(parents=True, exist_ok=True)
         (candidates / "bare-0007.yaml").write_text(
             "summary:\n  nations: 0\n  settlements: 0\n", encoding="utf-8")
@@ -136,6 +138,8 @@ def test_world_job_survives_unrenderable_dump(client, tmp_spine_root,
     monkeypatch.setattr(engines, "run_node", fake_run_node)
     monkeypatch.setattr(engines, "run_py", fake_run_py)
     monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT",
+                        tmp_spine_root / "campaign-data")
 
     r = client.post("/api/campaign/testvale/world",
                     json={"seed": "7", "force": True})
@@ -156,6 +160,8 @@ def test_world_job_engine_failure_is_a_job_error(client, tmp_spine_root,
 
     monkeypatch.setattr(engines, "run_node", failing_fmg)
     monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT",
+                        tmp_spine_root / "campaign-data")
 
     r = client.post("/api/campaign/testvale/world",
                     json={"seed": "42", "force": True})
@@ -201,7 +207,7 @@ def test_world_job_carries_fmg_options(client, tmp_spine_root, monkeypatch):
 
     def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
                     env=None):
-        candidates = engine_root / "worlds" / "candidates"
+        candidates = engines.candidate_drop_dir()
         candidates.mkdir(parents=True, exist_ok=True)
         (candidates / "testland-0042.yaml").write_text(
             "meta:\n  seed: '42'\nsummary:\n  nations: 1\n  settlements: 1\n",
@@ -212,6 +218,8 @@ def test_world_job_carries_fmg_options(client, tmp_spine_root, monkeypatch):
     monkeypatch.setattr(engines, "run_node", fake_run_node)
     monkeypatch.setattr(engines, "run_py", fake_run_py)
     monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT",
+                        tmp_spine_root / "campaign-data")
 
     r = client.post("/api/campaign/testvale/world", json={
         "seed": "42", "force": True,

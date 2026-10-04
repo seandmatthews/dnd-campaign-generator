@@ -14,7 +14,7 @@ file however you like (Google Drive, etc.); the friend double-clicks it.
 1. Extracts its payload to a temp dir (7-Zip's `7zSD` installer stub; an
    embedded `asInvoker` manifest keeps UAC quiet — no admin needed).
 2. Runs `install.cmd` from the temp dir, which `robocopy /MIR`s the app
-   into `%LOCALAPPDATA%\Campaign Studio` — **never touching `campaigns/`**,
+   into `%LOCALAPPDATA%\Campaign Studio` — **never touching `campaign-data/`**,
    so version updates refresh code and keep data.
 3. Starts `launch.cmd` there: bundled Python boots the studio, browser
    opens at `http://127.0.0.1:8765`. A "Campaign Studio" desktop shortcut
@@ -40,7 +40,7 @@ Bundled, nothing installed on the target (64-bit Windows 10/11 only):
 
 ## Build flags
 
-- `--campaigns` — copy your `campaigns/` into the bundle (default: empty)
+- `--campaigns` — copy your `campaign-data/campaigns/` into the bundle (default: empty)
 - `--no-key` — ship without `llm.env` (LLM features then need a key)
 - `--no-smoke` — skip the boot + installer self-tests (not recommended)
 - `--sfx-only` — reuse `release/work/payload.7z`, redo only the SFX step

@@ -9,7 +9,7 @@ tested on its own; the studio is the only one that invokes the others.
 | [`agentic-simulator/`](agentic-simulator/) | LLM faction sandbox on dice: proposals, resolution, rumors, chronicle | [`AGENTS.md`](agentic-simulator/AGENTS.md) |
 | [`verification/`](verification/) | lint + adversarial-review kit for generated prose (findings, never verdicts) | [`README.md`](verification/README.md) |
 | [`studio/`](studio/) | Campaign Studio: one localhost app over the three engines — maps, world building, agent simulation, one review queue | [`README.md`](studio/README.md) |
-| [`campaigns/`](campaigns/) | the campaign workspace — one directory per campaign, files only, no database; **its own nested git repo, git-ignored here: campaign data never reaches the parent repo's remotes** | — |
+| `campaign-data/` | ALL runtime data in one git-ignored home: `campaigns/` (the campaign workspace — one directory per campaign, files only, no database; its own nested git repo), `engine-home/`, `chronicle/`, `maps/`, `logs/`, `scratch/` — nothing a run produces can be `git add`ed by accident; `$CAMPAIGN_DATA_ROOT` overrides the location | — |
 
 ## Start here
 

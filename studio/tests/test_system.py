@@ -12,9 +12,9 @@ def isolated_week_flag(monkeypatch, tmp_path):
     this a live week anywhere on the same checkout fails the fast tier
     (found 2026-09-23: 'works in CI, fails on my machine')."""
     import engines
-    fake = tmp_path / "agentic-simulator"
+    fake = tmp_path / "engine-home"
     fake.mkdir()
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", fake)
+    monkeypatch.setattr(engines, "ENGINE_HOME", fake)
     return fake
 
 
@@ -28,9 +28,8 @@ def test_health_ok(client, isolated_week_flag):
 def test_health_reads_the_real_flag(client, isolated_week_flag):
     """The flag is a live signal: present means a week is in flight (or was
     interrupted)."""
-    (isolated_week_flag / "world").mkdir()
-    (isolated_week_flag / "world" / ".week-run-flag").write_text("x",
-                                                                 encoding="utf-8")
+    (isolated_week_flag / ".week-run-flag").write_text("x",
+                                                       encoding="utf-8")
     r = client.get("/api/health")
     assert r.json()["week_run_in_progress"] is True
 

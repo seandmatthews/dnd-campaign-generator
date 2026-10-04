@@ -26,13 +26,16 @@ the command quickstart is [`AGENTS.md`](AGENTS.md).
 
 ## Status
 
-- `worlds/candidates/` — generated worlds under review in `index.md`;
-  **Bonia** (seed 878636343) is the chosen one so far.
+- `worlds/candidates/` — TRACKED curated worlds under review in
+  `index.md`; **Bonia** (seed 878636343) is the chosen one so far. Fresh
+  import drops land in `campaign-data/scratch/map-candidates/`
+  (git-ignored); promoting one is a copy here + `git add`.
 - `worlds/ruravaqan/` — a 29,600-population port city generated from Bonia's
   own burg record, plus the harbour-quay battlemap scene.
-- `worlds/sites/` — procedural scenes (dungeon, cave, camp, mine, plus two
-  city-derived footprints), each with a Foundry-importable `.uvtt`
-  (walls, doors, lights). `tests/test_import_fmg.py` is the suite for the
+- `campaign-data/maps/sites/` — procedural scenes (dungeon, cave, camp,
+  mine), each with a Foundry-importable `.uvtt` (walls, doors, lights);
+  regenerated on demand (scratch under the git-ignored campaign-data root,
+  ticket 35). `tests/test_import_fmg.py` is the suite for the
   importer; run it via `python run-tests.py` at the repo root.
 
 ## City generation

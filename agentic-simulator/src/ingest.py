@@ -4,11 +4,14 @@ Session notes become pending events; only what the DM leaves in the file
 becomes canon.
 
 Two modes:
-  python src/ingest.py notes.md             # bullets -> world/pending-week-N.yml
-  python src/ingest.py --apply world/pending-week-N.yml
+  python src/ingest.py notes.md             # bullets -> <engine home>/
+                                            # pending-week-N.yml
+  python src/ingest.py --apply <engine home>/pending-week-N.yml
                                             # surviving lines -> state.yaml
 Either mode takes --state PATH to read/apply against that state file
-instead of the default world/state.yaml.
+instead of the default engine-home state.yaml. The engine home lives
+under the campaign-data root ($CAMPAIGN_DATA_ROOT, else the repo's
+campaign-data/engine-home).
 
 Proposals are dated the clock's current week + 1 — the next week to be
 simulated — unless the DM supplies an explicit week in the pending file.
@@ -29,7 +32,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import effects
-from store import ROOT, STATE_FILE, place_words, split_argv
+from store import ENGINE_HOME, STATE_FILE, place_words, split_argv
 from store import load_state as _store_load
 from store import save_state as _store_save
 from store import HomeLockBusy, standalone_home_lock
@@ -231,7 +234,7 @@ def main(argv):
         print(f"no bullet lines found in {argv[0]}", file=sys.stderr)
         return 1
     week = proposals[0]["week"]
-    out = ROOT / "world" / f"pending-week-{week}.yml"
+    out = ENGINE_HOME / f"pending-week-{week}.yml"
     write_pending(proposals, out)
     print(f"{out} ({len(proposals)} proposals)")
     return 0

@@ -188,7 +188,7 @@ def main(argv):
         print(f"error: {e}", file=sys.stderr)
         return 1
     if not isinstance(state, dict):
-        print(f"error: {state_path or 'world/state.yaml'} is empty or not "
+        print(f"error: {state_path or 'the engine-home state.yaml'} is empty or not "
               "a mapping", file=sys.stderr)
         return 1
     ids = {f["id"] for f in state.get("factions") or []

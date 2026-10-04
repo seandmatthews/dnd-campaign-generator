@@ -5,9 +5,13 @@ Everything here is read-mostly: loaders return plain dicts/lists parsed with
 yaml.safe_load, missing optional files degrade to empty defaults, and an
 unknown campaign raises CampaignNotFound (mapped to 404 by the server).
 
-The campaigns root is a module-level constant so tests can point it at a
-fixture tree (monkeypatch spine.CAMPAIGNS_ROOT); code reads it at call time
-via campaigns_root(), never at import time.
+All runtime campaign data lives under ONE gitignored root (ticket 35):
+campaign-data/, holding campaigns/, the engine home, chronicles, map
+scratch and logs. The root is $CAMPAIGN_DATA_ROOT when set, else the
+repo's campaign-data/ (data_root()); the campaigns root is derived from
+it. CAMPAIGNS_ROOT stays a module-level constant so tests can point it at
+a fixture tree (monkeypatch spine.CAMPAIGNS_ROOT); code reads it at call
+time via campaigns_root(), never at import time.
 """
 
 import re
@@ -23,7 +27,26 @@ from pathlib import Path
 import yaml
 
 STUDIO_DIR = Path(__file__).resolve().parent
-CAMPAIGNS_ROOT = STUDIO_DIR.parent / "campaigns"
+REPO_ROOT = STUDIO_DIR.parent
+
+# The campaign-data root (ticket 35): $CAMPAIGN_DATA_ROOT if set, else the
+# repo's gitignored campaign-data/. data_root() reads the env at CALL time
+# (the release launcher sets it before boot; tests set it per test) and
+# falls back to the DATA_ROOT module global, patchable like CAMPAIGNS_ROOT.
+DATA_ROOT_ENV = "CAMPAIGN_DATA_ROOT"
+DATA_ROOT = REPO_ROOT / "campaign-data"
+
+
+def data_root() -> Path:
+    """The live campaign-data root (env first, then the module global)."""
+    env = os.environ.get(DATA_ROOT_ENV, "").strip()
+    return Path(env) if env else DATA_ROOT
+
+
+# Derived from the data-root rule at import; patch THIS (the established
+# test seam) and campaigns_root() follows. engine home / chronicle / scratch
+# siblings live under data_root() too — see engines.py.
+CAMPAIGNS_ROOT = data_root() / "campaigns"
 
 # URL path segments must be plain names — no separators, no leading dots.
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")

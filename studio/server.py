@@ -8,11 +8,15 @@ Hardening (this wave):
   bound port), the TestClient, and STUDIO_EXTRA_HOSTS are served — a DNS-
   rebinding page (attacker domain resolving at 127.0.0.1) gets 403
   {"error": "unknown host header"}.
-- Rotating file log (1 MB x 5) at studio/logs/studio.log (STUDIO_LOG_FILE
-  overrides): every "studio.*" logger — app modules and job progress lines
-  (jobs.py mirrors log() there). Uvicorn's access log stays console-only.
+- Rotating file log (1 MB x 5) at <data root>/logs/studio.log
+  (STUDIO_LOG_FILE overrides): every "studio.*" logger — app modules and
+  job progress lines (jobs.py mirrors log() there). Uvicorn's access log
+  stays console-only.
 - On boot (lifespan), a left-behind week-run flag triggers the engine-home
-  restore (routers/simulation.restore_interrupted_week).
+  restore (routers/simulation.restore_interrupted_week), and legacy
+  (pre-campaign-data) data dirs trigger a loud banner pointing at
+  `python studio/doctor.py --migrate-data-root` — nothing migrates itself
+  (ticket 35).
 
 Every error response is {"error": "..."} with a 4xx/5xx status: both
 HTTPException and request-validation errors are rewritten below.
@@ -60,15 +64,16 @@ PORT = int(os.environ.get("STUDIO_PORT", "8765"))
 
 def _log_file_path() -> Path:
     """Where the rotating log lives: $STUDIO_LOG_FILE if set (absolute, or
-    relative to the studio dir), else the default studio/logs/studio.log.
-    Tests set it to their own temp file before importing this module so a
-    test run never rotates the user's active log (rollover of a file held
-    open by the live server fails on Windows with WinError 32)."""
+    relative to the studio dir), else the data root's logs/ dir
+    (campaign-data/logs — ticket 35). Tests set it to their own temp file
+    before importing this module so a test run never rotates the user's
+    active log (rollover of a file held open by the live server fails on
+    Windows with WinError 32)."""
     configured = os.environ.get("STUDIO_LOG_FILE")
     if configured:
         path = Path(configured)
         return path if path.is_absolute() else STUDIO_DIR / path
-    return STUDIO_DIR / "logs" / "studio.log"
+    return spine.data_root() / "logs" / "studio.log"
 
 
 def _setup_logging() -> None:
@@ -100,8 +105,18 @@ async def lifespan(_app: FastAPI):
     """Boot repair, before serving: a .week-run-flag left by a crashed week
     run restores the engine home (engines.restore_interrupted_week);
     open publication transactions roll forward or park as conflicts
-    (publication.recover_campaign)."""
+    (publication.recover_campaign); legacy (pre-campaign-data) data dirs
+    trigger the migration banner — nothing moves on its own (ticket 35)."""
     engines.restore_interrupted_week()
+    legacy = engines.legacy_data_dirs()
+    if legacy:
+        log.warning(
+            "LEGACY DATA LOCATIONS found outside %s: %s — your campaigns "
+            "are not visible until they are moved. Run  python "
+            "studio/doctor.py --migrate-data-root  to migrate (refused "
+            "while anything is running); nothing is moved automatically.",
+            spine.data_root(),
+            ", ".join(str(old) for old, _ in legacy))
     for camp in spine.list_campaigns():
         try:
             recovered = publication.recover_campaign(camp["name"])

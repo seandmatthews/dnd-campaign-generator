@@ -87,17 +87,20 @@ actual minutes. If run-tests.py is green, the change is shippable.
 
 ## Snapshots — history is your undo
 
-The `campaigns/` workspace is its **own nested git repository** (created
+The campaigns workspace lives at `campaign-data/campaigns/` and is its
+**own nested git repository** (created
 automatically the first time a snapshot lands), deliberately separate from
 the parent repo: the parent holds the engines and the studio and is safe
 to push to a public remote, while campaign data — your premises, factions,
 chronicles — never leaves the machine unless you push the campaigns repo
-somewhere private. Every approval, finished week, and generation
+somewhere private. All runtime data shares one git-ignored home
+(`campaign-data/`: campaigns, the engine home, chronicles, map scratch,
+logs — ticket 35); `$CAMPAIGN_DATA_ROOT` relocates the whole thing. Every approval, finished week, and generation
 auto-commits just the campaign it changed. Canon is therefore never more
 than one commit away from a known-good state — there is no undo button
-because the history *is* the undo. `git -C campaigns log -- <name>` shows
+because the history *is* the undo. `git -C campaign-data/campaigns log -- <name>` shows
 the trail; a bad approval or a bad week is one checkout away from gone.
-Zipping `campaigns/` carries the undo history with it.
+Zipping `campaign-data/campaigns/` carries the undo history with it.
 
 Snapshots are reported, not assumed: approve/delete/week results carry
 `snapshot: {"state": "committed|no_change|unavailable|failed", ...}`. Only
@@ -114,14 +117,16 @@ editing is not guaranteed.
 
 ## The engine homes are scratch
 
-`agentic-simulator/world/` is a working area, not canon. A week run copies
+`campaign-data/engine-home/` is a working area, not canon. A week run copies
 the campaign's state in, runs against scratch, and stages the output as a
 **proposal** — the campaign itself changes only when you accept the whole
 proposed week (Simulation tab, or `POST .../simulation/proposal/{id}/accept`).
 A crashed or killed run never corrupts a campaign, and the engine home is
 restored from the campaign on the next boot/week. A `.week-run-flag` in
-`agentic-simulator/world/` marks a run in progress (or left over from a
-crash); the doctor reports it.
+`campaign-data/engine-home/` marks a run in progress (or left over from a
+crash); the doctor reports it. The engine's chronicle output lives beside
+it in `campaign-data/chronicle/`; generated battlemaps and importer
+scratch land under `campaign-data/maps/` and `campaign-data/scratch/`.
 
 The flip side of scratch: if you hand-run weeks in agentic-simulator while
 a studio campaign exists, the studio's next week will copy right over your
@@ -178,7 +183,7 @@ the X dismisses it.
 
 ## Where campaigns live
 
-`<checkout>/campaigns/<name>/` — one folder per campaign: `campaign.yaml`,
+`<checkout>/campaign-data/campaigns/<name>/` — one folder per campaign: `campaign.yaml`,
 `world/`, `lore/` (timeline, `entities/` pages, style), `simulation/`,
 `maps/`. Portable by zip; a new machine needs the parent folder, Python,
 and the pip line above. Opening a campaign whose lore still lives in the
@@ -237,8 +242,8 @@ zip with a sha256 manifest of every included file. It excludes machine
 noise (recovery payloads, caches, temp/log files) and any credential file
 dropped inside the campaign; it never packages other campaigns. Stated
 plainly in the manifest and the output: **the zip does not include git
-history** (the undo trail lives in `campaigns/.git`, outside the campaign
-folder), and **a same-disk archive is an export, not a backup** — copy it
+history** (the undo trail lives in `campaign-data/campaigns/.git`, outside
+the campaign folder), and **a same-disk archive is an export, not a backup** — copy it
 to a separate destination yourself; nothing uploads anywhere.
 
 `python studio/export_campaign.py --restore <zip> --into DIR` restores

@@ -9,8 +9,12 @@ change — never let them drift.
 ## Fixed decisions
 
 - Root: the studio checkout's `studio/` directory (path-agnostic —
-  `spine.py` resolves everything relative to itself). Campaigns live at
-  `<checkout>/campaigns/<name>/` (user data separate from code).
+  `spine.py` resolves everything relative to itself). All runtime data
+  lives under `<checkout>/campaign-data/` (git-ignored; `$CAMPAIGN_DATA_ROOT`
+  overrides): campaigns at `campaign-data/campaigns/<name>/`, the shared
+  engine home at `campaign-data/engine-home/`, chronicle output at
+  `campaign-data/chronicle/`, battlemap scratch at `campaign-data/maps/`,
+  logs at `campaign-data/logs/` (user data separate from code).
 - Server: FastAPI, bound `127.0.0.1:8765` (env `STUDIO_PORT` overrides).
   Boot with `python studio/run.py` (prints the URL, opens a browser);
   `python studio/server.py` is the bare uvicorn equivalent.
@@ -93,7 +97,8 @@ change — never let them drift.
   behind a 30-minute week (a browser timeout on the way would turn the
   would-be success into an error).
 - Shared engine home (hardening): the simulator's
-  `agentic-simulator/world/state.yaml` is ONE scratch file across campaigns.
+  engine-home `state.yaml` (`campaign-data/engine-home/`) is ONE scratch
+  file across campaigns.
   A second, process-wide lock (`engines.ENGINE_LOCK`) serializes every
   copy-in → engine-run → copy-out sequence: the week job holds it for its
   whole run; views and why read the campaign's own canon via `--state` and
@@ -105,7 +110,7 @@ change — never let them drift.
   doctor's simulator probe is skipped while a week is in flight (run flag OR
   engine lock held).
 - Canon snapshots (hardening): after every successful canon mutation the
-  studio commits `campaigns/<name>` to the enclosing git repo (`git add -A`
+  studio commits `campaign-data/campaigns/<name>` to the enclosing git repo (`git add -A`
   + `git commit --only` the campaign path, list-form args) with a
   `campaign/<name>: ...` message, ≤72 chars. Outside a git repo, or on any
   VCS failure, it is a logged no-op — the DM is never blocked on snapshots.
@@ -122,7 +127,7 @@ change — never let them drift.
 | `static/js/world.js` | F (wave 2) | C ships complete-against-contract version |
 | `static/js/maps.js`, `static/js/sim.js` | G (wave 2) | C ships ditto |
 | `static/js/review.js` | H (wave 3) | C ships ditto |
-| `assemble.py` | A (wave 1) | builds `campaigns/ruravaqan/` from engine artifacts |
+| `assemble.py` | A (wave 1) | builds `campaign-data/campaigns/ruravaqan/` from engine artifacts |
 | `doctor.py`, `run.py`, `start.bat`, `README.md` | H (wave 3) | boot experience |
 | `tests/…` | B (+ F/G/H add their own files) | pytest + fastapi TestClient |
 
@@ -165,11 +170,13 @@ shapes in this document true.
   accepts (full JSON export, headless dump, or .map save) — a campaign's
   `world/source.json` qualifies.
 - `POST /api/campaign/{name}/maps/sites` `{"kind":"dungeon|cave|camp","name":str,"seed"?:str,"place"?:str}` → job.
-  Engine chain (cwd=dnd-mapping, list-form args): `python -X utf8
+  Engine chain (cwd=dnd-mapping, list-form args; every subprocess gets
+  `CAMPAIGN_DATA_ROOT` in its env): `python -X utf8
   src/battlemap.py gen-<kind> --seed <seed> --name "<name>"` →
-  `... render --dir worlds/sites/<name>` →
-  `node scripts/render-scene-png.mjs worlds/sites/<name>` (sharp) →
-  `... wrap --dir worlds/sites/<name>`; artifact set
+  `... render --dir <campaign-data>/maps/sites/<name>` →
+  `node scripts/render-scene-png.mjs <same dir>` (sharp) →
+  `... wrap --dir <same dir>`; the chain runs in the data root's
+  maps/sites home; artifact set
   {<slug>.json, <slug>.svg, <slug>.png, <slug>.uvtt} copied →
   `maps/sites/<slug>/` (+ a provenance `params.yaml` and the companion note
   `<slug>.md`; an optional `place` becomes the note's `place:` wiki-link —
@@ -182,7 +189,8 @@ shapes in this document true.
   A sharp/junction failure fails the job with the documented repair line
   (plain `npm install` in dnd-mapping/tools/settlemaker) in
   the error text (D7).
-- Files: `GET /campaign-file/{name}/{path}` — StaticFiles mount on `campaigns/`,
+- Files: `GET /campaign-file/{name}/{path}` — StaticFiles mount on the
+  campaigns root (`campaign-data/campaigns/`),
   read-only intent, 404 outside the campaign tree.
 
 ### World generation (G, M1)
@@ -199,7 +207,8 @@ shapes in this document true.
   src/generators/headless-export.test.ts` with `FMG_SEED=<seed>`/`FMG_OUT=<tmp>`,
   cwd=dnd-mapping/tools/Fantasy-Map-Generator — then copy the dump →
   `world/source.json`, run `python -X utf8 src/import_fmg.py <dump>`
-  (cwd=dnd-mapping; it writes `worlds/candidates/` per its documented D4
+  (cwd=dnd-mapping; it drops candidate yamls under the data root's
+  `scratch/map-candidates/` per its documented D4
   behavior), copy the produced candidate yaml → `world/geography.yaml`, and
   render `world/map.svg` from the dump (studio/worldmap.py — read-only;
   headless FMG exports no svg, and regenerating in a browser would be a
@@ -324,12 +333,12 @@ shapes in this document true.
   **409 when a pending proposal exists** (accept or discard it first) or a
   recovery conflict is parked. Takes the campaign lock (**409 busy** while
   another mutating job runs). Interrupted-run detection: the job writes
-  `agentic-simulator/world/.week-run-flag` (JSON: campaign + ISO timestamp)
+  `campaign-data/engine-home/.week-run-flag` (JSON: campaign + ISO timestamp)
   before copy-in and removes it in a `finally`; if the server died mid-run,
-  the next boot restores the engine home's `world/state.yaml` from
+  the next boot restores the engine home's `state.yaml` from
   `state.yaml.bak` (when present), deletes the flag, and logs "interrupted
   week run for campaign X — engine home restored". Copy-in: campaign
-  `simulation/state.yaml` → `agentic-simulator/world/state.yaml`.
+  `simulation/state.yaml` → `campaign-data/engine-home/state.yaml`.
   Run: `python -X utf8 src/tick.py --live`. **Copy-out does NOT touch the
   campaign**: the engine's output is staged as a proposal bundle under
   `simulation/proposals/<id>/` (proposed state.yaml, chronicle files,
@@ -780,11 +789,14 @@ shapes in this document true.
 ### System (B)
 - `GET /api/health` → `{"ok":true,"version":"0.1.0",
   "week_run_in_progress":bool}` — the flag is true while
-  `agentic-simulator/world/.week-run-flag` exists (a week job is running,
+  `campaign-data/engine-home/.week-run-flag` exists (a week job is running,
   or a crashed one has not been restored by the boot hook yet).
 - `GET /api/doctor` → the full `doctor.py` JSON (key diagnosis, tool-tree
   health, the `week run` check reports an in-progress/interrupted week
-  (`agentic-simulator/world/.week-run-flag`); the `vault links` check counts
+  (`campaign-data/engine-home/.week-run-flag`); the `data root` check names
+  any legacy (pre-campaign-data) dirs with the doctor migration command
+  (`doctor.py --migrate-data-root`, CLI only — nothing migrates itself);
+  the `vault links` check counts
   dangling wiki-links and name/alias collisions across campaigns — advisory,
   never required. `doctor.py --fix` (CLI only, not an API) performs the safe
   repairs: `npm install` in a broken tool tree (FMG's adds

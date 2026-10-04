@@ -5,9 +5,11 @@ Modes:
   python src/tick.py --live     # run the week: scheduler gate, LLM proposals
                                 # (+ consistency warnings), dice, state diff,
                                 # rumor spread, chronicle. Advances the clock —
-                                # review the diff it leaves in world/state.yaml.
+                                # review the diff it leaves in the
+                                # engine home's state.yaml.
   python src/tick.py --why W F  # causality: why faction F's week-W event happened
-  python src/tick.py --replay F # re-resolve a saved week (world/replay/week-N.yaml)
+  python src/tick.py --replay F # re-resolve a saved week
+                                # (engine-home/replay/week-N.yaml)
                                 # from its stored seed + proposals, no network:
                                 # exit 0 when the resolver reproduces the record
 
@@ -19,9 +21,10 @@ Stages in --live (one sentence each):
                 (advisory warnings, printed, never auto-rejected)
 
 --live refuses (exit 4) while another process holds the shared engine home
-(world/.engine-home.lock — a studio week/forecast job, or another
-standalone run): two writers interleave state.yaml last-writer-wins and
-corrupt each other's chronicles. Wait for the holder, then rerun.
+(engine-home/.engine-home.lock under the campaign-data root — a studio
+week/forecast job, or another standalone run): two writers interleave
+state.yaml last-writer-wins and corrupt each other's chronicles. Wait for
+the holder, then rerun.
 
 Mechanical consequence rules (one sentence each, applied by code):
   - contested loss, or margin <= -5: the faction's strongest committed
@@ -67,15 +70,18 @@ import rumors
 import scheduler
 import consistency
 import resolve
-from store import (RESOURCE_LEVELS, STATE_FILE, HomeLockBusy, load_state,
-                   save_state, standalone_home_lock, validate_state,
-                   places_of)
+from store import (DATA_ROOT, RESOURCE_LEVELS, STATE_FILE, HomeLockBusy,
+                   load_state, save_state, standalone_home_lock,
+                   validate_state, places_of)
 from why import why_cli
 from views import faction_view
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TEMPLATE_FILE = ROOT / "agents" / "faction.md"
-CHRONICLE_DIR = ROOT / "chronicle"
+CHRONICLE_DIR = DATA_ROOT / "chronicle"
+# module constant like CHRONICLE_DIR so tests can relocate the week's
+# replay trail together with the state and chronicle paths
+REPLAY_DIR = DATA_ROOT / "engine-home" / "replay"
 
 
 class WeekAborted(RuntimeError):
@@ -345,7 +351,7 @@ def save_replay(week, seed, proposals, outcomes, base_state_sha,
     counters, resulting deltas, completions, project-rule version) so
     verification recomputes the project mechanics too — when the recorded
     project rule version still matches the engine's (replay_verify)."""
-    replay_dir = ROOT / "world" / "replay"
+    replay_dir = REPLAY_DIR
     replay_dir.mkdir(parents=True, exist_ok=True)
     doc = {
         "rule_version": resolve.RULE_VERSION,
@@ -430,7 +436,7 @@ def replay_verify(path):
                 if current_sha != base_sha:
                     return False, (
                         f"week {doc.get('week')} cannot be verified: "
-                        "world/state.yaml has changed since the week ran "
+                        "the engine home's state.yaml has changed since the week ran "
                         "(base-state hash mismatch) — the outcomes were "
                         "resolved against a state that no longer exists")
             state = load_state(STATE_FILE)
@@ -499,7 +505,7 @@ def _free_chronicle_path(week, slug):
 
 
 def write_chronicle(state, week, outcomes, held=(), projects_report=None):
-    CHRONICLE_DIR.mkdir(exist_ok=True)
+    CHRONICLE_DIR.mkdir(parents=True, exist_ok=True)
     place_label = place_label_of(state)
     summary = yaml.safe_dump(
         {f["id"]: {"goal": f["goal"], "resources": f["resources"]}
@@ -562,7 +568,7 @@ def main(argv=None):
     if "--replay" in argv:
         i = argv.index("--replay")
         if i + 1 >= len(argv):
-            print("usage: python src/tick.py --replay <world/replay/week-N.yaml>",
+            print("usage: python src/tick.py --replay <engine-home/replay/week-N.yaml>",
                   file=sys.stderr)
             return 2
         ok, message = replay_verify(argv[i + 1])

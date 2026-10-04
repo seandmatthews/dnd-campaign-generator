@@ -19,6 +19,11 @@ CLI:  python studio/doctor.py           human-readable
                                         run the pip line); everything else
                                         stays advice — assemble.py is never
                                         auto-run (it writes canon)
+      python studio/doctor.py --migrate-data-root
+                                        ONE explicit migration (ticket 35):
+                                        move the legacy data dirs under the
+                                        campaign-data root; refused while
+                                        any lock is held, never auto-run
 Importable: doctor.report() — wired to GET /api/doctor (routers/system.py).
 """
 
@@ -274,7 +279,7 @@ def check_vale():
 
 def check_campaigns():
     """campaigns/ exists with at least one campaign (a dir with campaign.yaml)."""
-    root = PARENT / "campaigns"
+    root = spine.campaigns_root()
     if not root.is_dir():
         return _mk("campaigns", False, f"{root} does not exist",
                    fix="create campaigns/ (or run python studio/assemble.py "
@@ -302,7 +307,7 @@ def check_vault():
     """The campaign vault's links (obsidian-integration.md §2): dangling
     wiki-links and name/alias collisions across all campaigns — advisory
     (required=False), the same findings the review queue shows."""
-    root = PARENT / "campaigns"
+    root = spine.campaigns_root()
     if not root.is_dir():
         return _mk("vault links", True, "no campaigns folder yet",
                    required=False)
@@ -345,7 +350,179 @@ def check_vault():
                required=False)
 
 
-# ------------------------------------------------------------------ llm key
+def check_data_root():
+    """Legacy (pre-ticket-35) data dirs still present? Advisory: the studio
+    uses campaign-data/ regardless — until the legacy data is migrated, the
+    campaigns it knew are invisible to it. The fix is the EXPLICIT doctor
+    migration; nothing ever moves on boot (ticket 35 ruling)."""
+    import engines
+    legacy = engines.legacy_data_dirs()
+    if not legacy:
+        return _mk("data root", True,
+                   f"campaign data lives under {spine.data_root()}",
+                   required=False)
+    names = ", ".join(str(old) for old, _ in legacy)
+    return _mk("data root", False,
+               f"legacy data dirs found: {names} — the studio is using "
+               f"{spine.data_root()}, which does not see them yet",
+               fix="python studio/doctor.py --migrate-data-root  (moves them "
+                   "under the data root; refused while any campaign lock, "
+                   "engine-home lock or week flag is held)",
+               required=False)
+
+
+# --------------------------------------------------------------- migration
+
+
+def _git_tracked_candidates(dnd_mapping: Path) -> set:
+    """The files git tracks under dnd-mapping/worlds/candidates (repo-root
+    relative posix paths). List-form args, never a shell. Raises RuntimeError
+    when git is missing or fails — the migration refuses rather than guess
+    which candidates files are curated (tracked) and which are scratch."""
+    cmd = ["git", "-C", str(dnd_mapping), "ls-files", "--",
+           "worlds/candidates"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=30,
+                              check=False)
+    except FileNotFoundError as e:
+        raise RuntimeError(f"git not found — cannot tell curated candidates "
+                           f"from scratch: {e}")
+    if proc.returncode != 0:
+        raise RuntimeError("git ls-files failed: "
+                           + (proc.stderr or proc.stdout).strip()[:200])
+    return {ln.strip() for ln in proc.stdout.splitlines() if ln.strip()}
+
+
+def _move_dir(old: Path, new: Path, out) -> None:
+    """One plain directory move (same volume -> a rename; nested campaign
+    git repos and lock files ride along intact). A failure here is LOUD and
+    names the state: on Windows a rename of a tree with any open handle
+    inside fails, and shutil.move's copy+delete fallback can leave the
+    source partially deleted while the target already holds the full copy
+    (seen live 2026-10-04: an indexer held one .git object for an instant).
+    The copy lands first, so nothing is lost — finish by deleting the
+    leftover source and re-running this migration."""
+    new.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.move(str(old), str(new))
+    except OSError as e:
+        raise RuntimeError(
+            f"moving {old} failed ({e}) — if {new} now exists it already "
+            "holds the FULL copy (copy precedes delete); close whatever "
+            "holds the files, delete the leftover source dir, and re-run "
+            "this migration (it resumes with what is left)")
+    out(f"  moved {old}")
+    out(f"    -> {new}")
+
+
+def migrate_data_root(parent=None, data_root=None, out=print) -> int:
+    """The explicit one-shot migration (doctor --migrate-data-root): plain
+    renames of the legacy data dirs into the campaign-data root, plus the
+    untracked (scratch) half of dnd-mapping/worlds/candidates into
+    scratch/map-candidates. Refused — nothing moved — while any campaign
+    lock, engine-home lock or week flag is held, when a target already
+    exists (never merges), or when git cannot say which candidates files
+    are tracked. Idempotent: no legacy dirs means nothing to do.
+
+    User-visible cost to mention: an Obsidian vault opened from
+    campaigns/<name> must be re-opened once at the new path
+    (<data root>/campaigns/<name>); the app's obsidian:// URIs follow the
+    move on their own (they derive from campaigns_root())."""
+    import engines
+    parent = parent or engines.PARENT
+    data_root = data_root or spine.data_root()
+    pairs = engines.legacy_data_dirs(parent, data_root)
+    cand_old = parent / "dnd-mapping" / "worlds" / "candidates"
+    cand_new = data_root / "scratch" / "map-candidates"
+    legacy_world = parent / "agentic-simulator" / "world"
+
+    print(f"migrate-data-root: moving legacy campaign data under "
+          f"{data_root}")
+    if not pairs and not (cand_old.is_dir() and cand_old.exists()):
+        print("nothing to migrate — no legacy data dirs found (already "
+              "migrated, or a fresh checkout)")
+        return 0
+
+    # ---- refusal gates, ALL checked before ANY move (all-or-nothing) ----
+    blockers = []
+    if legacy_world.is_dir():
+        week_flag = legacy_world / ".week-run-flag"
+        if week_flag.is_file():
+            blockers.append(f"a week run is in flight or was interrupted "
+                            f"({week_flag}) — let it finish / boot the "
+                            "studio once to restore, then migrate")
+        home_lock = legacy_world / ".engine-home.lock"
+        if spine.file_lock_held(home_lock):
+            blockers.append(f"the engine home is held by a running process "
+                            f"({home_lock})")
+    old_campaigns = parent / "campaigns"
+    if old_campaigns.is_dir():
+        held = [lk.name for lk in
+                (old_campaigns / ".locks").glob("*.lock")
+                if spine.file_lock_held(lk)] \
+            if (old_campaigns / ".locks").is_dir() else []
+        if held:
+            blockers.append("campaign lock(s) held by a running writer: "
+                            + ", ".join(held))
+    collisions = [str(new) for _, new in pairs if new.exists()]
+    if collisions:
+        blockers.append("target(s) already exist (the migration never "
+                        "merges): " + ", ".join(collisions))
+    tracked = None
+    if cand_old.is_dir():
+        try:
+            tracked = _git_tracked_candidates(parent / "dnd-mapping")
+        except RuntimeError as e:
+            blockers.append(str(e))
+    if blockers:
+        print("REFUSED — nothing was moved:")
+        for b in blockers:
+            print(f"  - {b}")
+        return 1
+
+    # ---- the moves ----
+    n = 0
+    for old, new in pairs:
+        if old.is_dir():
+            _move_dir(old, new, out)
+            n += 1
+    if cand_old.is_dir() and tracked is not None:
+        prefix = "worlds/candidates/"
+        scratch_moved = 0
+        for f in sorted(cand_old.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(cand_old).as_posix()
+            if prefix + rel in tracked:
+                continue  # curated and tracked — stays
+            dest = cand_new / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(dest))
+            scratch_moved += 1
+        # prune dirs the scratch move emptied (tracked content remains)
+        for d in sorted((p for p in cand_old.rglob("*") if p.is_dir()),
+                        key=lambda p: len(p.parts), reverse=True):
+            if not any(d.iterdir()):
+                d.rmdir()
+        if scratch_moved:
+            out(f"  moved {scratch_moved} untracked file(s) {cand_old}")
+            out(f"    -> {cand_new} (tracked curated candidates stayed put)")
+            n += 1
+    if n == 0:
+        print("nothing to migrate — no legacy data dirs found (already "
+              "migrated, or a fresh checkout)")
+        return 0
+    print()
+    print(f"done: {n} location(s) migrated. Notes:")
+    print("  - an Obsidian vault opened from the old campaigns/ path must be")
+    print(f"    re-opened once at {data_root / 'campaigns'}; obsidian:// links")
+    print("    the app builds follow the move on their own")
+    print("  - re-run python studio/doctor.py to see all checks green")
+    return 0
+
+
+# ------------------------------------------------------------------- llm key
 
 
 def find_key():
@@ -486,6 +663,7 @@ def run_all_checks(probe=None, modules=None, live_llm=True):
     checks.extend(check_engines())
     checks.extend(check_tool_trees())
     checks.append(check_week_run())
+    checks.append(check_data_root())
     checks.append(check_vale())
     checks.append(check_campaigns())
     checks.append(check_vault())
@@ -699,7 +877,15 @@ def main(argv=None):
                          "tool trees, pip install -r studio/requirements.txt); "
                          "everything else is printed as advice — assemble.py "
                          "is never auto-run")
+    ap.add_argument("--migrate-data-root", action="store_true",
+                    help="move the legacy data dirs (campaigns/, the engine "
+                         "home, chronicles, studio logs, map scratch) under "
+                         "the campaign-data root, then exit; refused while "
+                         "any lock is held, never merges, idempotent "
+                         "(ticket 35)")
     args = ap.parse_args(argv)
+    if args.migrate_data_root:
+        return migrate_data_root()
     rep = report()
     if args.json:
         print(json.dumps(rep, indent=2))

@@ -233,8 +233,10 @@ def test_goal_review_flow_copy_is_byte_exact(
     canon = _crlf_state(tmp_spine_root)
     parsed = []
     monkeypatch.setattr(engines, "run_py", _recording_run_py(parsed))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post(f"{C}/simulation/goal-review")
     assert r.status_code == 202, r.text
     job = wait_for_job(client, r.json()["job_id"])

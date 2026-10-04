@@ -26,6 +26,7 @@ from pathlib import Path
 import yaml
 
 import engines
+import spine
 import jobs
 from conftest import tiny_fmg_dump, wait_for_job
 
@@ -59,7 +60,7 @@ def _blocking_fmg(monkeypatch, tmp_spine_root):
         assert script == "src/import_fmg.py"
         dump = json.loads(Path(args[0]).read_text(encoding="utf-8"))
         seed = dump["info"]["seed"]
-        candidates = engine_root / "worlds" / "candidates"
+        candidates = engines.candidate_drop_dir()
         candidates.mkdir(parents=True, exist_ok=True)
         out = candidates / f"testland-{seed}.yaml"
         out.write_text(
@@ -77,6 +78,8 @@ def _blocking_fmg(monkeypatch, tmp_spine_root):
     monkeypatch.setattr(engines, "run_py", fake_run_py)
     monkeypatch.setattr(engines, "DND_MAPPING",
                         tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT",
+                        tmp_spine_root / "campaign-data")
     return entered, release, calls
 
 
@@ -173,7 +176,7 @@ def _advancing_tick(entered, release):
     def tick(engine_root_, script, *args, timeout=600, on_line=None,
              env=None):
         assert (script,) + args == ("src/tick.py", "--live")
-        world = engine_root_ / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         prev = yaml.safe_load(
             world.joinpath("state.yaml").read_text(encoding="utf-8")) or {}
@@ -183,7 +186,7 @@ def _advancing_tick(entered, release):
                      "rng_seeds": {str(week): 123456789}},
             "events": [],
         }), encoding="utf-8")
-        chron = engine_root_ / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         taken = {p.name for p in chron.glob("*.md")}
         n = 0
@@ -210,8 +213,10 @@ def _start_blocked_week(client, monkeypatch, tmp_spine_root):
     entered = threading.Event()
     release = threading.Event()
     monkeypatch.setattr(engines, "run_py", _advancing_tick(entered, release))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True, "auto_accept": True})
     assert r.status_code == 202, r.text

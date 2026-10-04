@@ -38,14 +38,15 @@ DND_MAPPING = PARENT / "dnd-mapping"
 AGENTIC_SIMULATOR = PARENT / "agentic-simulator"
 VERIFICATION = PARENT / "verification"
 FMG = DND_MAPPING / "tools" / "Fantasy-Map-Generator"
-CAMPAIGNS = PARENT / "campaigns"
+DATA_ROOT = PARENT / "campaign-data"  # the one gitignored data home (ticket 35)
+CAMPAIGNS = DATA_ROOT / "campaigns"
 SAMPLE = CAMPAIGNS / "sample"
 RURAVAQAN = CAMPAIGNS / "ruravaqan"
 
 PY = [sys.executable, "-X", "utf8"]  # mirrors engines.run_py
 
 # What this tier needs that git does not carry — the same three paths
-# run-tests.py's INTEGRATION_NEEDS checks (campaigns/ and tools/ are
+# run-tests.py's INTEGRATION_NEEDS checks (campaign-data/ and tools/ are
 # gitignored). pytest.ini documents `pytest -m integration` as a direct
 # invocation; this guard makes a fresh clone skip cleanly the way the
 # orchestrator's note does, instead of erroring through the fixtures.
@@ -80,8 +81,8 @@ def run(cmd, cwd, timeout, env=None):
 def engine_state():
     """The routers' copy-in (D4, simulation.py _copy_state_in): campaign
     state -> engine home, previous engine state kept as state.yaml.bak.
-    The engine reads a fixed world/state.yaml; the campaign is canon."""
-    dst = AGENTIC_SIMULATOR / "world" / "state.yaml"
+    The engine reads a fixed engine-home state.yaml; the campaign is canon."""
+    dst = DATA_ROOT / "engine-home" / "state.yaml"
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_file():
         shutil.copy2(dst, dst.parent / "state.yaml.bak")
@@ -204,26 +205,76 @@ def test_import_fmg_seam():
     python -X utf8 src/import_fmg.py <dump.json>   (cwd=dnd-mapping)
     The summary line must carry '<dump> -> <name>.yaml:' — that regex is how
     the router finds the candidate it stages as world/geography.yaml. The
-    candidate yaml is left in worlds/candidates (documented scratch)."""
+    candidate yaml is left in the campaign-data scratch dir (documented
+    scratch, ticket 35)."""
     r = run([*PY, "src/import_fmg.py", SAMPLE / "world" / "source.json"],
             cwd=DND_MAPPING, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     m = re.search(r"-> (\S+\.yaml):", r.stdout)  # the router's own regex
     assert m, r.stdout
-    assert (DND_MAPPING / "worlds" / "candidates" / m.group(1)).is_file()
+    assert (DATA_ROOT / "scratch" / "map-candidates" / m.group(1)).is_file()
+
+
+# ------------------------------------ CAMPAIGN_DATA_ROOT override (ticket 35)
+
+
+def test_env_override_engine_reads_tmp_home(tmp_path):
+    """The engine CLI resolves its home from $CAMPAIGN_DATA_ROOT: state
+    copied into <tmp>/engine-home is what tick.py's inspect mode reads —
+    proven by a faction name that exists nowhere else."""
+    home = tmp_path / "engine-home"
+    home.mkdir(parents=True)
+    state = yaml.safe_load(
+        (RURAVAQAN / "simulation" / "state.yaml").read_text(encoding="utf-8"))
+    state["factions"][0]["name"] = "Envproof Wardens"
+    (home / "state.yaml").write_text(yaml.safe_dump(state), encoding="utf-8")
+    r = run([*PY, "src/tick.py"], cwd=AGENTIC_SIMULATOR, timeout=120,
+            env={"CAMPAIGN_DATA_ROOT": str(tmp_path)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "Envproof Wardens" in r.stdout, \
+        "tick read a state other than <CAMPAIGN_DATA_ROOT>/engine-home"
+
+
+def test_env_override_battlemap_writes_only_under_tmp(tmp_path):
+    """The battlemap CLI resolves its sites home from $CAMPAIGN_DATA_ROOT:
+    gen-cave writes <tmp>/maps/sites/<name>/ and nothing under the repo's
+    data root or the engine tree."""
+    site = "envproof-cave"
+    r = run([*PY, "src/battlemap.py", "gen-cave", "--seed", "5",
+             "--name", site],
+            cwd=DND_MAPPING, timeout=120,
+            env={"CAMPAIGN_DATA_ROOT": str(tmp_path)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (tmp_path / "maps" / "sites" / site / "scene.json").is_file()
+    assert not (DATA_ROOT / "maps" / "sites" / site).exists()
+    assert not (DND_MAPPING / "worlds" / "sites" / site).exists()
+
+
+def test_env_override_import_fmg_drops_under_tmp(tmp_path):
+    """The importer's candidate drop dir follows $CAMPAIGN_DATA_ROOT —
+    nothing lands in the repo's scratch (or the tracked candidates dir)."""
+    r = run([*PY, "src/import_fmg.py", SAMPLE / "world" / "source.json"],
+            cwd=DND_MAPPING, timeout=120,
+            env={"CAMPAIGN_DATA_ROOT": str(tmp_path)})
+    assert r.returncode == 0, r.stdout + r.stderr
+    m = re.search(r"-> (\S+\.yaml):", r.stdout)
+    assert m, r.stdout
+    assert (tmp_path / "scratch" / "map-candidates" / m.group(1)).is_file()
+    assert not (DATA_ROOT / "scratch" / "map-candidates" / m.group(1)).exists()
+    assert not (DND_MAPPING / "worlds" / "candidates" / m.group(1)).exists()
 
 
 def test_battlemap_chain_seam(tmp_path):
     """POST /maps/sites: the full documented chain with exactly the argv
-    maps.py passes (battlemap.py's --dir paths are root-relative, and the
-    rasterizer resolves its arg against the dnd-mapping root too — so the
-    chain runs in the engine home, per maps.py's own docstring, and the
-    artifact set is mirrored into tmp). If sharp is broken this fails
-    loudly — that is the point; the documented repair is
-    plain npm install in tools/settlemaker."""
+    maps.py passes (battlemap.py's --dir paths are dnd-mapping-relative,
+    and the rasterizer resolves its arg against the dnd-mapping root too —
+    so the chain runs in the engine home under campaign-data (ticket 35),
+    per maps.py's own docstring, and the artifact set is mirrored into
+    tmp). If sharp is broken this fails loudly — that is the point; the
+    documented repair is plain npm install in tools/settlemaker."""
     site = "smoke-cave"
-    rel = f"worlds/sites/{site}"  # root-relative, exactly as the router passes
-    engine_dir = DND_MAPPING / "worlds" / "sites" / site
+    engine_dir = DATA_ROOT / "maps" / "sites" / site
+    rel = os.path.relpath(engine_dir, DND_MAPPING)  # as the router passes it
 
     def battlemap(*args):
         return run([*PY, "src/battlemap.py", *args], cwd=DND_MAPPING,

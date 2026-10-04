@@ -89,10 +89,12 @@ INTEGRATION = ("integration",
                [sys.executable, "-m", "pytest", "studio/tests",
                 "-m", "integration", "-q"])
 
-# What the integration tier needs that git does not carry (campaigns/ and
-# tools/ are gitignored): without these it error-spams instead of skipping.
+# What the integration tier needs that git does not carry (campaign-data/
+# and tools/ are gitignored): without these it error-spams instead of
+# skipping.
 INTEGRATION_NEEDS = [
-    ROOT / "campaigns" / "ruravaqan" / "simulation" / "state.yaml",
+    ROOT / "campaign-data" / "campaigns" / "ruravaqan" / "simulation"
+    / "state.yaml",
     ROOT / "dnd-mapping" / "tools" / "Fantasy-Map-Generator",
     ROOT / "dnd-mapping" / "tools" / "settlemaker" / "dist" / "index.js",
 ]

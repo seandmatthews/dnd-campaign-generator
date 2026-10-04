@@ -1,18 +1,21 @@
 """POST /maps/sites — the full battlemap chain with FAKE engines.
 
 The fakes reproduce the documented CLI contract exactly (argv shapes and
-the worlds/sites/<name> output location): gen-<kind> writes scene.json,
-render writes scene.svg, render-scene-png.mjs writes scene.png (sharp),
-wrap writes <slug>.uvtt. No real battlemap/sharp call ever runs.
+the campaign-data/maps/sites/<name> output location): gen-<kind> writes
+scene.json, render writes scene.svg, render-scene-png.mjs writes
+scene.png (sharp), wrap writes <slug>.uvtt. No real battlemap/sharp call
+ever runs.
 """
 
 import json
+import os
 import zlib
 from pathlib import Path
 
 import yaml
 
 import engines
+import spine
 from conftest import wait_for_job
 
 SITE = "Marsh Camp"  # deliberately un-slugified: engines get the human name
@@ -28,7 +31,7 @@ def fake_battlemap(engine_root, script, *args, timeout=600, on_line=None,
 
     if cmd.startswith("gen-"):
         seed, name = arg("--seed"), arg("--name")
-        site_dir = engine_root / "worlds" / "sites" / name
+        site_dir = engines.map_sites_dir() / name
         site_dir.mkdir(parents=True, exist_ok=True)
         (site_dir / "scene.json").write_text(json.dumps(
             {"name": name, "grids": {"x": 46, "y": 30},
@@ -36,13 +39,14 @@ def fake_battlemap(engine_root, script, *args, timeout=600, on_line=None,
              "provenance": {"generator": f"battlemap.py {cmd} seed={seed}"},
              "features": [], "doors": []}), encoding="utf-8")
         return 0, [f"camp '{name}': 7 tents -> {site_dir}"]
-    if cmd == "render":
+    if cmd in ("render", "wrap"):
+        # --dir arrives dnd-mapping-relative (the CLI resolves it against
+        # its cwd); the fake mirrors that resolution
         site_dir = engine_root / Path(arg("--dir"))
-        (site_dir / "scene.svg").write_text("<svg>scene</svg>",
-                                            encoding="utf-8")
-        return 0, ["rendered scene.svg"]
-    if cmd == "wrap":
-        site_dir = engine_root / Path(arg("--dir"))
+        if cmd == "render":
+            (site_dir / "scene.svg").write_text("<svg>scene</svg>",
+                                                encoding="utf-8")
+            return 0, ["rendered scene.svg"]
         scene = json.loads((site_dir / "scene.json").read_text(
             encoding="utf-8"))
         slug = "".join(c if c.isalnum() else "-" for c in scene["name"].lower())
@@ -63,6 +67,8 @@ def install(tmp_spine_root, monkeypatch, png=fake_png_ok):
     monkeypatch.setattr(engines, "run_py", fake_battlemap)
     monkeypatch.setattr(engines, "run_node", png)
     monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    # the battlemap home lives under the data root — keep it tmp-owned
+    monkeypatch.setattr(spine, "DATA_ROOT", tmp_spine_root / "campaign-data")
 
 
 def test_sites_job_happy_path(client, tmp_spine_root, monkeypatch):
@@ -82,13 +88,15 @@ def test_sites_job_happy_path(client, tmp_spine_root, monkeypatch):
     assert job["status"] == "done", job["error"]
     assert job["kind"] == "map-site"
 
-    # the documented chain, in order, with the human name (list-form argv)
+    # the documented chain, in order, with the human name (list-form argv);
+    # the --dir paths resolve (dnd-mapping-relative) into the data root's
+    # maps/sites home
+    rel = os.path.relpath(engines.map_sites_dir() / SITE,
+                          engines.DND_MAPPING)
     assert calls[0] == ("src/battlemap.py", "gen-camp", "--seed",
                         calls[0][3], "--name", SITE)
-    assert calls[1] == ("src/battlemap.py", "render", "--dir",
-                        f"worlds/sites/{SITE}")
-    assert calls[2] == ("src/battlemap.py", "wrap", "--dir",
-                        f"worlds/sites/{SITE}")
+    assert calls[1] == ("src/battlemap.py", "render", "--dir", rel)
+    assert calls[2] == ("src/battlemap.py", "wrap", "--dir", rel)
 
     result = job["result"]
     assert result["slug"] == "marsh-camp"

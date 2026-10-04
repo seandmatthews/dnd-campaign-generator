@@ -62,49 +62,65 @@ def test_install_cmd_fast_path_still_byte_compares_version():
     assert 'fc /b "%DEST%\\VERSION" "%SRC%VERSION"' in text
 
 
-# ------------------------------------------------- the campaigns exclusion
+# ------------------------------------------------- the data-dir exclusion
 
-def test_install_cmd_excludes_only_the_top_level_campaigns_dir():
-    """/XD carries the full source path (%SRC% is %~dp0 and ends with a
-    backslash), never the bare name: the exclusion is top-level-only by
-    construction, so a nested campaigns/ dir still mirrors."""
+def test_install_cmd_excludes_only_the_top_level_data_dir():
+    """/XD carries full paths (%SRC%/%DEST% end with a backslash), never
+    the bare name: the exclusion is top-level-only by construction, so a
+    nested campaign-data/ dir still mirrors. The payload's campaign-data/
+    is excluded on the source side, and a pre-ticket-35 install's legacy
+    campaigns\\ stays excluded on the dest side too — if the installer's
+    one-time move could not run, /MIR must not destroy it."""
     text = INSTALL_CMD.read_text(encoding="ascii")
     mirror = next(ln for ln in text.splitlines()
                   if "robocopy" in ln and "/MIR" in ln)
-    assert '/XD "%SRC%campaigns"' in mirror, mirror
-    assert "/XD campaigns" not in mirror, mirror  # the any-depth form
+    assert '/XD "%SRC%campaign-data"' in mirror, mirror
+    assert '/XD "%SRC%campaign-data" "%DEST%campaigns"' in mirror, mirror
+    assert "/XD campaign-data" not in mirror.replace(
+        '/XD "%SRC%campaign-data"', ""), mirror  # the any-depth form
+    # the legacy data is carried into the new home BEFORE the mirror runs
+    move_at = text.index('move "%DEST%\\campaigns"')
+    mirror_at = text.index('robocopy "%SRC%." "%DEST%" /MIR')
+    assert move_at < mirror_at, "the legacy move must precede /MIR"
     # ...and the data dir is still seeded on first install only
-    assert 'if not exist "%DEST%\\campaigns" robocopy "%SRC%campaigns"' in text
+    assert ('if not exist "%DEST%\\campaign-data" robocopy '
+            '"%SRC%campaign-data"') in text
 
 
 @pytest.mark.skipif(sys.platform != "win32"
                     or shutil.which("robocopy") is None,
                     reason="robocopy mirror semantics — Windows")
-def test_robocopy_mirrors_nested_campaigns_and_keeps_the_data_dir(tmp_path):
+def test_robocopy_mirrors_nested_data_and_keeps_the_data_dirs(tmp_path):
     """The real mirror command against the real robocopy, with exactly
-    install.cmd's argv shape (source spelled with the trailing dot, /XD
-    as the full source path, list-form args — no shell). A nested
-    campaigns/ mirrors; the top-level campaigns/ is neither copied over
-    nor deleted as an /MIR extra (the installed user data survives)."""
+    install.cmd's argv shape (source spelled with the trailing dot, /XD as
+    full paths, list-form args — no shell). A nested campaign-data/
+    mirrors; the payload's top-level campaign-data/ is neither copied over
+    nor deleted as an /MIR extra, and a legacy campaigns\\ dest survives a
+    mirror whose move could not run (the installed user data survives)."""
     src, dest = tmp_path / "src", tmp_path / "dest"
-    (src / "campaigns").mkdir(parents=True)
-    (src / "campaigns" / "payload.txt").write_text("new payload",
-                                                   encoding="ascii")
-    (src / "nested" / "campaigns").mkdir(parents=True)
-    (src / "nested" / "campaigns" / "mirror-me.txt").write_text(
+    (src / "campaign-data").mkdir(parents=True)
+    (src / "campaign-data" / "payload.txt").write_text("new payload",
+                                                       encoding="ascii")
+    (src / "nested" / "campaign-data").mkdir(parents=True)
+    (src / "nested" / "campaign-data" / "mirror-me.txt").write_text(
         "nested", encoding="ascii")
     (src / "app.txt").write_text("app", encoding="ascii")
+    (dest / "campaign-data").mkdir(parents=True)
+    (dest / "campaign-data" / "userdata.txt").write_text("user data",
+                                                         encoding="ascii")
     (dest / "campaigns").mkdir(parents=True)
-    (dest / "campaigns" / "userdata.txt").write_text("user data",
-                                                     encoding="ascii")
+    (dest / "campaigns" / "legacy.txt").write_text("legacy data",
+                                                   encoding="ascii")
 
     r = subprocess.run(
         ["robocopy", f"{src}.", str(dest), "/MIR",
-         "/XD", str(src / "campaigns"), "/R:1", "/W:1",
+         "/XD", str(src / "campaign-data"), str(dest / "campaigns"),
+         "/R:1", "/W:1",
          "/NFL", "/NDL", "/NJH", "/NJS", "/NP"],
         capture_output=True, text=True)
     assert r.returncode < 8, r.stdout + r.stderr  # 0-7: robocopy success
     assert (dest / "app.txt").is_file()
-    assert (dest / "nested" / "campaigns" / "mirror-me.txt").is_file()
-    assert not (dest / "campaigns" / "payload.txt").exists()
-    assert (dest / "campaigns" / "userdata.txt").is_file()
+    assert (dest / "nested" / "campaign-data" / "mirror-me.txt").is_file()
+    assert not (dest / "campaign-data" / "payload.txt").exists()
+    assert (dest / "campaign-data" / "userdata.txt").is_file()
+    assert (dest / "campaigns" / "legacy.txt").is_file()

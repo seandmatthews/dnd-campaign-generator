@@ -7,8 +7,9 @@ FMG repo root with FMG_SEED/FMG_OUT env (plus FMG_OPTIONS when the DM
 steers culture set / heightmap / climate / counts for THIS world; validated
 here, deep-merged over the randomized options after randomize) — then
 copies the raw dump into the campaign (D4) and runs `src/import_fmg.py` per
-its real CLI (cwd=dnd-mapping; it writes worlds/candidates — its documented
-behavior), copying the produced candidate yaml in as world/geography.yaml.
+its real CLI (cwd=dnd-mapping; it drops candidate yamls under the
+campaign-data scratch dir — its documented behavior), copying the produced
+candidate yaml in as world/geography.yaml.
 FMG headless exports no SVG, so the hero is rendered from the dump itself
 by studio/worldmap.py (read-only; see that module for why regenerating is
 not an option). POST /world-options is the read-only LLM pass that turns a
@@ -22,7 +23,8 @@ campaign's maps/cities/<slug>/.
 
 Site generation: the full documented battlemap chain — gen-<kind> → render
 → render-scene-png.mjs (sharp) → wrap — run in the engine home
-(worlds/sites/<name> is battlemap.py's documented output location), then
+(campaign-data/maps/sites/<name>, the battlemap CLI's documented output
+location under the data root), then
 the artifact set is copied into maps/sites/<slug>/ (D4).
 
 Generation jobs are campaign MUTATIONS: each goes through the campaign's
@@ -33,6 +35,7 @@ site ...").
 """
 
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -538,8 +541,8 @@ def post_world(name: str, body: WorldBody):
             engines.copy_file(dump, source)
             log("genesis record copied -> world/source.json")
 
-            candidates = engines.DND_MAPPING / "worlds" / "candidates"
-            with MAPPING_LOCK:  # the candidates dir is the shared engine home
+            candidates = engines.candidate_drop_dir()
+            with MAPPING_LOCK:  # the scratch drop dir is the shared engine home
                 before = ({p.name for p in candidates.glob("*.yaml")}
                           if candidates.is_dir() else set())
                 log("importing geography via src/import_fmg.py")
@@ -657,8 +660,14 @@ def post_site(name: str, body: SiteBody):
             raise HTTPException(status_code=422, detail=str(e))
 
     def job(log):
-        rel = f"worlds/sites/{site_name}"
         root = engines.DND_MAPPING
+        # the battlemap engine home is under the campaign-data root; the
+        # subprocesses get CAMPAIGN_DATA_ROOT from engines._run, and --dir /
+        # the rasterizer arg are passed dnd-mapping-relative (the chain's
+        # documented argv shape — render-scene-png.mjs joins its arg onto
+        # the dnd-mapping root)
+        engine_dir = engines.map_sites_dir() / site_name
+        rel = os.path.relpath(engine_dir, root)
         with MAPPING_LOCK:
 
             def stage(label, call, what):
@@ -698,7 +707,6 @@ def post_site(name: str, body: SiteBody):
                                          "--dir", rel, timeout=300, on_line=log),
                   "battlemap.py wrap")
 
-            engine_dir = root / "worlds" / "sites" / site_name
             scene = engine_dir / "scene.json"
             svg = engine_dir / "scene.svg"
             png = engine_dir / "scene.png"

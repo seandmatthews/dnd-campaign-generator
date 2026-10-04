@@ -276,9 +276,10 @@ def test_faction_name_and_resources_may_be_omitted():
     print("  views: a nameless, resourceless faction degrades, no KeyError  OK")
 
 
-def test_state_default_points_at_project_root():
-    assert views.STATE_FILE == ROOT / "world" / "state.yaml", \
-        "the default is anchored to the project root, not the cwd"
+def test_state_default_points_at_campaign_data_root():
+    import store
+    assert views.STATE_FILE == store.DATA_ROOT / "engine-home" / "state.yaml", \
+        "the default is the campaign-data engine home, not the cwd"
     print("  anchor: STATE_FILE resolves from __file__, cwd-independent  OK")
 
 
@@ -288,7 +289,7 @@ if __name__ == "__main__":
         test_cli_unknown_faction_exits_2,
         test_cli_default_path_reads_project_state,
         test_cli_usage_and_missing_state_errors,
-        test_state_default_points_at_project_root,
+        test_state_default_points_at_campaign_data_root,
         test_facts_visibility_public_restricted_and_dm_only,
         test_rumors_window_keeps_recent_and_counts_the_omitted,
         test_rumors_window_boundary_week_still_rides,

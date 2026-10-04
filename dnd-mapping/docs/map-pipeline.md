@@ -18,9 +18,9 @@ node scripts/gen-city.mjs --world worlds/raw/<dump> --burg "<name>" --out worlds
 # 3. Make a battlemap scene:
 python src/battlemap.py extract                        # city-anchored (harbour quay)
 python src/battlemap.py gen-camp --seed 1 --name camp  # or gen-dungeon / gen-cave
-python src/battlemap.py render --dir worlds/sites/camp
-node scripts/render-scene-png.mjs worlds/sites/camp
-python src/battlemap.py wrap --dir worlds/sites/camp
+python src/battlemap.py render --dir ../campaign-data/maps/sites/camp
+node scripts/render-scene-png.mjs ../campaign-data/maps/sites/camp
+python src/battlemap.py wrap --dir ../campaign-data/maps/sites/camp
 # → scene.png (drag into any VTT) + <name>.uvtt (Foundry: walls/doors/lights live)
 ```
 
@@ -235,7 +235,9 @@ that feed the same scene schema, so render/rasterize/wrap work unchanged:
 python src/battlemap.py gen-dungeon --seed S --name the-undercroft [--rooms 7]
 python src/battlemap.py gen-cave --seed S --name the-silver-mine
 python src/battlemap.py gen-camp --seed S --name marsh-gang-camp
-# then render -> rasterize -> wrap with --dir worlds/sites/<name>
+# then render -> rasterize -> wrap with --dir <campaign-data>/maps/sites/<name>
+# (the scenes home is campaign-data/maps/sites — $CAMPAIGN_DATA_ROOT moves
+#  it; the studio passes the same path to every subprocess)
 ```
 
 - **gen-dungeon** — non-overlapping rooms joined by L-corridors; walls are
@@ -249,7 +251,8 @@ python src/battlemap.py gen-camp --seed S --name marsh-gang-camp
   Lights render as radial glows AND land in the UVTT `lights` array with the
   scene's `ambient` color — the wrapper is lighting-aware.
 
-Site outputs live in `worlds/sites/<name>/`: scene.json (with
+Site outputs live in `<campaign-data>/maps/sites/<name>/` (scratch,
+regenerated on demand): scene.json (with
 provenance: generator + seed), scene.svg, scene.png, `<name>.uvtt`.
 
 ---
@@ -288,10 +291,12 @@ rule that keeps it sane:
   the only thing that regenerates everything else), final `geography.yaml`s,
   the chosen city's SVG/GeoJSON/params, and final site artifact sets
   (scene.svg/png/json + .uvtt).
-- **Not tracked**: review PNGs for rejected candidates, smoke-test output
-  (`out-gen-city-smoke/`), anything under `tools/`. A rejected world's 9 MB
-  save is a judgment, not a fact — record the seed in `index.md` and delete
-  the file.
+- **Not tracked**: everything under the repo's git-ignored
+  `campaign-data/` — fresh import drops (`scratch/map-candidates/`, promote
+  by copying into `worlds/candidates/` + `git add`), battlemap scenes
+  (`maps/sites/`), smoke output (`scratch/gen-city-smoke/`) — and anything
+  under `tools/`. A rejected world's 9 MB save is a judgment, not a fact —
+  record the seed in `index.md` and delete the file.
 - Re-generating a tracked artifact rewrites a ~5 MB blob; don't churn tracked
   derivatives casually — regenerate when the SOURCE changed, not to "see what
   it looks like".

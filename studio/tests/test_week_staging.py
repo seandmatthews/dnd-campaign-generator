@@ -88,14 +88,14 @@ def _fake_tick(engine_root, events=WEEK4_EVENTS, week=4, rc=0):
     def tick(engine_root_, script, *args, timeout=600, on_line=None,
              env=None):
         assert (script,) + args == ("src/tick.py", "--live")
-        world = engine_root_ / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
             "meta": {"clock": {"week": week, "season": "late autumn"},
                      "rng_seeds": {str(week): 123456789}},
             "events": events,
         }), encoding="utf-8")
-        chron = engine_root_ / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         # like the real tick, each run writes the next FREE chronicle path
         taken = {p.name for p in chron.glob("*.md")}
@@ -115,8 +115,10 @@ def _fake_tick(engine_root, events=WEEK4_EVENTS, week=4, rc=0):
 
 def _run_week(client, monkeypatch, tmp_spine_root, **kwargs):
     monkeypatch.setattr(engines, "run_py", _fake_tick(None, **kwargs))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     assert r.status_code == 202
@@ -231,7 +233,7 @@ def test_accept_reads_chronicle_meta_from_the_bundle_not_scratch(
     import shutil
     job = _run_week(client, monkeypatch, tmp_spine_root)
     pid = job["result"]["proposal_id"]
-    shutil.rmtree(tmp_spine_root / "engine-home" / "chronicle")
+    shutil.rmtree(engines.engine_chronicle_dir())
     r = client.post(
         f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
     assert r.status_code == 200, r.text
@@ -358,15 +360,17 @@ def test_clock_not_advancing_is_generation_failure(
         client, tmp_spine_root, monkeypatch):
     def stuck_tick(engine_root_, script, *args, timeout=600, on_line=None,
                    env=None):
-        world = engine_root_ / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(
             "meta:\n  clock:\n    week: 3\n", encoding="utf-8")
         return 0, ["nothing happened"]
 
     monkeypatch.setattr(engines, "run_py", stuck_tick)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     job = wait_for_job(client, r.json()["job_id"])
@@ -380,12 +384,12 @@ def test_all_faction_calls_failed_is_generation_failure(
         client, tmp_spine_root, monkeypatch):
     def failed_tick(engine_root, script, *args, timeout=600, on_line=None,
                     env=None):
-        world = engine_root / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
             "meta": {"clock": {"week": 4}}, "events": [],
         }), encoding="utf-8")
-        chron = engine_root / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         (chron / "0004-dud.md").write_text(
             "# Week 4 — Dud\n\nNothing.\n", encoding="utf-8")
@@ -393,8 +397,10 @@ def test_all_faction_calls_failed_is_generation_failure(
                     "mint          HOLDS (proposal failed: boom)"]
 
     monkeypatch.setattr(engines, "run_py", failed_tick)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     job = wait_for_job(client, r.json()["job_id"])
@@ -408,12 +414,12 @@ def test_quiet_scheduler_held_week_is_a_valid_proposal(
         client, tmp_spine_root, monkeypatch):
     def quiet_tick(engine_root, script, *args, timeout=600, on_line=None,
                    env=None):
-        world = engine_root / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
             "meta": {"clock": {"week": 4}}, "events": [],
         }), encoding="utf-8")
-        chron = engine_root / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         (chron / "0004-quiet.md").write_text(
             "# Week 4 — Quiet\n\nHeld (scheduler): wardens, mint\n",
@@ -422,8 +428,10 @@ def test_quiet_scheduler_held_week_is_a_valid_proposal(
                     "mint          HOLDS (resting)"]
 
     monkeypatch.setattr(engines, "run_py", quiet_tick)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     job = wait_for_job(client, r.json()["job_id"])
@@ -471,7 +479,7 @@ def test_replay_trail_rides_with_the_proposal(
              env=None):
         rc, lines = inner(engine_root_, script, *args, timeout=timeout,
                           on_line=on_line)
-        replay = engine_root_ / "world" / "replay" / "week-4.yaml"
+        replay = engines.ENGINE_HOME / "replay" / "week-4.yaml"
         replay.parent.mkdir(parents=True, exist_ok=True)
         replay.write_text(yaml.safe_dump({
             "schema_version": 1, "rule_version": 2, "week": 4,
@@ -480,8 +488,10 @@ def test_replay_trail_rides_with_the_proposal(
         return rc, lines
 
     monkeypatch.setattr(engines, "run_py", fake)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     job = wait_for_job(client, r.json()["job_id"])
@@ -587,8 +597,10 @@ def test_week_job_rechecks_the_pending_invariant_under_the_lock(
     fake_pending = {"proposal_id": "fake-1", "proposed_week": 4}
     responses = iter([None, fake_pending])
     monkeypatch.setattr(engines, "run_py", _fake_tick(None))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     # call 1: the route's pre-check (None); call 2: the job's re-check
     # (the "raced" proposal); any later reader: back to the real answer
     monkeypatch.setattr(proposals, "find_pending",

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""assemble.py — build campaigns/ruravaqan/ from the three engine projects.
+"""assemble.py — build campaign-data/campaigns/ruravaqan/ from the engine
+projects.
 
 M0 one-time import (campaign-studio-design.md §M0, decision D4): the studio
 never references the engines' live trees; it copies artifacts in, so a
-campaign folder is self-contained and portable by zip.
+campaign folder is self-contained and portable by zip. The output lands
+under the campaign-data root (ticket 35: <root>/campaign-data/campaigns/,
+or $CAMPAIGN_DATA_ROOT/campaigns).
 
 Sources (all READ-ONLY — this script never writes into an engine project):
   agentic-simulator/world/state.yaml      faction sandbox state (canonical)
@@ -25,6 +28,7 @@ Exit status 2 if a required source is missing, 1 on verification failure.
 """
 
 import argparse
+import os
 import re
 import shutil
 import sys
@@ -712,8 +716,18 @@ def _rel(base, path):
 # --------------------------------------------------------------------------
 
 
+def campaigns_root(root: Path) -> Path:
+    """Where the assembled campaign lands: <root>/campaign-data/campaigns/
+    (ticket 35 — all runtime data under one gitignored root), or
+    $CAMPAIGN_DATA_ROOT/campaigns when the env is set. Sources still come
+    from <root>'s engine trees; only the OUTPUT moved."""
+    env = os.environ.get("CAMPAIGN_DATA_ROOT", "").strip()
+    base = Path(env) if env else root / "campaign-data"
+    return base / "campaigns"
+
+
 def build(root):
-    camp = root / "campaigns" / CAMPAIGN_NAME
+    camp = campaigns_root(root) / CAMPAIGN_NAME
     s = collect_sources(root)
     rows = []
     rows.append(build_campaign_yaml(camp, s["state"]))
@@ -732,7 +746,7 @@ def build(root):
 
 
 def check(root):
-    camp = root / "campaigns" / CAMPAIGN_NAME
+    camp = campaigns_root(root) / CAMPAIGN_NAME
     if not camp.is_dir():
         print(f"assemble: no campaign at {camp} — run without --check first",
               file=sys.stderr)
@@ -740,7 +754,7 @@ def check(root):
     n_yaml = verify(root, camp)
     tl = yaml.safe_load((camp / "lore" / "timeline.yaml").read_text("utf-8"))
     pages = list((camp / "lore" / "entities").glob("*.md"))
-    print(f"check: {camp.relative_to(root)}")
+    print(f"check: {camp}")
     print(f"  timeline entries: {len(tl['entries'])}")
     print(f"  entity pages: {len(pages)}")
     print(f"  chronicles: {len(list((camp / 'simulation' / 'chronicle').glob('*.md')))}")
@@ -752,8 +766,8 @@ def main(argv=None):
     _force_utf8_stdout()
     ap = argparse.ArgumentParser(
         prog="assemble.py",
-        description="Build campaigns/ruravaqan/ from the three engine "
-        "projects (copy-in per design decision D4).",
+        description="Build campaign-data/campaigns/ruravaqan/ from the "
+        "engine projects (copy-in per design decision D4).",
     )
     ap.add_argument(
         "--root",

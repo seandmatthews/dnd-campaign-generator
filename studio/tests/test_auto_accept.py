@@ -227,8 +227,10 @@ UPDATES = {"updates": [{"faction_id": "wardens", "name": "The Bridge Wardens",
 def test_goal_review_auto_accept_publishes_the_updates(
         client, tmp_spine_root, monkeypatch):
     monkeypatch.setattr(engines, "run_py", _fake_goal_engine(UPDATES))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/goal-review",
                     json={"auto_accept": True})
     assert r.status_code == 202, r.text
@@ -260,8 +262,10 @@ def test_goal_review_auto_accept_blocked_by_error_finding(
         {"rule": "goal/duplicate", "level": "error", "line": 4,
          "note": "duplicate of an applied effect"}])
     monkeypatch.setattr(engines, "run_py", _fake_goal_engine(blocked))
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/goal-review",
                     json={"auto_accept": True})
     assert r.status_code == 202, r.text
@@ -290,14 +294,14 @@ def _fake_tick(week=4):
     def tick(engine_root_, script, *args, timeout=600, on_line=None,
              env=None):
         assert (script,) + args == ("src/tick.py", "--live")
-        world = engine_root_ / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         world.joinpath("state.yaml").write_text(yaml.safe_dump({
             "meta": {"clock": {"week": week, "season": "late autumn"},
                      "rng_seeds": {str(week): 123456789}},
             "events": [],
         }), encoding="utf-8")
-        chron = engine_root_ / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         (chron / f"{week:04d}-the-gate.md").write_text(
             f"# Week {week} — The Gate\n\nProse.\n", encoding="utf-8")
@@ -310,8 +314,10 @@ def test_week_auto_accept_publishes_without_review(
     """The loud checkbox, ON: the staged week publishes itself through the
     normal accept path, and the publication says auto."""
     monkeypatch.setattr(engines, "run_py", _fake_tick())
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True, "auto_accept": True})
     assert r.status_code == 202, r.text
@@ -340,8 +346,10 @@ def test_week_auto_accept_publishes_without_review(
 def test_week_auto_accept_defaults_off(client, tmp_spine_root, monkeypatch):
     """Default OFF — reading the chronicle is the point of the feature."""
     monkeypatch.setattr(engines, "run_py", _fake_tick())
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/week",
                     json={"confirm": True})
     assert r.status_code == 202

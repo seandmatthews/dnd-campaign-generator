@@ -129,7 +129,7 @@ def why_cli(state, argv):
 
 def main(argv):
     """`python src/why.py <week> <actor> [--json] [--state PATH]` — --state
-    reads that state file instead of the engine home's world/state.yaml
+    reads that state file instead of the engine home's state.yaml
     (the studio's why route passes the campaign's own canon state, which
     needs no copy-in and no engine lock)."""
     values, rest = split_argv(argv, "--state")
@@ -140,7 +140,7 @@ def main(argv):
         print(f"error: {e}", file=sys.stderr)
         return 1
     if not isinstance(state, dict):
-        print(f"error: {state_path or 'world/state.yaml'} is empty or not "
+        print(f"error: {state_path or 'the engine-home state.yaml'} is empty or not "
               "a mapping", file=sys.stderr)
         return 1
     return why_cli(state, rest)

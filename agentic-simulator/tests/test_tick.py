@@ -238,10 +238,12 @@ def test_run_live_happy_path_writes_state_chronicle_and_replay():
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-live-"))
     saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
-             tick.llm.propose, tick.llm.narrate_week, tick.save_state)
+             tick.REPLAY_DIR, tick.llm.propose, tick.llm.narrate_week,
+             tick.save_state)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     tick.CHRONICLE_DIR = root / "chronicle"
+    tick.REPLAY_DIR = root / "replay"
     # save_state's default path is store.STATE_FILE (the real engine home):
     # force the patched path, or the test writes scratch over the live home
     real_save_state = tick.save_state
@@ -278,7 +280,7 @@ def test_run_live_happy_path_writes_state_chronicle_and_replay():
         assert seed is not None, "the week's RNG seed is recorded (replay identity)"
         chron = list(tick.CHRONICLE_DIR.glob("0005-*.md"))
         assert chron and "The Trading Week" in chron[0].read_text(encoding="utf-8")
-        replay = root / "world" / "replay" / "week-5.yaml"
+        replay = tick.REPLAY_DIR / "week-5.yaml"
         doc = _yaml.safe_load(replay.read_text(encoding="utf-8"))
         assert doc["seed"] == seed and doc["week"] == 5
         assert {p["actor"] for p in doc["proposals"]} == {"mint", "rival"}
@@ -290,8 +292,8 @@ def test_run_live_happy_path_writes_state_chronicle_and_replay():
         assert ok, f"replay must verify immediately after the week: {msg}"
         assert "HOLDS" not in out, "both factions proposed; nobody held"
     finally:
-        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
-            tick.llm.narrate_week, tick.save_state = saved
+        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.REPLAY_DIR, \
+            tick.llm.propose, tick.llm.narrate_week, tick.save_state = saved
         shutil.rmtree(root, ignore_errors=True)
     print("  live: happy path writes state, chronicle, and the replay trail  OK")
 
@@ -308,10 +310,12 @@ def test_run_live_held_faction_format_is_the_studio_contract():
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-holds-"))
     saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
-             tick.llm.propose, tick.llm.narrate_week, tick.save_state)
+             tick.REPLAY_DIR, tick.llm.propose, tick.llm.narrate_week,
+             tick.save_state)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     tick.CHRONICLE_DIR = root / "chronicle"
+    tick.REPLAY_DIR = root / "replay"
     # save_state's default path is store.STATE_FILE (the real engine home):
     # force the patched path, or the test writes scratch over the live home
     real_save_state = tick.save_state
@@ -345,8 +349,8 @@ def test_run_live_held_faction_format_is_the_studio_contract():
                       if t}
         assert held_names == {"a", "b"}
     finally:
-        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
-            tick.llm.narrate_week, tick.save_state = saved
+        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.REPLAY_DIR, \
+            tick.llm.propose, tick.llm.narrate_week, tick.save_state = saved
         shutil.rmtree(root, ignore_errors=True)
     print("  live: HOLDS stdout + chronicle formats match the studio's parsers  OK")
 
@@ -403,8 +407,10 @@ def test_save_replay_and_replay_verify_round_trip():
     apples to bolts)."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import hashlib as _hashlib
         import copy as _copy
@@ -433,6 +439,7 @@ def test_save_replay_and_replay_verify_round_trip():
         assert not ok and "rule version" in message
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: save -> verify reproduces; version mismatch refuses  OK")
 
@@ -445,8 +452,10 @@ def test_replay_verifies_after_the_state_moved_on():
     self-contained and the moved-on live state is irrelevant."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-next-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import copy as _copy
         import hashlib as _hashlib
@@ -472,6 +481,7 @@ def test_replay_verifies_after_the_state_moved_on():
         assert ok, f"verification right after the week must hold: {message}"
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: verification holds right after the week  OK")
 
@@ -484,8 +494,10 @@ def test_replay_verify_refuses_a_changed_base_state():
     path — see test_replay_verifies_after_the_state_moved_on.)"""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-stale-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import hashlib as _hashlib
         import yaml as _yaml
@@ -522,6 +534,7 @@ def test_replay_verify_refuses_a_changed_base_state():
         assert ok, message
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: a legacy changed-base-state replay refuses  OK")
 
@@ -558,11 +571,12 @@ def test_budget_exhaustion_aborts_the_week_before_any_canon_write():
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-budget-"))
     saved = (tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR,
-             tick.llm.propose, tick.llm.narrate_week, tick.save_state,
-             tick.load_state)
+             tick.REPLAY_DIR, tick.llm.propose, tick.llm.narrate_week,
+             tick.save_state, tick.load_state)
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
     tick.CHRONICLE_DIR = root / "chronicle"
+    tick.REPLAY_DIR = root / "replay"
     real_save_state = tick.save_state
     tick.save_state = lambda doc, path=None: real_save_state(
         doc, path or tick.STATE_FILE)
@@ -593,8 +607,8 @@ def test_budget_exhaustion_aborts_the_week_before_any_canon_write():
         assert after["meta"]["clock"]["week"] == 4, "the clock never advanced"
         assert after["events"] == s["events"], "no outcomes were applied"
         assert not list(tick.CHRONICLE_DIR.glob("*.md")), "no chronicle"
-        assert not (root / "world" / "replay").exists() or \
-            not list((root / "world" / "replay").glob("*.yaml")), "no replay"
+        assert not tick.REPLAY_DIR.exists() or \
+            not list(tick.REPLAY_DIR.glob("*.yaml")), "no replay"
         # and main() maps the abort to a distinct non-zero exit the studio
         # refuses to stage from. A fresh state: the first run_live bumped
         # this dict's clock in memory, which would make both factions hold
@@ -612,8 +626,9 @@ def test_budget_exhaustion_aborts_the_week_before_any_canon_write():
         assert rc == 3, f"main must exit 3 on a budget abort; got {rc}"
         assert "WEEK ABORTED" in buf.getvalue()
     finally:
-        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.llm.propose, \
-            tick.llm.narrate_week, tick.save_state, tick.load_state = saved
+        tick.ROOT, tick.STATE_FILE, tick.CHRONICLE_DIR, tick.REPLAY_DIR, \
+            tick.llm.propose, tick.llm.narrate_week, tick.save_state, \
+            tick.load_state = saved
         shutil.rmtree(root, ignore_errors=True)
     print("  live: budget exhaustion aborts the week, canon untouched  OK")
 
@@ -629,8 +644,10 @@ def test_save_replay_rerun_versions_like_chronicles():
 
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-ver-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         state = {"meta": {"clock": {"week": 4}}, "city": {"name": "T"},
                  "factions": [{"id": "a", "resources": {"muscle": "low"}},
@@ -654,6 +671,7 @@ def test_save_replay_rerun_versions_like_chronicles():
         assert ok, msg
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: same-week rerun versions, first record intact  OK")
 
@@ -687,8 +705,10 @@ def test_replay_verify_refuses_non_mapping_outcomes():
     --replay CLI refuse with a readable message, never a traceback."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-shape-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import contextlib as _cl
         import io as _io
@@ -718,6 +738,7 @@ def test_replay_verify_refuses_non_mapping_outcomes():
             buf.getvalue()
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: non-mapping outcomes refuse with a message  OK")
 
@@ -762,8 +783,10 @@ def test_replay_verify_names_a_base_state_missing_the_actor():
     refusal names the actor, in both the function and the CLI."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-actor-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import contextlib as _cl
         import io as _io
@@ -786,6 +809,7 @@ def test_replay_verify_names_a_base_state_missing_the_actor():
             buf.getvalue()
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: a base state missing the actor refuses by name  OK")
 
@@ -798,8 +822,10 @@ def test_replay_verify_project_rule_version_mismatch_is_not_comparable():
     mirrors the dice path's rule_version check: 'not comparable'."""
     root = pathlib.Path(tempfile.mkdtemp(prefix="tick-replay-prv-"))
     saved_root, saved_state = tick.ROOT, tick.STATE_FILE
+    saved_replay = tick.REPLAY_DIR
     tick.ROOT = root
     tick.STATE_FILE = root / "state.yaml"
+    tick.REPLAY_DIR = root / "replay"
     try:
         import yaml as _yaml
         import projects
@@ -820,6 +846,7 @@ def test_replay_verify_project_rule_version_mismatch_is_not_comparable():
         assert not ok and "not comparable" in msg, msg
     finally:
         tick.ROOT, tick.STATE_FILE = saved_root, saved_state
+        tick.REPLAY_DIR = saved_replay
         shutil.rmtree(root, ignore_errors=True)
     print("  replay trail: project rule version mismatch says not comparable  OK")
 

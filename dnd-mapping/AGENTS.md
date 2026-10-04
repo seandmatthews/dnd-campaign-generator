@@ -15,7 +15,8 @@ Read it before generating anything.
 cd tools/Fantasy-Map-Generator
 FMG_SEED=<pick a number> node node_modules/vitest/vitest.mjs run src/generators/headless-export.test.ts
 cd ../.. && python src/import_fmg.py worlds/raw/headless-<seed>.json
-# → worlds/candidates/world-<seed>.yaml: nations, settlements, cultures
+# → campaign-data/scratch/map-candidates/world-<seed>.yaml (scratch, not
+#   tracked): nations, settlements, cultures
 
 # 2. Pick a burg from the yaml; its city map is one command (inputs are
 #    derived from the dump — bearings, ocean side, port piers):
@@ -23,9 +24,9 @@ node scripts/gen-city.mjs --world worlds/raw/<dump> --burg "<name>" --out worlds
 
 # 3. Battlemap scenes wherever the story goes:
 python src/battlemap.py gen-camp --seed <n> --name <site-name>   # or gen-dungeon / gen-cave
-python src/battlemap.py render --dir worlds/sites/<site-name>
-node scripts/render-scene-png.mjs worlds/sites/<site-name>
-python src/battlemap.py wrap --dir worlds/sites/<site-name>
+python src/battlemap.py render --dir ../campaign-data/maps/sites/<site-name>
+node scripts/render-scene-png.mjs ../campaign-data/maps/sites/<site-name>
+python src/battlemap.py wrap --dir ../campaign-data/maps/sites/<site-name>
 # → scene.png (any VTT) + <site-name>.uvtt (Foundry: walls/doors/lights live)
 ```
 
@@ -33,7 +34,8 @@ python src/battlemap.py wrap --dir worlds/sites/<site-name>
 
 - **Tier 1 — worlds**: headless Fantasy Map Generator (tag 1.153.1). Full
   genesis pipeline in Node, ~1s per world. Raw dumps in `worlds/raw/`, terse
-  geography summaries in `worlds/candidates/`.
+  geography summaries dropped in `campaign-data/scratch/map-candidates/`
+  (scratch); curated ones are copied into the tracked `worlds/candidates/`
 - **Tier 2 — cities**: settlemaker 3.0.1 (external, GPL-3.0). Street/ward/
   building generation parameterized by a burg record from Tier 1. See
   `worlds/ruravaqan/` for a worked example.
@@ -58,10 +60,12 @@ python src/battlemap.py wrap --dir worlds/sites/<site-name>
 
 ```
 worlds/raw/               FMG originals: .map saves, full/headless JSON dumps
-worlds/candidates/        derived geography.yaml per world + index.md review
+worlds/candidates/        TRACKED curated geography.yamls + index.md review
 worlds/ruravaqan/         the city: settlemaker SVG/GeoJSON + params provenance
-worlds/sites/             standalone scenes (slugs): the-undercroft, marsh-gang-camp,
-                          the-silver-mine, doves-rest, the-smoke-camp, the-ash-cellars
+campaign-data/scratch/    run scratch: map-candidates/ (import drops),
+                          gen-city-smoke/
+campaign-data/maps/sites/ battlemap scenes (slugs): regenerated on demand —
+                          canon copies live in the campaign repos
 src/import_fmg.py         FMG exports -> geography.yaml
 src/battlemap.py          scenes: extract/render/wrap + gen-dungeon/gen-cave/gen-camp
 scripts/                  city generator, scene rasterizer

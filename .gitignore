@@ -1,3 +1,11 @@
+# ALL runtime campaign data — one gitignored home (ticket 35):
+# campaigns/ (nested per-campaign git repos), the engine home, chronicles,
+# battlemap sites, map scratch, logs. Nothing a run produces can land in
+# tracked space by accident; override with CAMPAIGN_DATA_ROOT (the release
+# launcher sets it to the install dir's campaign-data/). Curated generation
+# RECORDS stay tracked in their engine trees (dnd-mapping/worlds/...).
+campaign-data/
+
 # third-party tool trees — re-obtainable per dnd-mapping/docs/map-pipeline.md,
 # EXCEPT the custom FMG headless runner, which is tracked under
 # dnd-mapping/vendor-patches/fmg/ (see its README)
@@ -6,32 +14,9 @@ node_modules/
 __pycache__/
 *.pyc
 .pytest_cache/
-# studio runtime artifacts
-studio/logs/
-# studio's crash-restore copy of the engine's state (created/deleted at runtime)
-agentic-simulator/world/state.yaml.bak
-agentic-simulator/world/.week-run-flag
-# scratch
-dnd-mapping/out-gen-city-smoke/
-# battlemap engine home: scratch, regenerated on demand (battlemap.py gen,
-# seed defaults to crc32(slug)); canon copies live in the campaigns repos
-dnd-mapping/worlds/sites/
-# import_fmg.py drops its candidate world yaml here on every world-gen run
-# (documented scratch — test_integration.py leaves candidates behind the
-# same way). Already-tracked candidates and index.md stay tracked; a new
-# curated one needs git add -f.
-dnd-mapping/worlds/candidates/
 
-# session-local scratch (ZCode automations) and the engine home chronicle
-# output dir — restored from the campaign on every week run
+# session-local scratch (ZCode automations)
 .zcode/
-agentic-simulator/chronicle/
-
-# the campaign workspace is its own nested git repository (canon snapshots
-# live there, never in this parent repo) and the engine home is scratch
-# restored from the campaign on every week run
-campaigns/
-agentic-simulator/world/
 
 # LLM provider config (copy llm.env.example; the real one carries a key)
 llm.env

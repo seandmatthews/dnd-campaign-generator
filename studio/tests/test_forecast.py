@@ -27,7 +27,7 @@ def _fake_tick_series(engine_root, start_week=3):
                 env=None):
         assert (script,) + args == ("src/tick.py", "--live")
         calls["n"] += 1
-        world = engine_root_ / "world"
+        world = engines.ENGINE_HOME
         world.mkdir(parents=True, exist_ok=True)
         prev = yaml.safe_load(
             world.joinpath("state.yaml").read_text(encoding="utf-8")) or {}
@@ -41,7 +41,7 @@ def _fake_tick_series(engine_root, start_week=3):
                         "text": f"projected week {week} happened — "
                                 f"succeeded, margin +4"}],
         }), encoding="utf-8")
-        chron = engine_root_ / "chronicle"
+        chron = engines.engine_chronicle_dir()
         chron.mkdir(exist_ok=True)
         taken = {p.name for p in chron.glob("*.md")}
         n = 0
@@ -71,8 +71,10 @@ def _run_forecast(client, monkeypatch, tmp_spine_root, weeks=2,
                    on_line=on_line, env=env)
 
     monkeypatch.setattr(engines, "run_py", dispatch)
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     r = client.post("/api/campaign/testvale/simulation/forecast",
                     json={"confirm": True, "weeks": weeks})
     assert r.status_code == 202, r.text
@@ -262,17 +264,19 @@ def test_copy_in_clears_engine_home_run_outputs(
     unrelated campaign's proposal."""
     from engines import copy_state_in
     home = tmp_spine_root / "engine-home"
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR", home)
-    chron = home / "chronicle"
+    monkeypatch.setattr(engines, "ENGINE_HOME", home)
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
+    chron = engines.engine_chronicle_dir()
     chron.mkdir(parents=True)
     (chron / "0004-stale-projection.md").write_text("stale\n", encoding="utf-8")
-    replay = home / "world" / "replay"
+    replay = engines.ENGINE_HOME / "replay"
     replay.mkdir(parents=True)
     (replay / "week-4.yaml").write_text("stale: true\n", encoding="utf-8")
-    (home / "world").mkdir(parents=True, exist_ok=True)
-    (home / "world" / "state.yaml").write_text("old: true\n", encoding="utf-8")
+    engines.ENGINE_HOME.mkdir(parents=True, exist_ok=True)
+    engines.engine_state_path().write_text("old: true\n", encoding="utf-8")
     copy_state_in("testvale")
     assert list(chron.glob("*.md")) == []
     assert list(replay.glob("week-*.yaml")) == []
     # the copy-in itself still works: canon state now lives in the home
-    assert "clock" in (home / "world" / "state.yaml").read_text(encoding="utf-8")
+    assert "clock" in engines.engine_state_path().read_text(encoding="utf-8")

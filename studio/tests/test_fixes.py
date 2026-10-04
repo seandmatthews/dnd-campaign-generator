@@ -159,8 +159,10 @@ def test_views_need_no_engine_lock(tmp_spine_root, client, monkeypatch):
     import routers.simulation as sim
 
     # keep any hypothetical home-touching well away from the real tree
-    monkeypatch.setattr(engines, "AGENTIC_SIMULATOR",
+    monkeypatch.setattr(engines, "ENGINE_HOME",
                         tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
     seen = {}
 
     def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,

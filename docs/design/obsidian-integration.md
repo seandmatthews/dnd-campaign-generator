@@ -16,8 +16,12 @@ the studio owns with or without Obsidian.
 The spine is already "one campaign = one directory of files, no database"
 (design §1). Obsidian's model is the same model: a folder of markdown with
 wiki-links. So there is nothing to export or sync — Obsidian opens
-`campaigns/<name>/` directly as a vault, and the lore becomes first-class
-markdown inside the spine.
+`campaign-data/campaigns/<name>/` directly as a vault (campaigns live under
+the git-ignored campaign-data root, ticket 35), and the lore becomes
+first-class markdown inside the spine. If a vault was opened at the old
+pre-ticket-35 path, re-open it once at the new one after
+`python studio/doctor.py --migrate-data-root`; the obsidian:// URIs the app
+builds derive from `campaigns_root()` and follow the move on their own.
 
 Division of labor (hold this boundary; it is what keeps us from rebuilding
 Obsidian in the browser tab):
@@ -45,7 +49,7 @@ instead of inventing one. That is what makes §4's map links cheap.
 The change: **one entity = one markdown file** in `lore/entities/`.
 
 ```
-campaigns/<name>/
+campaign-data/campaigns/<name>/
   lore/
     entities/
       House Ferrand.md
@@ -194,7 +198,7 @@ prerequisite for companion-note embeds (stage 3, §7), not a later nicety:
 new generations emit slugged names, and existing site directories get a
 one-time mechanical rename. The same argument settles the vault boundary:
 **one vault per campaign** (`map.svg`, `params.yaml` recur in every
-campaign; a vault spanning `campaigns/` would collide). If plugins get
+campaign; a vault spanning the campaigns root would collide). If plugins get
 installed, add a `.gitignore` for `campaigns/*/.obsidian/` — canon snapshots
 must not sweep plugin state into commits.
 
