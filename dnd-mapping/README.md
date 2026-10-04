@@ -40,7 +40,7 @@ the command quickstart is [`AGENTS.md`](AGENTS.md).
 road bearings, ocean bearing, and port-ness from the dump itself:
 
 ```bash
-node scripts/gen-city.mjs --world worlds/raw/candidate-01.map      --burg "Ruravaqan" --out worlds/ruravaqan --seed 636343
+node scripts/gen-city.mjs --world worlds/raw/candidate-03.map      --burg "Ruravaqan" --out worlds/ruravaqan --seed 636343
 ```
 
 (The one-off `gen-ruravaqan.mjs` this replaces was removed; its output path

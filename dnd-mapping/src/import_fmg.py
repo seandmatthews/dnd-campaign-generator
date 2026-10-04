@@ -12,10 +12,15 @@ re-importing an unchanged file is byte-stable — a wall-clock or mtime stamp
 permanently dirtied tracked derivatives on every regeneration.
 
 Provenance caveat: every tracked candidate's raw dump is expected in
-worlds/raw/ so `--all` can regenerate it — EXCEPT the seed-913 world and the seed-7942/e2e9 candidates (raw dumps not retained; see worlds/candidates/index.md)
+worlds/raw/ so `--all` can regenerate it — EXCEPT the seed-913 world
 (world-913-913.yaml), whose raw export lives in the campaigns repo as
 campaigns/sable-ford/world/source.json (the campaign imported it before
-the raw/ convention was settled).
+the raw/ convention was settled); the seed-7942/e2e9 candidates (raw
+dumps never retained); and the rejected atlas candidates 01/02/04/05
+(Pitbar, Seia, Lombreux, Bouieland — .map saves pruned 2026-10-04 per
+the map-pipeline.md rule, seeds recorded in worlds/candidates/index.md).
+worlds/raw/ keeps only the chosen save (candidate-03.map, Bonia) and the
+pinned candidate-5-full.json test fixture.
 
 Usage:
   python src/import_fmg.py <path-to-.map-or-.json> [more paths...]

@@ -23,6 +23,14 @@ seed is entered through real UI input.
 | 4 | Lombreux | 985178135 | 16 | 1141 | 8 | Mediterranean, Antique cultures — Ragusian Empire, Holy State of Calerania, Republic of Zepatia; inland sea, few large powers. |
 | 5 | Bouieland | 137451204 | 21 | 709 | 7 | High Island (one big continent) — Posian Empire, Holy State of Fjerduria; frontier seas, mixed Nordic/other phonologies. |
 
+**Raw saves pruned 2026-10-04:** per the map-pipeline.md rule (a rejected
+world's save is a judgment, not a fact — record the seed, delete the file),
+the rejected candidates' `.map` saves (01 Pitbar, 02 Seia, 04 Lombreux,
+05 Bouieland) are deleted from the repo; the seeds in the table above are
+the reproduction record (re-enter them through real FMG UI input).
+`worlds/raw/` keeps the chosen save (candidate-03.map, Bonia) and the
+pinned `candidate-5-full.json` test fixture.
+
 ## Later worlds (not from the batch above)
 
 | World | Seed | Raw source | Notes |
@@ -50,6 +58,8 @@ seed is entered through real UI input.
 ## To review a candidate yourself
 
 1. Open the local app: `python -m http.server 8642 --directory tools/Fantasy-Map-Generator/dist` → http://127.0.0.1:8642
-2. `Load` → `machine` → pick the `.map` from `worlds/raw/`
+2. `Load` → `machine` → pick the `.map` from `worlds/raw/` (only the chosen
+   save, candidate-03.map, is retained — rejected candidates must first be
+   regenerated from their seed above)
 3. Skim the derived summary: `worlds/candidates/<world>.yaml`
 4. Screenshots for 02–05 are beside the YAMLs.
