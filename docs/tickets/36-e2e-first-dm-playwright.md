@@ -100,9 +100,16 @@ during the wait, then wait for it to re-enable).
     was still queued, nothing ran." and the strip DROPS it (pins 39a).
     Discard a staged proposal → toast "…the campaign never changed.",
     state unchanged.
-13. **Search** (pins 38 once verdict is in): type "clocks" in
-    `#search-input`, Enter → `.search-panel` opens with hits
-    (endpoint `GET …/search?q=` verified working 2026-10-04 via curl).
+13. **Search** (pins the flow ticket 38 closed as an automation
+    artifact, 2026-10-04): type "clocks" in `#search-input`, Enter →
+    `.search-panel` opens with hits; empty + Enter → the info toast.
+    TRAP: ZCode's in-app browser suppresses implicit form submission
+    GLOBALLY (even a bare one-input form never fires submit on Enter
+    there — that is what fooled the 2026-10-04 pass; ticket 38's notes
+    have the control experiment). This suite runs standalone
+    `npx playwright` against real Chromium, which does NOT have the
+    suppression — if Enter ever fails to submit here, suspect the
+    runner, not the form. Esc and the × button close the panel.
 
 Export stays a CLI step (`export_campaign.py`) — covered by the
 integration tier, asserted here only as "no export affordance exists"
