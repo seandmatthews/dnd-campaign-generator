@@ -458,9 +458,12 @@ def generate_entries(campaign_dir, focus="", log=None):
             + " | ".join(f"{f['rule']}: {f['note']}"[:200]
                          for f in findings[:3]))
 
-    # ids continue the timeline sequence; source stays "authored" — the DM's
-    # approval (M4) is what makes generated lore canon. new_names ride along
-    # so the approver can stub their pages (vault stage 4).
+    # ids continue the timeline sequence — advisory only: a week accepted
+    # before approval can take those numbers, and approve renumbers the
+    # collisions to the next free t-number (timeline.append, ticket 37).
+    # source stays "authored" — the DM's approval (M4) is what makes
+    # generated lore canon. new_names ride along so the approver can stub
+    # their pages (vault stage 4).
     next_id = _next_entry_id(timeline_text)
     entries = [{"id": f"t{next_id + i:04d}", "when": e["when"],
                 "title": e["title"], "text": e["text"],

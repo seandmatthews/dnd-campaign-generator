@@ -24,9 +24,11 @@ class TimelineBadFile(Exception):
 
 
 class TimelineConflict(Exception):
-    """The entry is already in the timeline (id collision or title+text
-    identity). Routes map this to a 409: re-approving after a mid-crash
-    must not silently duplicate."""
+    """The entry is already in the timeline (exact title+text identity).
+    Routes map this to a 409: re-approving after a mid-crash must not
+    silently duplicate. An id COLLISION alone no longer refuses (ticket
+    37): stage-time ids are advisory, so a colliding entry is renumbered
+    to the next free t-number instead."""
 
 
 def timeline_path(campaign_dir: Path) -> Path:
@@ -61,21 +63,21 @@ def existing_tnums(entries: list) -> set:
 
 
 def append(doc, entries: list, chosen: list):
-    """The new timeline document with `chosen` appended, keeping ^t\\d+$ ids
-    and assigning the next free t-number to provisional ones. A batch whose
-    title+text is already in the timeline is refused (TimelineConflict) —
-    that is the crash-between-writes recovery path: the append landed, the
-    pending rewrite did not, and re-approving would silently duplicate.
+    """The new timeline document with `chosen` appended, keeping ^t\\d+$ ids.
+    An entry whose own t-number is free keeps it; a missing OR colliding id
+    gets the next free t-number — stage-time ids are advisory (loregen mints
+    them against the timeline it read, but a week accepted in between can
+    take those numbers first, ticket 37). A batch whose title+text is
+    already in the timeline is refused (TimelineConflict) — that is the
+    crash-between-writes recovery path: the append landed, the pending
+    rewrite did not, and re-approving would silently duplicate.
     Returns the doc; nothing is written here."""
     existing = existing_tnums(entries)
     seen = {(str(e.get("title") or ""), str(e.get("text") or ""))
             for e in entries if isinstance(e, dict)}
     for entry in chosen:
         eid = str(entry.get("id") or "")
-        if eid and T_ID_RE.match(eid):
-            if int(eid[1:]) in existing:
-                raise TimelineConflict(
-                    f"id {eid} already exists in lore/timeline.yaml")
+        if eid and T_ID_RE.match(eid) and int(eid[1:]) not in existing:
             existing.add(int(eid[1:]))  # also guards duplicates within the batch
             continue  # keep the entry's own t-id
         identity = (str(entry.get("title") or ""), str(entry.get("text") or ""))

@@ -144,28 +144,99 @@ def test_approve_assigns_next_free_tids_and_deletes_empty_pending(
     assert entries[3]["title"] == "Second"
 
 
-def test_approve_keeps_t_ids_and_refuses_duplicates(client, tmp_spine_root):
+def test_approve_keeps_t_ids_and_renumbers_collisions(client, tmp_spine_root):
+    """Ticket 37: stage-time ids are advisory. An entry whose own t-number
+    is free keeps it; a collision with canon (a week accepted in between)
+    renumbers to the next free t-number instead of dead-ending the
+    approval."""
     path = _write_pending(tmp_spine_root, "lore/pending-entries-1.yaml",
                           LORE_PENDING)
-    dup = dict(LORE_PENDING)
-    dup["entries"] = [dict(LORE_PENDING["entries"][0], id="t0002")]
-    path.write_text(yaml.safe_dump(dup, sort_keys=False), encoding="utf-8")
-    r = client.post("/api/campaign/testvale/review/approve",
-                    json={"file": "lore/pending-entries-1.yaml", "all": True})
-    assert r.status_code == 409 and "t0002" in r.json()["error"]
-    assert path.exists()  # refused: the pending file is untouched
-
-    dup["entries"] = [dict(LORE_PENDING["entries"][0], id="t0005")]
-    path.write_text(yaml.safe_dump(dup, sort_keys=False), encoding="utf-8")
+    coll = dict(LORE_PENDING)
+    coll["entries"] = [dict(LORE_PENDING["entries"][0], id="t0002")]
+    path.write_text(yaml.safe_dump(coll, sort_keys=False), encoding="utf-8")
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "lore/pending-entries-1.yaml", "all": True})
     assert r.status_code == 200 and _core(r) == {
         "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
         "stubs": 0}
     entries = _timeline_entries(tmp_spine_root)
-    assert [e["id"] for e in entries] == ["t0001", "t0002", "t0005"]
+    assert [e["id"] for e in entries] == ["t0001", "t0002", "t0003"]
+    assert entries[2]["title"] == "Vale Lore Pending"
     assert entries[2]["source"] == "authored"  # source kept
     assert not path.exists()
+
+    free = dict(LORE_PENDING)
+    free["entries"] = [dict(LORE_PENDING["entries"][0], id="t0005")]
+    path.write_text(yaml.safe_dump(free, sort_keys=False), encoding="utf-8")
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-entries-1.yaml", "all": True})
+    assert r.status_code == 200 and _core(r) == {
+        "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
+        "stubs": 0}
+    entries = _timeline_entries(tmp_spine_root)
+    assert [e["id"] for e in entries] == ["t0001", "t0002", "t0003", "t0005"]
+    assert entries[3]["source"] == "authored"
+    assert not path.exists()
+
+
+def test_approve_renumbers_stage_ids_after_week_accept(client, tmp_spine_root):
+    """The ticket-37 repro, in the order the app's own Help recommends:
+    loregen stages t0001-t000N against an empty timeline, a week accept
+    publishes t0001-t0002 first, and approving the pending entries used to
+    refuse every one ('id t0001 already exists in lore/timeline.yaml').
+    The paid-for entries must land, renumbered to the next free t-numbers."""
+    d = tmp_spine_root / "testvale"
+    # stage time: the timeline was empty when loregen minted these ids
+    (d / "lore" / "timeline.yaml").unlink()
+    staged = {"entries": [
+        {"id": f"t{i:04d}", "when": "before week 1", "title": f"Backstory {i}",
+         "text": f"Authored backstory entry {i}.", "source": "authored"}
+        for i in range(1, 4)],
+        "created": "2026-10-04T00:00:00+00:00", "focus": "the founding"}
+    path = _write_pending(tmp_spine_root, "lore/pending-entries-9.yaml", staged)
+    # the week accept lands first: t0001-t0002 with different content
+    (d / "lore" / "timeline.yaml").write_text(yaml.safe_dump(
+        {"entries": [
+            {"id": "t0001", "when": "week 1", "title": "Week One Event",
+             "text": "The week's chronicle event.", "source": "sim:week-1"},
+            {"id": "t0002", "when": "week 1", "title": "Week One Second",
+             "text": "Another chronicle event.", "source": "sim:week-1"},
+        ]}, sort_keys=False), encoding="utf-8")
+
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-entries-9.yaml", "all": True})
+    assert r.status_code == 200, r.json()
+    assert _core(r) == {"approved": 3, "entries": 3, "pages": 0,
+                        "pages_skipped": 0, "stubs": 0}
+    entries = _timeline_entries(tmp_spine_root)
+    assert [e["id"] for e in entries] == [
+        "t0001", "t0002", "t0003", "t0004", "t0005"]
+    assert [e["title"] for e in entries[2:]] == [
+        "Backstory 1", "Backstory 2", "Backstory 3"]
+    assert all(e["source"] == "authored" for e in entries[2:])
+    assert not path.exists()
+
+
+def test_approve_still_refuses_exact_reapprove_after_crash(
+        client, tmp_spine_root):
+    """The crash-between-writes guard survives ticket 37: an approval that
+    landed in the timeline but never rewrote the pending file re-approves
+    as the SAME title+text — refused (409), pending file untouched, so the
+    DM deletes the pending copy instead of silently duplicating."""
+    path = _write_pending(tmp_spine_root, "lore/pending-entries-1.yaml", {
+        "entries": [
+            {"id": "t0002", "when": "year 212", "title": "The Toll Bridge",
+             "text": "Provis levied a toll on the only bridge across the "
+                     "Vane.",
+             "source": "authored"}],
+        "created": "2026-09-22T00:00:00+00:00", "focus": "",
+    })
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-entries-1.yaml", "all": True})
+    assert r.status_code == 409
+    assert "crashed midway" in r.json()["error"]
+    assert path.exists(), "refused: the pending file is untouched"
+    assert len(_timeline_entries(tmp_spine_root)) == 2
 
 
 def test_partial_approve_keeps_the_rest_approvable(client, tmp_spine_root):

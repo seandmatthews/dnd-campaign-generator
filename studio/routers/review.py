@@ -10,10 +10,12 @@ checks blow it, remaining findings are skipped and noted — the queue must
 stay fast, findings are advisory, never a gate.
 
 approve/delete move entries through the pending-file mechanics: approved
-entries append to lore/timeline.yaml (source kept, ^t\\d+$ ids preserved,
-provisional ids get the next free t-number), the pending file is rewritten
-without them and deleted when empty. Nothing lands unreviewed (guardrail 3):
-these two routes are the ONLY writers from pending into the spine.
+entries append to lore/timeline.yaml (source kept, ^t\\d+$ ids preserved
+when their t-number is free — a colliding or provisional id gets the
+next free t-number, stage-time ids are advisory [ticket 37]), the pending
+file is rewritten without them and deleted when empty. Nothing lands
+unreviewed (guardrail 3): these two routes are the ONLY writers from
+pending into the spine.
 
 Approval is transactional (studio/publication.py): the timeline write, the
 pending rewrite, page drafts and stub pages are ONE publication — staged
