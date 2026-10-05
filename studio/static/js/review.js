@@ -310,6 +310,24 @@
       root.appendChild(S.el('<p class="panel-note review-note">' + S.esc(String(n)) + '</p>'));
     });
 
+    // the approval-order note (ticket 46): both draft kinds pin the
+    // lore/entities membership fingerprint, and only approving PAGE drafts
+    // changes it (it creates pages) — which stales every pending entry
+    // draft and costs the paid generation. Entry drafts write the timeline
+    // (a feed, not a pin), so they never stale the page drafts behind
+    // them. The safe order is deterministic; say it where it matters.
+    const hasEntries = order.some((g) => g.file.includes('pending-entries'));
+    const hasPages = order.some((g) => g.file.includes('pending-pages'));
+    if (hasEntries && hasPages) {
+      root.appendChild(S.el(
+        '<p class="panel-note review-order-note"><strong>Approve the entry ' +
+          'drafts first.</strong> Approving page drafts creates vault pages, ' +
+          'and that stales every pending entry draft — the guard refuses so ' +
+          'prose from superseded canon never lands. Entry drafts only write ' +
+          'the timeline, so they never stale the page drafts.</p>'
+      ));
+    }
+
     order.forEach((g) => root.appendChild(groupPanel(g, meta[g.file] || {}, obsidian)));
   };
 }());

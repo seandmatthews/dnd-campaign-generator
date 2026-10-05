@@ -701,6 +701,28 @@
     return el('<div class="empty-state">' + esc(msg) + '</div>');
   }
 
+  /* The durable failed-job surface for a form section (ticket 41 for maps,
+     extended to every panel that runs a job kind). Rendered from the
+     campaign-jobs snapshot's last_finished record (newest finished job of
+     the kind): status error shows what failed and its error tail, any
+     later finished run of that kind replaces it — a section error dies
+     with the page no longer, and a failure the page never saw (server
+     restart, another tab, a timeout while the strip was up) still shows. */
+  function renderSectionError(slot, job, what) {
+    if (!slot) return;
+    slot.innerHTML = '';
+    if (!job || job.status !== 'error') return;
+    const detail = String(job.error || '').trim();
+    slot.appendChild(el(
+      '<div class="form-error section-error">' +
+        '<strong>The last ' + esc(what) + ' failed.</strong> ' +
+        (detail ? esc(detail) + ' ' : '') +
+        'Fix what it names (a retry hint is often in the message) and run ' +
+        'the form again — a finished run clears this note.' +
+      '</div>'
+    ));
+  }
+
   function noCampaign() {
     return el(
       '<div class="empty-state">' +
@@ -1059,6 +1081,7 @@
   Studio.fileUrl = fileUrl;
   Studio.errorPanel = errorPanel;
   Studio.emptyState = emptyState;
+  Studio.renderSectionError = renderSectionError;
   Studio.noCampaign = noCampaign;
   Studio.helpModal = helpModal;
   Studio.loading = loading;

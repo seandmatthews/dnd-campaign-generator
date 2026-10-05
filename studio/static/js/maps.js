@@ -246,26 +246,9 @@
   // The Maps tab's durable failed-job surface (ticket 41): a failed map
   // job used to die with the page — a ~4 s toast and nothing else — so a
   // reload showed an empty grid with no hint anything had gone wrong.
-  // The section error renders from the campaign-jobs snapshot's
-  // last_finished record (newest finished job of the kind): status error
-  // shows what failed and its error tail, any later finished run of that
-  // kind replaces it. Advisory: the jobs read failing never blocks the
-  // grids.
-  function renderSectionError(slot, job, what) {
-    if (!slot) return;
-    slot.innerHTML = '';
-    if (!job || job.status !== 'error') return;
-    const detail = String(job.error || '').trim();
-    slot.appendChild(S.el(
-      '<div class="form-error section-error">' +
-        '<strong>The last ' + S.esc(what) + ' failed.</strong> ' +
-        (detail ? S.esc(detail) + ' ' : '') +
-        'Fix what it names (a retry hint is often in the message) and run ' +
-        'the form again — a finished run clears this note.' +
-      '</div>'
-    ));
-  }
-
+  // The renderer lives in core.js now (S.renderSectionError) so the World
+  // tab's lore panels share it; the jobs read below stays advisory: it
+  // failing never blocks the grids.
   async function refreshCities() {
     if (!grid) return;
     const myGrid = grid, mySites = sitesGrid;
@@ -302,9 +285,9 @@
       lastFinished = (await S.api(S.campUrl('/jobs'))).last_finished;
     } catch (_) { /* advisory — the grids above still render */ }
     if (myGrid !== grid || mySites !== sitesGrid) return;
-    renderSectionError(cityErrSlot,
+    S.renderSectionError(cityErrSlot,
       lastFinished && lastFinished['map-city'], 'city map');
-    renderSectionError(siteErrSlot,
+    S.renderSectionError(siteErrSlot,
       lastFinished && lastFinished['map-site'], 'battlemap scene');
   }
 

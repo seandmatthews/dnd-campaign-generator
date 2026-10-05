@@ -205,6 +205,51 @@ async function main() {
     assert.strictEqual(posts.length, 1, 'exactly one registration POST');
     return null;
   });
+
+  // ---- the durable failed-run notes (ticket 46): a lore job that failed
+  // server-side must persist on its panel, from the /jobs snapshot.
+
+  const JOBS_ERROR = { last_finished: {
+    'lore-entries': { status: 'error',
+      error: 'TimeoutError: The read operation timed out' },
+    'lore-missing-pages': { status: 'error',
+      error: 'gen failed (rc=1): no JSON object in the model reply' },
+  } };
+
+  await ok('a failed lore job persists as a section error on its panel', async () => {
+    resetFetch([{ method: 'GET', match: (u) => /\/jobs$/.test(u),
+      reply: () => JOBS_ERROR }]);
+    const sec = await renderWorld();
+    const cards = sec.querySelectorAll('.panel-card');
+    const backstory = cards.find((c) =>
+      /Generate backstory/.test(c.querySelector('.panel-title')?.textContent || ''));
+    const missing = cards.find((c) =>
+      /Write the missing pages/.test(c.querySelector('.panel-title')?.textContent || ''));
+    const noteA = backstory.querySelector('.section-error-slot .section-error');
+    assert.ok(noteA, 'the backstory panel shows the persistent note');
+    assert.ok(noteA.textContent.indexOf('backstory generation failed') !== -1,
+      'the note names what failed');
+    assert.ok(noteA.textContent.indexOf('TimeoutError') !== -1,
+      'the note carries the error tail');
+    const noteB = missing.querySelector('.section-error-slot .section-error');
+    assert.ok(noteB, 'the missing-pages panel shows its own note');
+    assert.ok(noteB.textContent.indexOf('missing-pages generation failed') !== -1);
+    return null;
+  });
+
+  await ok('a finished (non-error) last run shows no section error', async () => {
+    resetFetch([{ method: 'GET', match: (u) => /\/jobs$/.test(u),
+      reply: () => ({ last_finished: {
+        'lore-entries': { status: 'done' } } }) }]);
+    const sec = await renderWorld();
+    const slot = sec.querySelectorAll('.section-error-slot')
+      .find((s) => s.closest('.panel-card') &&
+        /Generate backstory/.test(s.closest('.panel-card')
+          .querySelector('.panel-title')?.textContent || ''));
+    assert.ok(slot && !slot.querySelector('.section-error'),
+      'a done run clears the note');
+    return null;
+  });
 }
 
 main().then(() => {

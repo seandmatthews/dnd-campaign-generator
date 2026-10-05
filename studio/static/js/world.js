@@ -323,6 +323,20 @@
 
   /* ----- generate backstory ----- */
 
+  /* The durable failed-run note for one lore panel (ticket 46): render
+     from the campaign-jobs snapshot's last_finished record of `kind` —
+     an error the page never saw (provider timeout, server restart, the
+     failure landing while another tab was up) still shows. Advisory: the
+     jobs read failing never blocks the panel. */
+  function wireSectionError(slot, kind, what) {
+    if (!slot) return;
+    S.api(S.campUrl('/jobs')).then((snap) => {
+      if (!slot.isConnected) return;
+      S.renderSectionError(slot, snap && snap.last_finished &&
+        snap.last_finished[kind], what);
+    }).catch(() => {});
+  }
+
   function backstoryCard(host) {
     const card = S.el(
       '<section class="panel panel-card">' +
@@ -338,6 +352,7 @@
             '<input type="checkbox" class="input entries-auto-accept">' +
             '<span><strong>Auto-accept</strong> — approve the staged entries into the timeline the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
           '</label>' +
+          '<div class="section-error-slot"></div>' +
           '<pre class="log-tail hidden"></pre>' +
           '<div class="form-error"></div>' +
           '<div class="gen-result hidden"></div>' +
@@ -351,6 +366,13 @@
     const errBox = card.querySelector('.form-error');
     const resultBox = card.querySelector('.gen-result');
     const autoChk = card.querySelector('.entries-auto-accept');
+    const errSlot = card.querySelector('.section-error-slot');
+
+    // the durable failed-run note (ticket 41's maps pattern, ticket 46):
+    // a provider timeout or any server-side failure used to die with the
+    // page — the strip vanished and Review said nothing awaited. The
+    // campaign-jobs snapshot's last_finished record remembers it.
+    wireSectionError(errSlot, 'lore-entries', 'backstory generation');
 
     // show a remembered failure from before a tab switch (see above)
     if (backstoryFailure && backstoryFailure.campaign === S.state.campaign) {
@@ -379,6 +401,7 @@
         failLabel: 'Generation failed'
       }).then((result) => {
         backstoryFailure = null;
+        errSlot.innerHTML = '';   // this finished run IS the newest — the note clears now
         const r = result || {};
         const count = (r.entries != null) ? r.entries : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
@@ -414,6 +437,10 @@
         resultBox.classList.remove('hidden');
       }).catch((err) => {
         backstoryFailure = { campaign: S.state.campaign, error: err };
+        // this failed run IS the newest of its kind — persist the note now,
+        // so it survives tab switches and reloads (the snapshot has it too)
+        S.renderSectionError(errSlot, { status: 'error', error: err.error ||
+          String(err) }, 'backstory generation');
       });
     });
     host.appendChild(card);
@@ -552,6 +579,7 @@
             '<input type="checkbox" class="input pages-auto-accept">' +
             '<span><strong>Auto-accept</strong> — approve the staged page drafts the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
           '</label>' +
+          '<div class="section-error-slot"></div>' +
           '<pre class="log-tail hidden"></pre>' +
           '<div class="form-error"></div>' +
           '<div class="gen-result hidden"></div>' +
@@ -566,6 +594,10 @@
     const resultBox = card.querySelector('.gen-result');
     const autoChk = card.querySelector('.pages-auto-accept');
     let targets = [];
+
+    // the durable failed-run note, same as the backstory card (ticket 46)
+    wireSectionError(card.querySelector('.section-error-slot'),
+      'lore-missing-pages', 'missing-pages generation');
 
     S.api(S.campUrl('/lore/pages/missing')).then((resp) => {
       targets = (resp && Array.isArray(resp.targets)) ? resp.targets : [];
@@ -612,6 +644,7 @@
         btn: btn, errBox: errBox, log: log,
         failLabel: 'Generation failed'
       }).then((result) => {
+        card.querySelector('.section-error-slot').innerHTML = ''; // newest run finished clean
         const r = result || {};
         const count = (r.pages != null) ? r.pages : '?';
         const findings = Array.isArray(r.findings) ? r.findings.length : 0;
@@ -647,7 +680,11 @@
         go.addEventListener('click', () => S.showTab('review'));
         resultBox.appendChild(go);
         resultBox.classList.remove('hidden');
-      }).catch(() => {});
+      }).catch((err) => {
+        S.renderSectionError(card.querySelector('.section-error-slot'),
+          { status: 'error', error: err.error || String(err) },
+          'missing-pages generation');
+      });
     });
     host.appendChild(card);
   }
