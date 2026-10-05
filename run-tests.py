@@ -87,11 +87,27 @@ if _node:
     FAST_SUITES.append(
         ("studio-js-campaign-select-order",
          [_node, "studio/tests/js/test_campaign_select_order.cjs"]))
+    # Browser E2E (ticket 36): the first-DM pass against a real server +
+    # stub LLM provider, via the local @playwright/test install. Skipped
+    # with a note until `npm install` has run in studio/tests/e2e (and
+    # `npx playwright install chromium` fetched the browser).
+    _E2E_DIR = ROOT / "studio" / "tests" / "e2e"
+    _E2E_CLI = _E2E_DIR / "node_modules" / "@playwright" / "test" / "cli.js"
+    if _E2E_CLI.is_file():
+        FAST_SUITES.append(
+            ("studio-e2e-first-dm",
+             [_node, str(_E2E_CLI.relative_to(ROOT)), "test",
+              "--config=studio/tests/e2e/playwright.config.ts"]))
+    else:
+        print("note: studio-e2e-first-dm skipped — studio/tests/e2e has "
+              "no node_modules (run: cd studio/tests/e2e && npm install "
+              "&& npx playwright install chromium)")
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
           "handoff/sessions/staging/durations/world/sessions-tab/banners/"
           "toast/design/design-restore/maps-seed/prep/api-timeout/"
-          "log-clean/copy-claims/campaign-select-order) suites")
+          "log-clean/copy-claims/campaign-select-order) and the "
+          "studio-e2e-first-dm suites")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").

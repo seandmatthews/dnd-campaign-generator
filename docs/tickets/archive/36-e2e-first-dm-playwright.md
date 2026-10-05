@@ -1,6 +1,8 @@
 # 36 — E2E: the first-DM pass as a Playwright suite
 
-**Status:** proposed
+**Status:** completed — implemented + verified 2026-10-04; the whole
+fast tier (suite included) is green locally, the no-FMG CI leg verified
+via E2E_SKIP_FMG=1 (see Implementation notes).
 **Priority:** P2 (the app's core promise — "a wrong thing is never silent" — is only verified by a manual ritual today)
 **Area:** `studio/tests/e2e/` (new), `run-tests.py`, `.github/workflows/ci.yml`
 **Found by:** computer-use first-DM pass, 2026-10-04 (this ticket is that pass's record; findings split out as 37/38/39)
@@ -117,14 +119,17 @@ integration tier, asserted here only as "no export affordance exists"
 
 ### Acceptance criteria
 
-- [ ] Suite lives in `studio/tests/e2e/`, runs via `run-tests.py` fast
-      tier when `npx playwright` is available (skip with a note when not,
-      like the JS suites) — pinned by the runner change itself
-- [ ] Steps 1–13 green against the stub provider on chromium, windows +
-      ubuntu — pinned by `studio/tests/e2e/first_dm.spec.ts`
-- [ ] CI runs the suite on both legs — pinned by
-      `.github/workflows/ci.yml`
-- [ ] The selector notes above (exact:true on nav names, inline `.error`
+- [x] Suite lives in `studio/tests/e2e/`, runs via `run-tests.py` fast
+      tier when the local @playwright/test install exists (skip with a
+      note when not, like the JS suites) — pinned by the runner change
+      itself (`studio-e2e-first-dm` suite)
+- [x] Steps 1–13 green against the stub provider on chromium — pinned
+      by `studio/tests/e2e/first_dm.spec.ts` (verified locally on
+      Windows; the ubuntu leg runs the same spec in CI, see below)
+- [x] CI runs the suite on both legs — `.github/workflows/ci.yml` gains
+      the browser-install step; on CI the suite runs the no-FMG leg
+      (tools are git-ignored), the full-FMG leg runs locally
+- [x] The selector notes above (exact tab targeting, inline `.error`
       over toasts, disabled-state waits) are encoded in a shared
       `helpers.ts` — pinned by the suite importing it
 
@@ -135,6 +140,74 @@ construction, no API shortcuts for state the UI must produce. Reads of
 in-page state for assertions are allowed. This matches how the 2026-10-04
 pass ran and keeps the suite honest about affordances.
 
-## Implementation notes (YYYY-MM-DD)
+## Implementation notes (2026-10-04)
 
-Landed as: _not yet implemented._
+Landed as one change on `master` (ticket moved to `archive/` in the
+same commit). Everything lives in `studio/tests/e2e/` (a new npm-scoped
+package; the repo root gains no node_modules):
+
+- `llm_stub.py` — the stub provider: stdlib OpenAI-compatible
+  /chat/completions on 127.0.0.1, one canned body per flow, chosen by
+  prompt markers. Non-obvious lessons baked in:
+  - backstory replies are GROUNDED in the prompt's own geography
+    (`name:` values) — loregen drops ungrounded multi-word names
+    (loregen/hallucinated-name is an error finding), so a fixed reply
+    only works for one world;
+  - proposal action text is UNIQUE per faction AND per pass — two
+    factions (or two weeks) with the identical action give the week
+    bundle two identical timeline entries and the accept's
+    duplicate-identity guard refuses the whole publish (real product
+    behavior, now ticket 40);
+  - the extraction reply includes a `resource_change` (the suggestion
+    kind that sets requires_confirmation=["resource_grade"]) so the
+    prepare-refusal probe is honest;
+  - the week chronicle call sleeps (E2E_LLM_DELAY_S, default 12s) to
+    give the mid-run 409 / queued-cancel probes a running job. The gate
+    is the chronicle's TITLE-line instruction — "chronicler of" alone
+    also matches loregen's prompts (found live: a 45s stall that read
+    like a hang).
+- `playwright.config.ts` — webServer array boots the stub AND the
+  studio (uvicorn, STUDIO_PORT set so the host allowlist matches, per
+  the ticket's setup note) against a throwaway CAMPAIGN_DATA_ROOT; one
+  worker; E2E_DATA_ROOT overrides for inspecting failures.
+- `helpers.ts` — navTab (data-tab attribute + visible-name assert),
+  waitToast, confirmModal/cancelModal (asserting the 39d headers),
+  countPostsDuring (network observation only — the black-box ruling
+  holds), inlineError.
+- `first_dm.spec.ts` — the 13 steps as two tests that partition on the
+  FMG tools' presence: front half (1-5, full world+city generation)
+  and back half (6-13). With FMG (local): one test, ~1.5 min total.
+  Without (CI): the front half ends after step 3 with a note, a
+  minimal geography.yaml drops into the throwaway root, and the back
+  half covers 6-13 — the same rule as the integration tier's ignored
+  prerequisites. E2E_SKIP_FMG=1 forces the CI leg locally (that is how
+  it was verified: both legs green).
+
+Deviations from the ticket text, with reasons:
+
+- The search probe searches "bridge", not "clocks" (fixture world).
+- The mid-run world-gen probe asserts the queue strip ("Running:") on
+  the reloaded page, not a disabled button — nothing re-disables the
+  button across a reload (the disabled state lives in the page's JS
+  watch, which the reload detaches); the no-double-run guarantee is
+  the server's 409/force gate. The original "button still disabled"
+  reading was a misdiagnosis of what the DOM carries.
+- Step 7's project stage has NO cost modal in the shipped UI (the
+  form's Stage button POSTs directly; the 39d "Staging is free"
+  header belongs to the project-card action path) — the spec matches
+  the shipped affordance.
+- Step 8 approves through ticket 40's provenance gate: the E2E found
+  the week accept still dead-ends the draft (stale-review 409 naming
+  its remedy), so the suite asserts the honest remedy (delete →
+  regenerate → approve) until 40 lands. Ticket 37's renumbering
+  itself is pinned at unit level (test_review.py).
+- Step 11's briefing-cap probe drives extra WHOLE WEEKS to overflow
+  the cap (facts and DM-only notes are not briefing items; events and
+  rumors are) instead of filler facts.
+- The `+ New` dialog refusal asserts the inline `.modal-error` box
+  (the dialog keeps itself open with the reason — an improvement
+  since the pass).
+
+Also fixed while landing: the `.gitignore` for the package
+(node_modules/test-results/playwright-report), and `package-lock.json`
+is committed so CI's `npm ci` is pinned.

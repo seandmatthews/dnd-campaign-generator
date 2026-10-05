@@ -43,6 +43,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r studio/requirements.txt pytest==9.1.1
 
+      - name: Install browser-E2E dependencies (ticket 36)
+        # The first-DM Playwright suite boots its own studio + stub LLM
+        # provider against a throwaway CAMPAIGN_DATA_ROOT; it needs the
+        # pinned @playwright/test tree and the chromium browser. The FMG
+        # tools are git-ignored, so on CI the suite runs the no-FMG leg
+        # (steps 1-3 + fixture-backed 6-13) — the full-FMG leg runs
+        # locally where the tools exist.
+        run: |
+          cd studio/tests/e2e
+          npm ci --no-audit --no-fund
+          npx playwright install chromium
+
       - name: Lint (runtime-crash class: syntax errors, undefined names)
         run: |
           pip install ruff

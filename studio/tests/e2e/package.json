@@ -1,0 +1,11 @@
+{
+  "name": "studio-e2e",
+  "private": true,
+  "description": "Playwright first-DM E2E for Campaign Studio (ticket 36). Node deps live here so the main repo never gains a node_modules.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}
