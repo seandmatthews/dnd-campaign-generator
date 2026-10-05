@@ -383,6 +383,28 @@ def queue_snapshot(campaign: str) -> dict:
     return out
 
 
+def last_finished(campaign: str, kinds: tuple | None = None) -> dict:
+    """The newest finished job (done/error/cancelled) per kind, one
+    campaign: {kind: public record}. Where the queue snapshot answers
+    "what is running", this answers "how did the last one go" — the Maps
+    tab renders a failed map job as a persistent section error that
+    survives a reload and clears when a later run of that kind finishes
+    (ticket 41). Same in-memory lifetime as every job record."""
+    with _LOCK:
+        newest: dict = {}
+        for job in _JOBS.values():
+            if job.get("campaign") != campaign \
+                    or job["status"] not in FINAL_STATES:
+                continue
+            if kinds is not None and job["kind"] not in kinds:
+                continue
+            cur = newest.get(job["kind"])
+            # insertion order breaks `started` ties (later registration wins)
+            if cur is None or job["started"] >= cur["started"]:
+                newest[job["kind"]] = job
+        return {kind: _public(job) for kind, job in newest.items()}
+
+
 def wait_all(timeout: float = 30.0) -> bool:
     """Block until no submitted job is queued or running. Test quiescence:
     force-releasing a lock a live job thread still holds breaks mutual

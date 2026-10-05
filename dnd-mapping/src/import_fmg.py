@@ -395,6 +395,11 @@ def summarize(info, pack, settings=None):
     for b in settlements:
         entry = {
             "name": b["name"],
+            # the dump's burg index (`i`) — gen-city resolves `--burg` by
+            # name OR index, and generated worlds can hold two burgs with
+            # the same name in different nations, so the Maps tab's picker
+            # submits this, not the bare name (ticket 41)
+            "burg_id": b.get("i"),
             "nation": state_by_id.get(b.get("state"), {}).get("name"),
             "population_thousands": round(b.get("population", 0), 1),
             "capital": bool(b.get("capital")),

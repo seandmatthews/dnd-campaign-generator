@@ -79,15 +79,26 @@
     const placeIn = wrap.querySelector('.burg-place');
     const sorted = burgs.slice().sort((a, b) =>
       String(a.name || '').localeCompare(String(b.name || '')));
+    // the option VALUE is the burg's dump id when geography carries one: a
+    // generated world can hold two same-named burgs in different nations
+    // (seed 6161: two Stormbergs), and a name submission is ambiguous
+    // there — gen-city resolves by id exactly (ticket 41). The human
+    // label stays the option TEXT. Id-less burgs (hand-written fixtures)
+    // keep the name as the value.
+    const nameOf = new Map();
     sorted.forEach((b) => {
       const bnation = b.nation || b.country || 'unknown';
       const bp = (b.population != null && b.population !== '') ? b.population
         : (b.population_thousands != null ? b.population_thousands * 1000 : null);
       const bpop = (bp != null && bp !== '') ? S.fmtInt(bp) : '?';
       const bport = b.port ? ' [port]' : '';
+      const name = b.name || '';
+      const value = (b.burg_id != null && b.burg_id !== '')
+        ? String(b.burg_id) : name;
+      nameOf.set(value, name);
       const opt = S.el(
-        '<option value="' + S.esc(b.name || '') + '">' +
-          S.esc(b.name || '(unnamed)') + ' — ' + S.esc(bnation) +
+        '<option value="' + S.esc(value) + '">' +
+          S.esc(name || '(unnamed)') + ' — ' + S.esc(bnation) +
           ', pop ' + S.esc(bpop) + S.esc(bport) +
         '</option>'
       );
@@ -96,7 +107,7 @@
     // the place follows the burg until the DM types their own
     let placeDirty = false;
     const syncPlace = () => {
-      if (!placeDirty) placeIn.value = select.value || '';
+      if (!placeDirty) placeIn.value = nameOf.get(select.value) || '';
     };
     select.addEventListener('change', syncPlace);
     placeIn.addEventListener('input', () => { placeDirty = true; });
@@ -116,9 +127,10 @@
         path: S.campUrl('/maps/cities'),
         body: place ? { burg: burg, place: place } : { burg: burg },
         btn: btn, errBox: errBox, log: log,
-        doneMsg: (r) => 'City map ready: ' + ((r && r.slug) ? r.slug : burg),
+        doneMsg: (r) => 'City map ready: ' +
+          ((r && r.slug) ? r.slug : (nameOf.get(burg) || burg)),
         failLabel: 'City mapping failed'
-      }).then(() => refreshCities()).catch(() => {});
+      }).then(() => refreshCities()).catch(() => refreshCities());
     });
     return wrap;
   }
@@ -205,7 +217,7 @@
       }).then((result) => {
         showSiteResult(result);
         return refreshCities();
-      }).catch(() => {});
+      }).catch(() => refreshCities());
     });
     return wrap;
   }
@@ -214,6 +226,8 @@
 
   let grid = null;
   let sitesGrid = null;
+  let cityErrSlot = null;
+  let siteErrSlot = null;
 
   function renderSites(data) {
     if (!sitesGrid) return;
@@ -227,6 +241,29 @@
       const label = s.label || s.name || s.slug || '(scene)';
       sitesGrid.appendChild(artifactCard(label, siteImgUrl(s)));
     });
+  }
+
+  // The Maps tab's durable failed-job surface (ticket 41): a failed map
+  // job used to die with the page — a ~4 s toast and nothing else — so a
+  // reload showed an empty grid with no hint anything had gone wrong.
+  // The section error renders from the campaign-jobs snapshot's
+  // last_finished record (newest finished job of the kind): status error
+  // shows what failed and its error tail, any later finished run of that
+  // kind replaces it. Advisory: the jobs read failing never blocks the
+  // grids.
+  function renderSectionError(slot, job, what) {
+    if (!slot) return;
+    slot.innerHTML = '';
+    if (!job || job.status !== 'error') return;
+    const detail = String(job.error || '').trim();
+    slot.appendChild(S.el(
+      '<div class="form-error section-error">' +
+        '<strong>The last ' + S.esc(what) + ' failed.</strong> ' +
+        (detail ? S.esc(detail) + ' ' : '') +
+        'Fix what it names (a retry hint is often in the message) and run ' +
+        'the form again — a finished run clears this note.' +
+      '</div>'
+    ));
   }
 
   async function refreshCities() {
@@ -260,6 +297,15 @@
       myGrid.appendChild(artifactCard(label, citySvgUrl(c)));
     });
     renderSites(data);
+    let lastFinished = null;
+    try {
+      lastFinished = (await S.api(S.campUrl('/jobs'))).last_finished;
+    } catch (_) { /* advisory — the grids above still render */ }
+    if (myGrid !== grid || mySites !== sitesGrid) return;
+    renderSectionError(cityErrSlot,
+      lastFinished && lastFinished['map-city'], 'city map');
+    renderSectionError(siteErrSlot,
+      lastFinished && lastFinished['map-site'], 'battlemap scene');
   }
 
   /* ----- generate a world (seed -> headless FMG -> import -> workspace) ----- */
@@ -572,10 +618,12 @@
     const citiesPanel = S.el(
       '<section class="panel">' +
         '<h3 class="panel-title">Cities</h3>' +
+        '<div class="section-error-slot"></div>' +
         '<div class="artifact-grid cities-grid"></div>' +
       '</section>'
     );
     grid = citiesPanel.querySelector('.cities-grid');
+    cityErrSlot = citiesPanel.querySelector('.section-error-slot');
     root.appendChild(citiesPanel);
 
     // Battlemap scenes: grid + form (the route may 501 until a later wave).
@@ -583,10 +631,12 @@
       '<section class="panel">' +
         '<h3 class="panel-title">Battlemap scenes</h3>' +
         '<div class="form-slot"></div>' +
+        '<div class="section-error-slot"></div>' +
         '<div class="artifact-grid sites-grid"></div>' +
       '</section>'
     );
     sitesGrid = sitesPanel.querySelector('.sites-grid');
+    siteErrSlot = sitesPanel.querySelector('.section-error-slot');
     sitesPanel.querySelector('.form-slot').appendChild(siteForm());
     root.appendChild(sitesPanel);
 

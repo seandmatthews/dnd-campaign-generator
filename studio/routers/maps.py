@@ -16,9 +16,9 @@ not an option). POST /world-options is the read-only LLM pass that turns a
 premise into suggested form values.
 
 City generation: `node scripts/gen-city.mjs --world <campaign
-world/source.*> --burg "<name>" --out <tmp>` with cwd=dnd-mapping (D3:
-list-form args — the parent path contained `&` until 2026-10-04), then
-copy outputs into the
+world/source.*> --burg "<name|index>" --out <tmp>` with cwd=dnd-mapping
+(D3: list-form args — the parent path contained `&` until 2026-10-04),
+then copy outputs into the
 campaign's maps/cities/<slug>/.
 
 Site generation: the full documented battlemap chain — gen-<kind> → render
@@ -412,7 +412,8 @@ def post_city(name: str, body: CityBody):
     d = require_campaign(name)
     burg = (body.burg or "").strip()
     if not burg:
-        raise HTTPException(status_code=422, detail="burg must be a non-empty name")
+        raise HTTPException(status_code=422,
+                            detail="burg must be a non-empty name or burg id")
     if not spine.slugify(burg):
         raise HTTPException(
             status_code=422,
@@ -425,7 +426,27 @@ def post_city(name: str, body: CityBody):
                    "(Maps tab); a city map is generated from the world dump "
                    "or not at all (fed-or-refused)")
 
-    place = _place_link(body.place) or burg  # cities default to their burg
+    # gen-city resolves --burg by name OR dump index; the Maps tab submits
+    # the index because generated worlds can hold two same-named burgs in
+    # different nations (seed 6161: two Stormbergs — ticket 41). Everything
+    # derived down here (the place default, the companion-note provenance)
+    # speaks NAMES, so resolve an id submission through geography.yaml —
+    # the same import the picker listed, so its ids are the dump's.
+    burg_name = burg
+    if burg.isdigit():
+        settlements = spine.load_geography(name).get("major_settlements") or []
+        names = [s.get("name") for s in settlements
+                 if isinstance(s, dict) and str(s.get("burg_id")) == burg
+                 and s.get("name")]
+        if len(names) != 1:
+            raise HTTPException(
+                status_code=422,
+                detail=f"burg id {burg} does not resolve to exactly one "
+                       "settlement in world/geography.yaml — pick the burg "
+                       "from the Maps-tab list, or pass its name")
+        burg_name = names[0]
+
+    place = _place_link(body.place) or burg_name  # cities default to their burg
     try:
         spine.entity_page_filename(place)  # nameable before the job runs
     except spine.CampaignError as e:
@@ -434,7 +455,8 @@ def post_city(name: str, body: CityBody):
     def job(log):
         out = Path(tempfile.mkdtemp(prefix="studio-city-"))
         try:
-            log(f"generating {burg} from {source.name} via gen-city.mjs")
+            log(f"generating {burg_name} from {source.name} via gen-city.mjs"
+                + (f" (burg id {burg})" if burg_name != burg else ""))
             rc, lines = engines.run_node(
                 engines.DND_MAPPING, "scripts/gen-city.mjs",
                 "--world", str(source), "--burg", burg, "--out", str(out),
@@ -461,7 +483,7 @@ def post_city(name: str, body: CityBody):
                 dest, slug,
                 {"kind": "city map", "place": f"[[{place}]]",
                  "place_id": (body.place_id or "").strip() or None,
-                 "burg": burg},
+                 "burg": burg_name},
                 f"![[{slug}.svg]]\n\nCity map of {place}, generated from the "
                 f"world dump ({source.name}) via settlemaker.")
             log(f"companion note: maps/cities/{slug}/{note.name}")

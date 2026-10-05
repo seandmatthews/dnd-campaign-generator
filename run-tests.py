@@ -73,6 +73,9 @@ if _node:
         ("studio-js-maps-seed", [_node,
                                  "studio/tests/js/test_maps_seed.cjs"]))
     FAST_SUITES.append(
+        ("studio-js-maps-burg-form", [_node,
+                                      "studio/tests/js/test_maps_burg_form.cjs"]))
+    FAST_SUITES.append(
         ("studio-js-prep", [_node,
                             "studio/tests/js/test_prep_feedback.cjs"]))
     FAST_SUITES.append(
@@ -105,7 +108,8 @@ if _node:
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
           "handoff/sessions/staging/durations/world/sessions-tab/banners/"
-          "toast/design/design-restore/maps-seed/prep/api-timeout/"
+          "toast/design/design-restore/maps-seed/maps-burg-form/prep/"
+          "api-timeout/"
           "log-clean/copy-claims/campaign-select-order) and the "
           "studio-e2e-first-dm suites")
 

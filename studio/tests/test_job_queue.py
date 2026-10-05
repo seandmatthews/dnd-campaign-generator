@@ -100,8 +100,11 @@ def test_queue_drains_in_submission_order(tmp_spine_root, client,
         assert wait_for_job(client, rid, timeout=15.0)["status"] == "done"
     assert order == ["1", "2", "3", "4"], "FIFO, no overtaking"
     snap = client.get("/api/campaign/testvale/jobs").json()
-    assert snap == {"campaign": "testvale", "running": None, "queued": [],
-                    "running_estimate": None}
+    assert snap["campaign"] == "testvale"
+    assert snap["running"] is None and snap["queued"] == []
+    assert snap["running_estimate"] is None
+    # the four jobs this test just finished are the newest of their kind
+    assert snap["last_finished"]["lore-entries"]["status"] == "done"
 
 
 def test_queued_job_is_cancellable(tmp_spine_root, client, monkeypatch):
@@ -148,6 +151,52 @@ def test_queued_job_is_cancellable(tmp_spine_root, client, monkeypatch):
     assert ran == ["first"], "the cancelled job never ran"
     assert client.get(f"/api/jobs/{queued_id}").json()["status"] == \
         "cancelled"
+
+
+# -------------------------------------------------------------- ticket 41
+
+def test_last_finished_carries_the_newest_job_per_kind(
+        tmp_spine_root, client):
+    """last_finished answers "how did the last one go": the newest finished
+    job of each kind, failed or not. The Maps tab renders a failed map job
+    as a persistent section error from it; a later finished run of the
+    kind replaces it. Other campaigns' jobs never leak in."""
+    def boom(log):
+        raise RuntimeError(
+            'burg "Stormberg": ambiguous, 2 burgs share the name (ids 2, 266)')
+
+    jobs.submit("map-city", boom, campaign="testvale")
+    assert jobs.wait_all(timeout=10.0)
+    jobs.submit("map-site", lambda log: {"slug": "crypt"},
+                campaign="testvale")
+    assert jobs.wait_all(timeout=10.0)
+    jobs.submit("map-city", lambda log: {"slug": "stormberg"},
+                campaign="testvale")
+    assert jobs.wait_all(timeout=10.0)
+    jobs.submit("map-city", lambda log: None, campaign="othervale")
+    assert jobs.wait_all(timeout=10.0)
+
+    lf = client.get("/api/campaign/testvale/jobs").json()["last_finished"]
+    # kinds other tests finished (lore-entries) may sit here too — the two
+    # this test created must both be present and newest-of-their-kind
+    assert {"map-city", "map-site"} <= set(lf)
+    # the later run of the kind replaced the earlier one
+    assert lf["map-city"]["status"] == "done"
+    assert lf["map-city"]["result"] == {"slug": "stormberg"}
+    assert lf["map-site"]["status"] == "done"
+
+    # the error leg: a failing run is exactly what the section error reads
+    jobs.submit("map-city", boom, campaign="testvale")
+    assert jobs.wait_all(timeout=10.0)
+    lf = client.get("/api/campaign/testvale/jobs").json()["last_finished"]
+    assert lf["map-city"]["status"] == "error"
+    assert "ambiguous" in lf["map-city"]["error"]
+    # other campaigns stay out of testvale's answer
+    other = tmp_spine_root / "othervale"
+    other.mkdir()
+    (other / "campaign.yaml").write_text("name: othervale\n", encoding="utf-8")
+    assert client.get("/api/campaign/othervale/jobs").json()[
+        "last_finished"]["map-city"]["status"] == "done"
 
 
 def test_cancel_running_job_is_refused(tmp_spine_root, client, monkeypatch):

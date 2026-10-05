@@ -39,7 +39,11 @@ change — never let them drift.
   week already carries the DM's spend approval. Queue routes:
   `GET /api/campaign/{name}/jobs` → `{"campaign","running":job|null,
   "queued":[job...],"running_estimate":{median_s,low_s,high_s,samples,
-  roster}|null}` (the strip the UI polls); `POST /api/jobs/{id}/cancel`
+  roster}|null,"last_finished":{kind: job,...}}` — `last_finished` carries
+  the newest finished (done/error/cancelled) job per kind (ticket 41; the
+  Maps tab renders a failed map job as a persistent section error from it,
+  cleared when a later run of that kind finishes; same in-process lifetime
+  as every job record); `POST /api/jobs/{id}/cancel`
   dequeues a QUEUED job → 200 with the record (status `cancelled`); a
   running/finished job is `409 {"error": "job ... is not queued — ..."}`,
   an unknown id 404.
@@ -159,12 +163,18 @@ shapes in this document true.
   to `<slug>.<ext>` (Obsidian resolves embeds by filename), snapshot
   `campaign/<name>: slug site artifact basenames (...)`.
 - `POST /api/campaign/{name}/maps/cities` `{"burg": str, "place"?: str}` → job.
-  `place` defaults to the burg. Takes the campaign lock (**409 busy**, see
+  `burg` is the burg NAME or its geography `burg_id` — the Maps-tab picker
+  submits the id because a generated world can hold two same-named burgs
+  in different nations and a name submission is ambiguous there (ticket
+  41); an id resolves through `world/geography.yaml` (422 when it does not
+  resolve to exactly one settlement). `place` defaults to the burg's NAME
+  (resolved from the id when one was passed). Takes the campaign lock
+  (**409 busy**, see
   hardening above); on success copies outputs → `maps/cities/<slug>/`, writes
   the companion note `<slug>.md` (embed + `place:` wiki-link + provenance),
   stubs the place's entity page (`kind: place`) when no page resolves it, and
   commits snapshot `campaign/<name>: map city <slug>`.
-  Engine: `node scripts/gen-city.mjs --world <path inside campaign world/> --burg "<name>" --out <tmp>`
+  Engine: `node scripts/gen-city.mjs --world <path inside campaign world/> --burg "<name|index>" --out <tmp>`
   with `cwd=dnd-mapping`; copy outputs → `maps/cities/<slug>/`.
   Result `{"slug","svg":url}`. `--world` accepts anything import_fmg.py
   accepts (full JSON export, headless dump, or .map save) — a campaign's
@@ -860,9 +870,14 @@ handles nav clicks and calls the active tab's renderer.
 Tab behaviors (build complete against this contract; a generation button may
 hit a 501 until wave 2 — render the error inline, never console-only):
 - **Maps**: world map (`world/map.svg`) hero; cities grid (SVG via `<img>`).
-  "Map a burg" form: burg dropdown (from geography; port flag shown, harbour
-  handled engine-side), an "attach to place" input defaulting to the burg,
+  "Map a burg" form: burg dropdown (from geography; the option VALUE is the
+  burg's dump id where geography carries one — a bare name is ambiguous
+  when two burgs share it, ticket 41; port flag shown, harbour handled
+  engine-side), an "attach to place" input defaulting to the burg's NAME,
   submit → job → poll → refresh (companion note + place stub server-side).
+  A failed city/scene job renders a persistent error line in its section
+  (from the campaign-jobs `last_finished`, cleared by the next finished run
+  of the kind — survives a reload).
   Sites form (kind + name + optional place), same.
 - **World Building**: geography digest (nations + burgs tables); timeline with
   source badges; entities table (page-backed rows click through to a page

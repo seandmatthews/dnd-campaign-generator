@@ -83,6 +83,9 @@ def campaign_jobs(name: str):
     """The campaign's job queue (ticket 02): what is running, what is
     queued behind it (with positions), and — when history exists — the
     running job's honest wait estimate, the same one busy 409s carry.
+    `last_finished` carries the newest finished job per kind (ticket 41):
+    the Maps tab renders a failed map job as a persistent section error
+    from it, cleared when a later run of that kind finishes.
     Read-only — the UI's queue strip and the cancel buttons poll this."""
     require_campaign(name)
     snap = jobs.queue_snapshot(name)
@@ -95,6 +98,10 @@ def campaign_jobs(name: str):
             snap["running_estimate"] = None
     else:
         snap["running_estimate"] = None
+    try:
+        snap["last_finished"] = jobs.last_finished(name)
+    except Exception:  # noqa: BLE001 — advisory: the strip must not break
+        snap["last_finished"] = {}
     return snap
 
 
