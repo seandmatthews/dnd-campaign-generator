@@ -692,8 +692,14 @@
           '</div>' +
           '<p class="muted form-note">The copy button gives the full folder ' +
             'path &mdash; point any editor at it. With Obsidian installed, ' +
-            'Open focuses it (the first click on a new folder asks Obsidian ' +
-            'to add the vault; that dialog is Obsidian&rsquo;s own).</p>' +
+            'Open focuses the vault &mdash; but a folder Obsidian has never ' +
+            'seen has no vault to focus: the first click shows ' +
+            'Obsidian&rsquo;s own &ldquo;Vault not found&rdquo; error, not an ' +
+            'add-vault dialog.</p>' +
+          '<p class="muted form-note lore-open-hint">First time? If Open says ' +
+            '&ldquo;Vault not found&rdquo;, register the folder once: in ' +
+            'Obsidian, &ldquo;Open folder as vault&rdquo; &rarr; the path the ' +
+            'Copy button gives. After that one-time registration, Open works.</p>' +
           '<div class="form-error"></div>' +
         '</div>' +
       '</section>'
