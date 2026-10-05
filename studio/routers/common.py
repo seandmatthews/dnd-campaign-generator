@@ -142,7 +142,7 @@ def blocking_findings(findings) -> list:
 blocked_by_line = job_history.blocked_by_line
 
 
-def submit_campaign_job(kind: str, name: str, job):
+def submit_campaign_job(kind: str, name: str, job, take_lock: bool = True):
     """Submit a campaign-MUTATING long job through the campaign's FIFO
     queue (ticket 02): the answer is 202 immediately — with a queue
     position when another job is already running — and a per-campaign
@@ -156,7 +156,15 @@ def submit_campaign_job(kind: str, name: str, job):
     the DM's explicit spend approval — nothing in the queue waits on a
     decision the DM is not present for. Short interactive writers keep
     fast-failing via campaign_lock_nowait (with a wait estimate). Never
-    nest acquisitions of one campaign's lock."""
+    nest acquisitions of one campaign's lock.
+
+    take_lock=False is the NO-LOCK LANE (ticket 42): the job queues and
+    drains in order like any other, but takes the campaign lock at no
+    point — for read-only passes that write nothing and must never block,
+    nor be blocked by, a canon writer (the sandbox design's recorded
+    decision, ticket 15). The queue still serializes the lane, so a
+    second design waits its turn (visible, cancellable) instead of
+    running twice at once."""
     lock = spine.campaign_lock(name)
 
     def before_run(log, entry):
@@ -177,13 +185,15 @@ def submit_campaign_job(kind: str, name: str, job):
             except Exception:  # noqa: BLE001 — best-effort by contract
                 pass
 
-    job_id, position = jobs.submit_queued(name, kind, wrapped,
-                                          before_run=before_run)
+    job_id, position = jobs.submit_queued(
+        name, kind, wrapped, before_run=before_run if take_lock else None)
     # "queued" must be honest even when this submission is the only one in
     # the queue: a held lock (another campaign's writer, a CLI process)
     # means the job waits for its turn even with nothing studio-side ahead
-    # of it — report that as position 1 (behind the current holder)
-    if position == 0 and lock.locked():
+    # of it — report that as position 1 (behind the current holder). The
+    # no-lock lane does not wait on the lock, so only real queue-mates
+    # count for it.
+    if position == 0 and take_lock and lock.locked():
         position = 1
     return JSONResponse({"job_id": job_id, "queued": position > 0,
                          "queue_position": position},

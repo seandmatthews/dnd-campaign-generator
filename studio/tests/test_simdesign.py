@@ -1,13 +1,18 @@
-"""Premise-to-sandbox design (ticket 03): validation mapping, the bounded
-re-ask, fed-or-refused, and the no-LLM create path the design prefills.
+"""Premise-to-sandbox design (ticket 03, job lane ticket 42): validation
+mapping, the bounded re-ask, fed-or-refused, and the no-LLM create path
+the design prefills.
 
-llm_client.complete is monkeypatched throughout — no test hits the network.
-The ENGINE project check is real (src/projects.py --check via subprocess,
-local and free): it is the validator the ticket names for suggested
-projects, per the CLI-equivalence rule.
+The endpoint is a 202 QUEUED JOB on the no-lock lane: the cheap refusals
+(422) answer synchronously before the queue, everything else lands in the
+job record — these tests wait the job out and read its result/error.
+llm_client.complete is monkeypatched throughout — no test hits the
+network. The ENGINE project check is real (src/projects.py --check via
+subprocess, local and free): it is the validator the ticket names for
+suggested projects, per the CLI-equivalence rule.
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -16,6 +21,7 @@ import llm_client
 import simdesign
 import spine
 import yaml
+from conftest import wait_for_job
 
 CAMP = "designvale"
 DESIGN_URL = f"/api/campaign/{CAMP}/simulation/design"
@@ -68,7 +74,7 @@ def _fresh(tmp_spine_root, geo=True):
 def _fake_llm(monkeypatch, replies):
     """Patch llm_client.complete with a scripted list of replies (last one
     repeats); each call also bumps the real per-run meter the way the real
-    client's _post_json would, so `usage` in the response is checkable.
+    client's _post_json would, so `usage` in the result is checkable.
     Returns the list of prompts received."""
     calls = []
 
@@ -81,6 +87,18 @@ def _fake_llm(monkeypatch, replies):
 
     monkeypatch.setattr(llm_client, "complete", fake)
     return calls
+
+
+def _design_job(client, payload):
+    """POST the design and wait the queued job out (ticket 42: the pass is
+    a 202 job now). Returns the finished job record."""
+    r = client.post(DESIGN_URL, json=payload)
+    assert r.status_code == 202, r.text
+    body = r.json()
+    assert body["job_id"] and "queue_position" in body
+    job = wait_for_job(client, body["job_id"], timeout=30.0)
+    assert job["kind"] == "sim-design"
+    return job
 
 
 # three legal-count factions where one has no goal: the count validator
@@ -111,9 +129,9 @@ def test_design_runs_on_places_alone(client, tmp_spine_root, monkeypatch):
     grounding exists, so the pass runs."""
     _fresh(tmp_spine_root, geo=False)
     calls = _fake_llm(monkeypatch, [json.dumps(DESIGN_DOC)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis", "Dunmore"]})
-    assert r.status_code == 200, r.text
+    job = _design_job(client, {"premise": PREMISE,
+                               "places": ["Provis", "Dunmore"]})
+    assert job["status"] == "done", job["error"]
     assert len(calls) == 1
     assert "Provis" in calls[0] and "Dunmore" in calls[0]
 
@@ -132,14 +150,16 @@ def test_design_returns_form_shaped_payload(client, tmp_spine_root,
                                             monkeypatch):
     _fresh(tmp_spine_root)
     calls = _fake_llm(monkeypatch, [json.dumps(DESIGN_DOC)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 200, r.text
-    body = r.json()
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "done", job["error"]
+    body = job["result"]
     design = body["design"]
     # one metered pass
     assert len(calls) == 1
     assert body["usage"]["calls"] == 1
+    # the submission's places ride in the record (the reload restore
+    # prefills the city/other-places fields from them)
+    assert body["places"] == ["Provis"]
     # the premise follows the form's rule
     assert design["premise"].startswith("The toll bridge burned")
     assert len(design["premise"]) <= simdesign.PREMISE_MAX
@@ -163,6 +183,8 @@ def test_design_returns_form_shaped_payload(client, tmp_spine_root,
     assert design["projects"][0]["target"] == 6
     # the grounding fed the prompt (nations + named places)
     assert "Shadia" in calls[0] and "Provis" in calls[0]
+    # and the pass's words streamed into the job log
+    assert any("fed:" in ln for ln in job["log_tail"])
 
 
 def test_design_clears_unknown_faction_place_with_a_note(client,
@@ -172,44 +194,41 @@ def test_design_clears_unknown_faction_place_with_a_note(client,
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["factions"][0]["place"] = "Atlantis"
     _fake_llm(monkeypatch, [json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 200, r.text
-    design = r.json()["design"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "done", job["error"]
+    design = job["result"]["design"]
     assert "place" not in design["factions"][0], \
         "a place the sandbox will not have must not prefill the form"
-    assert any("Atlantis" in n for n in r.json()["notes"])
+    assert any("Atlantis" in n for n in job["result"]["notes"])
 
 
-# ------------------------------------------------- validation mapping + 502
+# ------------------------------------------------- validation mapping + job
 
 
-def test_design_reasks_once_then_502_with_validator_words(client,
-                                                          tmp_spine_root,
-                                                          monkeypatch):
+def test_design_reasks_once_then_fails_with_validator_words(client,
+                                                            tmp_spine_root,
+                                                            monkeypatch):
     _fresh(tmp_spine_root)
     calls = _fake_llm(monkeypatch, [GOALLESS])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502, r.text
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error", job["result"]
     # bounded: exactly one re-ask, then the validators' words surface
     assert len(calls) == 2
-    assert "failed validation twice" in r.json()["error"]
-    assert "needs a goal" in r.json()["error"]
+    assert "failed validation twice" in job["error"]
+    assert "needs a goal" in job["error"]
 
 
 def test_design_reask_gets_the_validators_words(client, tmp_spine_root,
                                                 monkeypatch):
     _fresh(tmp_spine_root)
     calls = _fake_llm(monkeypatch, [GOALLESS, json.dumps(DESIGN_DOC)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 200, r.text
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "done", job["error"]
     assert len(calls) == 2
     # the re-ask carries the first attempt's diagnosis so the model can fix it
     assert "failed validation" in calls[1]
     assert "needs a goal" in calls[1]
-    assert r.json()["usage"]["calls"] == 2
+    assert job["result"]["usage"]["calls"] == 2
 
 
 def test_design_project_target_validated_by_engine(client, tmp_spine_root,
@@ -220,10 +239,9 @@ def test_design_project_target_validated_by_engine(client, tmp_spine_root,
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["projects"][0]["target"] = 9
     _fake_llm(monkeypatch, [json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502, r.text
-    assert "2-8" in r.json()["error"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "2-8" in job["error"]
 
 
 def test_design_project_for_unknown_faction_is_a_validation_failure(
@@ -232,10 +250,9 @@ def test_design_project_for_unknown_faction_is_a_validation_failure(
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["projects"][0]["faction"] = "The Ghost Guild"
     _fake_llm(monkeypatch, [json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502
-    assert "does not define" in r.json()["error"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "does not define" in job["error"]
 
 
 def test_design_secret_for_unknown_faction_is_a_validation_failure(
@@ -244,27 +261,26 @@ def test_design_secret_for_unknown_faction_is_a_validation_failure(
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["secrets"][0]["faction"] = "The Ghost Guild"
     _fake_llm(monkeypatch, [json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502
-    assert "does not define" in r.json()["error"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "does not define" in job["error"]
 
 
 def test_design_premise_validated_like_the_forms(client, tmp_spine_root,
                                                  monkeypatch):
     """A 900-char design premise fails the form's own rule, and the form's
-    words surface (the same 422 message the create endpoint answers with)."""
+    words surface (the same message the create endpoint answers with)."""
     _fresh(tmp_spine_root)
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["premise"] = "tension " * 120
     _fake_llm(monkeypatch, [json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502
-    assert "over 600 chars" in r.json()["error"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "over 600 chars" in job["error"]
 
 
-def test_design_budget_exceeded_is_503(client, tmp_spine_root, monkeypatch):
+def test_design_budget_exceeded_fails_the_job(client, tmp_spine_root,
+                                              monkeypatch):
     _fresh(tmp_spine_root)
 
     def spent(*args, **kwargs):
@@ -272,40 +288,80 @@ def test_design_budget_exceeded_is_503(client, tmp_spine_root, monkeypatch):
             "per-run LLM ceiling reached (1 call) — run stopped incomplete")
 
     monkeypatch.setattr(llm_client, "complete", spent)
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 503
-    assert "ceiling" in r.json()["error"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "ceiling" in job["error"]
 
 
-def test_design_without_key_is_503(client, tmp_spine_root, monkeypatch):
+def test_design_without_key_fails_the_job(client, tmp_spine_root,
+                                          monkeypatch):
     _fresh(tmp_spine_root)
 
     def no_key(*args, **kwargs):
         raise RuntimeError("no LLM API key found — set LLM_API_KEY in llm.env")
 
     monkeypatch.setattr(llm_client, "complete", no_key)
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "LLM_API_KEY" in job["error"]
+
+
+# ------------------------------------------------- the no-lock lane itself
+
+
+def test_design_job_takes_no_campaign_lock(client, tmp_spine_root,
+                                           monkeypatch):
+    """Ticket 15's recorded decision survives the queue move (ticket 42):
+    the design job never holds the campaign lock — a canon writer could
+    run while it does. Pinned at the spine lock itself: while the job is
+    inside its LLM call, the lock is free to acquire."""
+    _fresh(tmp_spine_root)
+    state = {"entered": False, "go": False}
+
+    def slow(prompt, **kwargs):
+        state["entered"] = True
+        while not state["go"]:
+            time.sleep(0.01)
+        return json.dumps(DESIGN_DOC)
+
+    monkeypatch.setattr(llm_client, "complete", slow)
     r = client.post(DESIGN_URL, json={"premise": PREMISE,
                                       "places": ["Provis"]})
-    assert r.status_code == 503
-    assert "LLM_API_KEY" in r.json()["error"]
-
-
-# ------------------------------------------------------- nothing is touched
+    assert r.status_code == 202, r.text
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not state["entered"]:
+        time.sleep(0.02)
+    assert state["entered"], "the job never reached its LLM call"
+    lock = spine.campaign_lock(CAMP)
+    acquired = lock.acquire(blocking=False)
+    try:
+        assert acquired, \
+            "the design job must run WITHOUT holding the campaign lock"
+    finally:
+        if acquired:
+            lock.release()
+    state["go"] = True
+    job = wait_for_job(client, r.json()["job_id"], timeout=30.0)
+    assert job["status"] == "done", job["error"]
 
 
 def test_design_writes_nothing(client, tmp_spine_root, monkeypatch):
     """Nothing staged, nothing canon: the campaign tree is byte-identical
-    after a design, and simulation/state.yaml still does not exist."""
+    after a design, and simulation/state.yaml still does not exist. (The
+    git-ignored .studio-jobs duration history is studio metadata, not
+    campaign content — excluded, like the transactions dir would be.)"""
     _fresh(tmp_spine_root)
     _fake_llm(monkeypatch, [json.dumps(DESIGN_DOC)])
-    before = {str(p.relative_to(tmp_spine_root)): p.read_bytes()
-              for p in sorted(tmp_spine_root.rglob("*")) if p.is_file()}
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 200, r.text
-    after = {str(p.relative_to(tmp_spine_root)): p.read_bytes()
-             for p in sorted(tmp_spine_root.rglob("*")) if p.is_file()}
+
+    def tree(root):
+        return {str(p.relative_to(root)): p.read_bytes()
+                for p in sorted(root.rglob("*")) if p.is_file()
+                and ".studio-jobs" not in p.parts}
+
+    before = tree(tmp_spine_root)
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "done", job["error"]
+    after = tree(tmp_spine_root)
     assert after == before
     assert not (tmp_spine_root / CAMP / "simulation" / "state.yaml").exists()
 
@@ -321,14 +377,13 @@ def test_design_404_unknown_campaign(client, spine_root, monkeypatch):
 
 
 def test_design_prefills_a_form_the_free_path_accepts(client, tmp_spine_root,
-                                                      monkeypatch):
+                                                     monkeypatch):
     """The design payload, verbatim, through the unchanged create endpoint:
     201, ids derived, and the secret stays out of the state payload."""
     _fresh(tmp_spine_root)
     _fake_llm(monkeypatch, [json.dumps(DESIGN_DOC)])
-    design = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                           "places": ["Provis"]}
-                         ).json()["design"]
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    design = job["result"]["design"]
     body = {
         "premise": design["premise"],
         "city": {"name": "Provis", "population": 12300},
@@ -393,20 +448,20 @@ def test_cli_design_usage_error_exit_2(tmp_spine_root, monkeypatch, capsys):
 # ----------------------------------------------- ticket 15: hardening
 
 
-def test_unparseable_json_reask_then_502(tmp_spine_root, client,
-                                          monkeypatch):
+def test_unparseable_json_reask_then_job_error(tmp_spine_root, client,
+                                               monkeypatch):
     """A reply with no JSON object takes the same re-ask path as schema
-    failures: two complete() calls at most, then a 502 quoting the
+    failures: two complete() calls at most, then a FAILED JOB quoting the
     diagnosis — never a raw exception."""
     _fresh(tmp_spine_root)
     calls = _fake_llm(monkeypatch, [
         "Sure! Here is a lovely design in prose, no JSON at all.",
         "Also prose, sorry.",
     ])
-    r = client.post(DESIGN_URL,
-                    json={"premise": PREMISE, "places": ["Provis"]})
-    assert r.status_code == 502, r.text
-    assert "unusable reply" in r.json()["error"]
+    job = _design_job(client,
+                      {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
+    assert "unusable reply" in job["error"]
     assert len(calls) == 2, "the unparseable reply must be re-asked once"
 
 
@@ -460,11 +515,15 @@ def test_unreadable_geography_refuses_cleanly(tmp_spine_root, client,
     monkeypatch.setattr(
         llm_client, "complete",
         lambda prompt, **k: json.dumps(DESIGN_DOC))
-    r = client.post(DESIGN_URL, json={"premise": PREMISE})
-    assert r.status_code == 200, r.text
-    assert len(attempts) == 3, "the read must retry before failing"
+    job = _design_job(client, {"premise": PREMISE})
+    assert job["status"] == "done", job["error"]
+    # the grounding is read at least twice (the router's synchronous
+    # pre-flight, then the job's own fresh read) and the flaky read
+    # retried through inside the pre-flight
+    assert len(attempts) >= 3, "the read must retry before failing"
 
-    # and a persistently unreadable world refuses (422), never 500
+    # and a persistently unreadable world refuses (a 422 at submit: the
+    # grounding pre-flight owns it), never a 500
     def always_fail(self, *a, **k):
         if self == geo:
             raise PermissionError("locked")
@@ -511,13 +570,12 @@ def test_scalar_resources_reasks_then_succeeds(client, tmp_spine_root,
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["factions"][0]["resources"] = "high"
     calls = _fake_llm(monkeypatch, [json.dumps(doc), json.dumps(DESIGN_DOC)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 200, r.text
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "done", job["error"]
     assert len(calls) == 2
     assert "must be a mapping of resource to level" in calls[1]
     assert "not a str" in calls[1]
-    assert r.json()["usage"]["calls"] == 2
+    assert job["result"]["usage"]["calls"] == 2
 
 
 def test_list_resources_reasks_once_then_502_with_the_issue(
@@ -528,12 +586,11 @@ def test_list_resources_reasks_once_then_502_with_the_issue(
     doc = json.loads(json.dumps(DESIGN_DOC))
     doc["factions"][1]["resources"] = ["coin", "muscle"]
     calls = _fake_llm(monkeypatch, [json.dumps(doc), json.dumps(doc)])
-    r = client.post(DESIGN_URL, json={"premise": PREMISE,
-                                      "places": ["Provis"]})
-    assert r.status_code == 502, r.text
+    job = _design_job(client, {"premise": PREMISE, "places": ["Provis"]})
+    assert job["status"] == "error"
     assert len(calls) == 2
-    assert "must be a mapping of resource to level" in r.json()["error"]
-    assert "not a list" in r.json()["error"]
+    assert "must be a mapping of resource to level" in job["error"]
+    assert "not a list" in job["error"]
 
 
 def test_spine_rejects_non_dict_resources_as_campaign_error():

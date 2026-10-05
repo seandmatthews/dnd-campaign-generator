@@ -35,6 +35,7 @@ SCALE_MIN, SCALE_MAX = 0.5, 2.0
 _KIND_LABELS = {
     "sim-week": "a week run",
     "forecast": "a forecast run",
+    "sim-design": "a sandbox design",
     "world-gen": "a world generation",
     "world-map": "a world map render",
     "map-city": "a city map",

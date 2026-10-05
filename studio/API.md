@@ -319,19 +319,25 @@ shapes in this document true.
 - `GET /api/campaign/{name}/simulation/views/{faction_id}` → the fog-of-war
   `faction_view` dict as JSON. Engine: `python -X utf8 src/views.py <faction_id>`
   (cwd=agentic-simulator; E adds this CLI, printing YAML).
-- `POST /api/campaign/{name}/simulation/design` → premise-to-sandbox
-  ideation (one metered LLM pass, sync like `lore/name`). Body:
-  `{"premise":str, "places"?:[str]}`. **Fed-or-refused**: 422 when
-  `world/geography.yaml` is missing AND no places were named (generation
-  grounded in nothing does not run). The reply is validated against the
+- `POST /api/campaign/{name}/simulation/design` → 202 job (kind
+  `sim-design`; ticket 42 — the pass is minutes long on a real provider
+  and a reload used to destroy a paid result). Body:
+  `{"premise":str, "places"?:[str]}`. **Fed-or-refused and the cheap cap
+  refusals are synchronous 422s** before the job is queued (generation
+  grounded in nothing does not run; over-cap places/premise never cost a
+  queue slot). **The job takes the campaign lock at NO point** (the
+  no-lock lane: the design writes nothing and must never block, nor be
+  blocked by, a canon writer) — it only queues and drains in order.
+  The pass is validated against the
   existing schemas — the form's premise rule (one line ≤600),
   `spine.validate_faction_docs` for the 2-5 factions, and the ENGINE's
   project normalizer (`src/projects.py --check` against a candidate state
   in a temp dir) for suggested projects; a failing reply is re-asked ONCE
-  with the validator's words, then **502** carrying them. Returns
+  with the validator's words, then the JOB FAILS carrying them. Result
   `{"design":{"premise","factions":[form-shaped {name,kind,goal,resources,
   place?}],"projects":[{faction,faction_id,title,objective,target}],"secrets":
-  [{faction,text}]},"notes":[...],"usage":{calls,tokens,limit}}`. The design
+  [{faction,text}]},"notes":[...],"usage":{calls,tokens,limit},"places":[...]}`.
+  The design
   is PREFILL material only: nothing is staged, `simulation/state.yaml` is
   never touched — Create (`POST .../simulation/state`) stays the accept on
   the unchanged free path. Secrets are proposed DM-only knowledge-fact

@@ -1,8 +1,10 @@
-/* Tests for the design-form feedback fixes (the silent-wedge bug found
-   2026-10-03): the elapsed label, the reload-marker warning, and the
-   client ceiling vs the server's own worst case. The DOM wiring itself
-   stays untested here — the pure decision logic is what regresses. Zero
-   dependencies:
+/* Tests for the design-form feedback (ticket 42: the pass is a QUEUED JOB
+   on the no-lock lane now; the 2026-10-03 silent-wedge fixes for the old
+   synchronous endpoint became the job record + the queue strip): the job
+   watch's ceiling vs the server's own worst case, the elapsed label, the
+   jobs-snapshot slice the panel renders from, and the restore note. The
+   DOM wiring itself stays untested here — the pure decision logic is what
+   regresses. Zero dependencies:
      node studio/tests/js/test_design_feedback.cjs
    Run by run-tests.py's studio-js-design suite (skipped when node is
    absent). */
@@ -30,14 +32,14 @@ function ok(name, fn) {
   catch (e) { failed += 1; console.log(`  ${name}: FAIL ${e.message}`); }
 }
 
-ok('the client ceiling sits above the server worst case but not absurdly', () => {
+ok('the job-watch ceiling sits above the server worst case but not absurdly', () => {
   // server worst: two complete() calls (pass + one re-ask), each 3
   // attempts x 300 s + small backoffs — just over 30 min
   const serverWorstMs = 2 * 3 * 300 * 1000;
   assert.ok(S.DESIGN_TIMEOUT_MS > serverWorstMs,
     'a legal max-length pass must never be killed client-side');
   assert.ok(S.DESIGN_STALE_MS > S.DESIGN_TIMEOUT_MS,
-    'the marker outlives the wait ceiling');
+    'the auto-restore window outlives the watch ceiling');
   assert.ok(S.DESIGN_TIMEOUT_MS <= 40 * 60 * 1000,
     'and stays within a sitting distance of it');
 });
@@ -51,33 +53,45 @@ ok('designElapsed formats seconds and padded minutes', () => {
   assert.strictEqual(S.designElapsed(35 * 60 * 1000 + 999), '35m 00s');
 });
 
-const NOW = 1_800_000_000_000;
-const marker = (ageMs, camp) =>
-  ({ camp: camp === undefined ? 'brineharrow-coast' : camp, at: NOW - ageMs });
+// the campaign-jobs snapshot slice (ticket 42)
+const JOB = (over) => Object.assign(
+  { id: 'j1', kind: 'sim-design', status: 'running' }, over);
 
-ok('a fresh same-campaign marker warns about the duplicate-spend re-click', () => {
-  const w = S.designInflightWarning(marker(90 * 1000), 'brineharrow-coast', NOW);
-  assert.ok(w, 'a 90 s-old marker must warn');
-  assert.ok(/1m 30s ago/.test(w), 'the warning carries the elapsed age: ' + w);
-  assert.ok(/SECOND pass/.test(w) && /twice/.test(w),
-    'the warning names the duplicate spend');
+ok('designJobState surfaces the running or queued pass and the finished one', () => {
+  const st = S.designJobState({
+    running: JOB({}),
+    queued: [JOB({ id: 'j2', status: 'queued', position: 1 })],
+    last_finished: { 'sim-design': JOB({ id: 'j0', status: 'done' }) },
+  });
+  assert.ok(st.running && st.running.id === 'j1', 'the running pass surfaces');
+  assert.ok(st.queued && st.queued.id === 'j2', 'a queued second pass surfaces');
+  assert.ok(st.finished && st.finished.id === 'j0',
+    'the newest finished record is the restore source');
 });
 
-ok('the warning stays silent for other campaigns, garbage, and stale marks', () => {
-  assert.strictEqual(S.designInflightWarning(null, 'brineharrow-coast', NOW), null);
-  assert.strictEqual(S.designInflightWarning(marker(0, 'other-camp'),
-    'brineharrow-coast', NOW), null);
-  assert.strictEqual(
-    S.designInflightWarning({ camp: 'brineharrow-coast' }, 'brineharrow-coast', NOW),
-    null);
-  assert.strictEqual(S.designInflightWarning('garbage', 'brineharrow-coast', NOW),
-    null);
-  assert.strictEqual(S.designInflightWarning(marker(S.DESIGN_STALE_MS + 1000),
-    'brineharrow-coast', NOW), null,
-    'past the believable window the marker must not scare anyone');
-  assert.strictEqual(S.designInflightWarning(marker(-60 * 1000),
-    'brineharrow-coast', NOW), null,
-    'a future timestamp (clock skew) is not a valid age');
+ok('designJobState ignores other kinds and empty snapshots', () => {
+  const st = S.designJobState({
+    running: { id: 'w', kind: 'sim-week', status: 'running' },
+    queued: [{ id: 'w2', kind: 'forecast', status: 'queued' }],
+    last_finished: { 'sim-week': { id: 'w0', kind: 'sim-week', status: 'done' } },
+  });
+  assert.strictEqual(st.running, null, 'a week job is not a design pass');
+  assert.ok(!st.queued, 'no design job in the queue');
+  assert.strictEqual(st.finished, null,
+    'a finished week is not a design to restore');
+  const empty = S.designJobState(null);
+  assert.ok(empty && empty.running === null && empty.finished === null,
+    'a missing snapshot degrades to "nothing known"');
+});
+
+ok('designJobState refuses a finished record without a restorable design', () => {
+  // the slice only CARRIES the record; the render checks shape — but a
+  // failed/errored record must never read as restorable either
+  const st = S.designJobState({
+    last_finished: { 'sim-design': JOB({ status: 'error', error: 'x' }) },
+  });
+  assert.ok(st.finished && st.finished.status === 'error',
+    'the failed record surfaces (for any future honesty surface)');
 });
 
 ok('designRestoreNote describes the restored draft inside the window', () => {

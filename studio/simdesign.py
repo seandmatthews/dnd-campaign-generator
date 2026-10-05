@@ -361,17 +361,14 @@ def _validate_reply(raw: str, places: list, log):
 
 # ------------------------------------------------------------------- service
 
-def design_simulation(campaign: str, premise: str, places=None, log=None):
-    """Premise -> a validated, form-shaped sandbox draft. One metered LLM
-    pass (begin_run; a failing reply is re-asked once — two complete() calls
-    at most). Raises FedOrRefused when there is no world AND no places to
-    ground the design in (the create form itself stays free and no-LLM),
-    DesignError when the model cannot produce a valid draft.
-
-    Returns {"design": {...}, "notes": [...], "usage": {...}} — nothing is
-    staged; simulation/state.yaml is never touched here."""
+def grounding(campaign: str, premise: str, places=None):
+    """Validate the request and resolve the grounding BEFORE any spend:
+    the place caps, the premise caps, and the fed-or-refused rule (no
+    world file AND no named places is nothing to design against). Raises
+    FedOrRefused; returns (campaign_dir, geo_text, places) so both the
+    router's synchronous 422 pre-flight and the pass itself share ONE
+    implementation (ticket 42 — the refusals must not cost a queued job)."""
     campaign_dir = spine.require_campaign(campaign)
-    log = log or (lambda line: None)
     places = [str(p or "").strip() for p in (places or []) if str(p or "").strip()]
     if len(places) > _PLACES_MAX:
         raise FedOrRefused(
@@ -414,13 +411,28 @@ def design_simulation(campaign: str, premise: str, places=None, log=None):
                 f"world/geography.yaml could not be read ({last_err}) — "
                 "retry in a moment (the Maps pipeline may be replacing "
                 "it)")
-        log(f"fed: world/geography.yaml ({len(geo_text.splitlines())} lines)")
     elif not places:
         raise FedOrRefused(
             "there is no world to design against: world/geography.yaml is "
             "missing and no places were named — name the places (or "
             "generate a world first, Maps tab); generation is fed or "
             "refused")
+    return campaign_dir, geo_text, places
+
+
+def design_simulation(campaign: str, premise: str, places=None, log=None):
+    """Premise -> a validated, form-shaped sandbox draft. One metered LLM
+    pass (begin_run; a failing reply is re-asked once — two complete() calls
+    at most). Raises FedOrRefused when there is no world AND no places to
+    ground the design in (the create form itself stays free and no-LLM),
+    DesignError when the model cannot produce a valid draft.
+
+    Returns {"design": {...}, "notes": [...], "usage": {...}} — nothing is
+    staged; simulation/state.yaml is never touched here."""
+    _, geo_text, places = grounding(campaign, premise, places)
+    log = log or (lambda line: None)
+    if geo_text:
+        log(f"fed: world/geography.yaml ({len(geo_text.splitlines())} lines)")
     if places:
         log(f"fed: {len(places)} named place(s) as grounding")
 

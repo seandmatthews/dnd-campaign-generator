@@ -251,23 +251,28 @@
      secret drafts stay out of the faction rows — they are proposed DM-only
      knowledge facts for the Knowledge tab, after the sandbox exists.
 
-     The endpoint is synchronous BY DESIGN (its docstring, ticket 15), and
-     a wedged provider used to turn that into a silent wedge: the buttons
-     sat dimmed with no other state change, the disabled-guard swallowed
-     every re-click, and a reload-and-retry started a SECOND server-side
-     pass (duplicate spend). Three pieces of client-side honesty fix that
-     without touching the sync architecture — a live elapsed line, a
-     talking guard, and a reload marker (found 2026-10-03). */
+     The pass is a QUEUED JOB on the no-lock lane (kind sim-design, ticket
+     42 — it replaced the 2026-10-03 client-side honesty fixes for the old
+     synchronous endpoint): the queue strip names it, the wait is
+     cancellable while queued, the log streams below, and the result lands
+     in the job record — so a reload mid-run costs the WAIT, never the
+     paid result. This panel reads the campaign-jobs snapshot on render:
+     a still-running pass shows as a status line, a finished one refills
+     the form from its record (the sessionStorage cache those fixes used
+     is gone — the record is the durable copy). */
 
-  // The server's own worst case: at most two llm_client.complete() calls
-  // (the pass + one bounded re-ask), each 3 attempts x 300 s — ~30 min.
-  // The client ceiling must sit ABOVE it so it never kills a legal pass;
-  // it only fires when the request is wedged beyond every server timeout.
+  // The job watch gives up after this long (pollJob's ceiling, passed
+  // through runJob): above the server's own worst case (two complete()
+  // calls, each 3 attempts x 300 s — ~30 min). Giving up no longer loses
+  // the result — the job keeps running server-side and the record
+  // restores it on the next render.
   S.DESIGN_TIMEOUT_MS = 35 * 60 * 1000;
-  // how long a reload marker stays believable (a little past the ceiling)
+  // how long a finished design stays believable as an auto-restore (a
+  // self-filling form from YESTERDAY's sitting surprises more than it
+  // helps; the record still holds it — only the auto-fill ages out)
   S.DESIGN_STALE_MS = 45 * 60 * 1000;
 
-  /* Pure — "1m 05s" for the elapsed line and the reload warning. Pinned
+  /* Pure — "1m 05s" for the elapsed line and the restore note. Pinned
      by studio/tests/js/test_design_feedback.cjs. */
   S.designElapsed = function (ms) {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -275,76 +280,30 @@
     return m ? m + 'm ' + String(s % 60).padStart(2, '0') + 's' : s + 's';
   };
 
-  /* Pure — the reload warning for a possibly-still-running pass, or null
-     when there is nothing to warn about (no marker, another campaign,
-     garbage, or past the believable window). Pinned by
+  /* Pure — the restore note for a design answered ageMs ago, or null
+     outside the believable window. Pinned by
      studio/tests/js/test_design_feedback.cjs. */
-  S.designInflightWarning = function (marker, camp, now) {
-    if (!marker || marker.camp !== camp) return null;
-    if (typeof marker.at !== 'number') return null;
-    const age = now - marker.at;
-    if (!(age >= 0) || age > S.DESIGN_STALE_MS) return null;
-    return 'A design pass was started ' + S.designElapsed(age) + ' ago. ' +
-      'If it is still running, clicking Design now starts a SECOND pass ' +
-      'and spends credits twice — wait for this to age out first.';
-  };
-
-  const DESIGN_MARK_KEY = 'studio-design-inflight';
-  function markDesignStart() {
-    try {
-      sessionStorage.setItem(DESIGN_MARK_KEY, JSON.stringify(
-        { camp: S.state.campaign, at: Date.now() }));
-    } catch (_) {}
-  }
-  // cleared only when the SERVER answered — a timeout or a dropped
-  // connection leaves the marker up, because the pass may still be running
-  function clearDesignMark() {
-    try { sessionStorage.removeItem(DESIGN_MARK_KEY); } catch (_) {}
-  }
-  function readDesignMark() {
-    try { return JSON.parse(sessionStorage.getItem(DESIGN_MARK_KEY)); }
-    catch (_) { return null; }
-  }
-
-  /* The COMPLETED answer gets the same treatment: the await runs 10+
-     minutes, and showTab re-renders the panel out from under it — the
-     response used to fill detached nodes while the form reset to empty,
-     so leaving the tab (checking the map, the lore) cost the whole pass.
-     The answer is saved when it arrives, restored onto the fresh panel
-     until it ages out, and consumed by Create (found 2026-10-03). */
-  const DESIGN_RESULT_KEY = 'studio-design-result';
-  function saveDesignResult(r, namedPlaces) {
-    try {
-      sessionStorage.setItem(DESIGN_RESULT_KEY, JSON.stringify({
-        camp: S.state.campaign, at: Date.now(),
-        design: (r && r.design) || {}, places: namedPlaces || []}));
-    } catch (_) {}
-  }
-  // storage + shape + campaign match; the AGE window lives in
-  // S.designRestoreNote so it stays pure and pinned
-  function readDesignResult() {
-    try {
-      const d = JSON.parse(sessionStorage.getItem(DESIGN_RESULT_KEY));
-      if (!d || d.camp !== S.state.campaign || typeof d.at !== 'number'
-          || !d.design || !Array.isArray(d.design.factions)
-          || !d.design.factions.length) return null;
-      return d;
-    } catch (_) { return null; }
-  }
-  function clearDesignResult() {
-    try { sessionStorage.removeItem(DESIGN_RESULT_KEY); } catch (_) {}
-  }
-
-  /* Pure — the restore note for a cached design answered ageMs ago, or
-     null outside the believable window (same ceiling as the reload
-     marker: past it, a self-filling form surprises more than it helps).
-     Pinned by studio/tests/js/test_design_feedback.cjs. */
   S.designRestoreNote = function (ageMs) {
     if (typeof ageMs !== 'number' || !(ageMs >= 0)
         || ageMs > S.DESIGN_STALE_MS) return null;
     return 'Design from ' + S.designElapsed(ageMs) + ' ago restored — the '
       + 'form resets when you leave the tab, so the draft is re-applied. '
       + 'Edit anything, then Create simulation.';
+  };
+
+  /* Pure — the design-relevant slice of a campaign-jobs snapshot: the
+     still queued/running pass (the status line) and the newest finished
+     one (the reload restore's source). Pinned by
+     studio/tests/js/test_design_feedback.cjs. */
+  S.designJobState = function (snap) {
+    snap = snap || {};
+    const running = (snap.running && snap.running.kind === 'sim-design')
+      ? snap.running : null;
+    const queued = (snap.queued || []).find(
+      (j) => j && j.kind === 'sim-design' && j.status === 'queued') || null;
+    const finished =
+      (snap.last_finished && snap.last_finished['sim-design']) || null;
+    return { running: running, queued: queued, finished: finished };
   };
 
   function copyHint(text) {
@@ -421,11 +380,14 @@
             '<button type="button" class="btn btn-primary design-run">Design the sandbox</button>' +
             '<button type="button" class="btn design-regenerate hidden">Regenerate</button>' +
             '<span class="muted form-note">One metered LLM pass — it spends a ' +
-              'little API credit and fills the form below.</span>' +
+              'little API credit and fills the form below. Runs as a queued ' +
+              'job: visible in the strip, cancellable while queued, and it ' +
+              'survives a reload.</span>' +
           '</div>' +
           '<div class="design-status"></div>' +
           '<div class="design-error"></div>' +
           '<div class="design-result"></div>' +
+          '<pre class="log-tail design-log-tail hidden"></pre>' +
         '</div>' +
         '<div class="form-block">' +
           '<label class="field"><span class="field-label">Premise — the tension, one line</span>' +
@@ -462,26 +424,41 @@
     const designErr = panel.querySelector('.design-error');
     const designResult = panel.querySelector('.design-result');
     const designStatus = panel.querySelector('.design-status');
+    const designLog = S.makeLogBox(panel.querySelector('.design-log-tail'));
 
-    // a reload during a pass abandons the fetch but NOT the server-side
-    // work — the marker (kept on any non-answer, cleared only when the
-    // server responded) turns that into a warning on the fresh panel
-    const inflight = S.designInflightWarning(
-      readDesignMark(), S.state.campaign, Date.now());
-    if (inflight) {
-      const warn = S.el(
-        '<div class="design-inflight" role="status">' +
-          '<p class="panel-note">' + S.esc(inflight) + '</p>' +
-          '<button type="button" class="btn design-inflight-ignore">' +
-            'Nothing is running — dismiss</button>' +
-        '</div>');
-      warn.querySelector('.design-inflight-ignore')
-        .addEventListener('click', () => {
-          clearDesignMark();
-          warn.remove();
-        });
-      designStatus.appendChild(warn);
-    }
+    // the campaign-jobs snapshot is the reload-safe state of the pass
+    // (ticket 42): a queued/running job shows as a status line, a
+    // finished one's record restores the prefill below. Advisory: the
+    // snapshot failing never blocks the form.
+    S.api(S.campUrl('/jobs')).then((snap) => {
+      if (!panel.isConnected) return;
+      const st = S.designJobState(snap);
+      if (st.running || st.queued) {
+        const where = st.running ? 'running' : 'queued';
+        const note = S.el(
+          '<p class="panel-note design-inflight" role="status"></p>');
+        note.textContent = 'A design pass is already ' + where +
+          ' — the form fills from its record when it lands. Reloading is ' +
+          'safe now: the pass lives in the queue, not in this page.';
+        designStatus.appendChild(note);
+        return;
+      }
+      const r = st.finished;
+      if (r && r.status === 'done' && r.result && r.result.design
+          && Array.isArray(r.result.design.factions)
+          && r.result.design.factions.length) {
+        const age = Date.now() - (Date.parse(r.started) || 0);
+        const noteText = S.designRestoreNote(age);
+        if (noteText) {
+          fillDesignForm(r.result.design, r.result.places || []);
+          regenBtn.classList.remove('hidden');
+          const note = S.el(
+            '<p class="panel-note design-restored" role="status"></p>');
+          note.textContent = noteText;
+          designStatus.appendChild(note);
+        }
+      }
+    }).catch(() => {});
 
     function setFactionRows(factions) {
       host.innerHTML = '';
@@ -522,9 +499,8 @@
     }
 
     function applyDesign(r, namedPlaces) {
-      fillDesignForm((r && r.design) || {}, namedPlaces);
-      // rides out navigation: the next panel render restores this answer
-      saveDesignResult(r, namedPlaces);
+      fillDesignForm((r && r.design) || {}, namedPlaces || []);
+      regenBtn.classList.remove('hidden');
     }
 
     async function runDesign() {
@@ -532,7 +508,7 @@
         // the guard used to be a silent return — a re-click during a long
         // pass read exactly like a dead button
         S.toast('A design pass is already running — the form is waiting ' +
-          'on it. Watch the elapsed line under the buttons.', 'info');
+          'on it. Watch the queue strip and the log below.', 'info');
         return;
       }
       const premise = panel.querySelector('.design-premise').value.trim();
@@ -540,67 +516,38 @@
         S.toast('Describe the tension first — one paragraph is enough.', 'error');
         return;
       }
-      designBtn.disabled = true;
-      regenBtn.disabled = true;
       designErr.innerHTML = '';
       designResult.innerHTML = '';
-      markDesignStart();
+      designStatus.innerHTML = '';
       const startedAt = Date.now();
       const tick = S.el('<p class="panel-note design-elapsed" role="status"></p>');
       const renderTick = () => {
         tick.textContent = 'Designing the sandbox… ' +
           S.designElapsed(Date.now() - startedAt) + ' elapsed. One metered ' +
-          'LLM pass — a slow provider can take 10+ minutes. Reloading ' +
-          'abandons the WAIT, not the pass.';
+          'LLM pass — a slow provider can take 10+ minutes. Reloading is ' +
+          'safe: the pass lives in the queue and its result survives.';
       };
       renderTick();
-      designStatus.innerHTML = '';
       designStatus.appendChild(tick);
       const tickTimer = setInterval(renderTick, 1000);
-      const stopTick = () => {
-        clearInterval(tickTimer);
-        designStatus.innerHTML = '';
-      };
       const places = panel.querySelector('.design-places').value.split(',')
         .map((s) => s.trim()).filter(Boolean);
       try {
-        const r = await S.api(S.campUrl('/simulation/design'), {
-          method: 'POST', body: { premise: premise, places: places },
-          timeoutMs: S.DESIGN_TIMEOUT_MS
+        const r = await S.runJob({
+          path: S.campUrl('/simulation/design'),
+          body: { premise: premise, places: places },
+          btn: designBtn, errBox: designErr, log: designLog,
+          timeoutMs: S.DESIGN_TIMEOUT_MS,
+          doneMsg: 'Design drafted below — edit anything, then Create simulation.',
+          failLabel: 'Design failed'
         });
-        clearDesignMark();
-        stopTick();
-        applyDesign(r, places);
-        regenBtn.classList.remove('hidden');
+        applyDesign(r, r && r.places);
         ((r && r.notes) || []).forEach((n) => S.toast(n, 'info'));
-        if (panel.isConnected) {
-          S.toast('Design drafted below — edit anything, then Create simulation.', 'ok');
-        } else {
-          // the DM tabbed away during the pass: this response filled a
-          // detached panel, and the next Simulation render restores it
-          S.toast('Design finished — reopen the Simulation tab; the draft '
-            + 'is restored there.', 'ok');
-        }
-      } catch (err) {
-        stopTick();
-        // a real server answer (success or error) ends the pass; a timeout
-        // or a dropped connection does not — the marker stays as a warning
-        if (!(err && err.timedOut)) clearDesignMark();
-        designErr.innerHTML = '';
-        if (err && err.timedOut) {
-          designErr.appendChild(S.errorPanel(
-            { status: 504,
-              error: 'Gave up waiting after ' +
-                S.designElapsed(S.DESIGN_TIMEOUT_MS) + '.' },
-            'The pass is NOT cancelled — it may still finish and fill the ' +
-            'form on a later reload. Do not re-click Design right away: a ' +
-            'second pass spends credits twice.'));
-        } else {
-          designErr.appendChild(S.errorPanel(err));
-        }
+      } catch (_) {
+        // runJob already rendered the error into designErr and toasted the
+        // failLabel; the job (and its spend) is the server's record now
       } finally {
-        designBtn.disabled = false;
-        regenBtn.disabled = false;
+        clearInterval(tickTimer);
       }
     }
     designBtn.addEventListener('click', runDesign);
@@ -620,21 +567,6 @@
     addRow();
     addRow();
 
-    // a pass that finished while the DM was on another tab answers into a
-    // detached panel — restore its cached result onto this fresh one so
-    // the form they come back to is never empty (after the default rows,
-    // which the restore replaces)
-    const savedDesign = readDesignResult();
-    const restoreNote = savedDesign
-      ? S.designRestoreNote(Date.now() - savedDesign.at) : null;
-    if (savedDesign && restoreNote) {
-      fillDesignForm(savedDesign.design, savedDesign.places || []);
-      regenBtn.classList.remove('hidden');
-      const note = S.el(
-        '<p class="panel-note design-restored" role="status"></p>');
-      note.textContent = restoreNote;
-      designStatus.appendChild(note);
-    }
     addBtn.addEventListener('click', () => {
       if (host.children.length >= 5) {
         S.toast('Five factions is plenty — more than that and weeks get muddy.', 'info');
@@ -680,7 +612,8 @@
       errBox.innerHTML = '';
       try {
         await S.api(S.campUrl('/simulation/state'), { method: 'POST', body: body });
-        clearDesignResult(); // the design served its purpose: it is canon now
+        // the design served its purpose: it is canon now (its job record
+        // ages out of the auto-restore window on its own)
         S.toast('Simulation created — factions are live below. Propose week 1 when ready.', 'ok');
         S.rerenderIfCurrent('sim'); // re-render: the real sim view with the run button
       } catch (err) {

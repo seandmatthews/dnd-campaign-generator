@@ -38,6 +38,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # local loops.
 CHRONICLE_DELAY_S = float(os.environ.get("E2E_LLM_DELAY_S", "12"))
 
+# The sandbox-design prompt sleeps by this much (ticket 42): the design is
+# a queued job now, and the spec's reload/cancel probes need a pass that
+# stays running for a while. Runtime-settable via POST /__delay (harness
+# control, not app state) so only the design step pays the wait.
+DESIGN_DELAY = {"s": float(os.environ.get("E2E_LLM_DESIGN_DELAY_S", "0"))}
+
 # ---------------------------------------------------------------- bodies
 
 DESIGN_JSON = {
@@ -201,6 +207,8 @@ def _reply_for(prompt: str) -> str:
     """One canned body per flow, chosen by substring — the prompts are
     distinct enough that one marker each is unambiguous."""
     if "sandbox designer" in prompt:
+        if DESIGN_DELAY["s"] > 0:
+            time.sleep(DESIGN_DELAY["s"])
         return json.dumps(DESIGN_JSON)
     if "timeline entries" in prompt or (
             "TASK: write 3 to 6 timeline entries" in prompt):
@@ -239,6 +247,18 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b'{"error": "not found"}')
 
     def do_POST(self):
+        if self.path.rstrip("/").endswith("/__delay"):
+            # harness control (ticket 36/42): {"seconds": N} sets the
+            # sandbox-design delay — lets the spec make one flow slow
+            # without slowing the whole run
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                req = json.loads(self.rfile.read(length) or b"{}")
+                DESIGN_DELAY["s"] = max(0.0, float(req.get("seconds") or 0))
+                self._send(200, b'{"ok": true}')
+            except (ValueError, json.JSONDecodeError):
+                self._send(400, b'{"error": "bad json"}')
+            return
         if not self.path.rstrip("/").endswith("/chat/completions"):
             self._send(404, b'{"error": "not found"}')
             return

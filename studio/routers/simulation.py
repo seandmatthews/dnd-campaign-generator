@@ -356,34 +356,53 @@ class DesignBody(BaseModel):
     places: list[str] = []
 
 
-@router.post("/api/campaign/{name}/simulation/design")
+@router.post("/api/campaign/{name}/simulation/design", status_code=202)
 def post_simulation_design(name: str, body: DesignBody):
     """Premise -> a designed sandbox draft (ONE metered LLM pass, re-asked
-    once when the reply fails validation, then 502 with the validator's
-    words — the world-options posture). The design PREFILLS the
-    Create a simulation form; nothing is staged and simulation/state.yaml
-    is not touched — Create stays the accept, on the unchanged free path.
-    Secrets come back separately as proposed DM-only knowledge drafts and
-    never ride in the faction docs. Fed-or-refused: with no world file and
-    no named places there is nothing to ground the design in (422).
+    once when the reply fails validation, then a failed job carrying the
+    validator's words — the world-options posture). The design PREFILLS
+    the Create a simulation form; nothing is staged and
+    simulation/state.yaml is not touched — Create stays the accept, on
+    the unchanged free path. Secrets come back separately as proposed
+    DM-only knowledge drafts and never ride in the faction docs.
+    Fed-or-refused: with no world file and no named places there is
+    nothing to ground the design in (422, synchronously — the cheap
+    refusals never cost a queued job).
 
-    Synchronous BY DESIGN (ticket 15's recorded decision): the pass takes
-    no lock, writes nothing, and holds one threadpool thread — the form
-    disables its buttons client-side and a wedged provider costs the DM a
-    closed tab, nothing else. Converting it to a queue job would buy a
-    cancellable wait at the cost of the design living in a job record;
-    deferred until a real provider actually wedges someone."""
+    A QUEUED JOB on the no-lock lane (ticket 42, superseding ticket 15's
+    synchronous posture: with a real provider the pass is minutes long,
+    and a reload mid-run used to destroy a paid result). The job queues
+    through the campaign's FIFO (kind `sim-design`, queue strip names it,
+    cancellable while queued) but takes the campaign lock at no point —
+    the design writes nothing and must never block, nor be blocked by, a
+    canon writer. The result lands in the job record, so a reload costs
+    the WAIT, never the spend: the design block restores a finished pass
+    from the record on next load."""
     require_campaign(name)
     try:
-        return simdesign.design_simulation(name, body.premise, body.places)
+        simdesign.grounding(name, body.premise, body.places)
     except simdesign.FedOrRefused as e:
         raise HTTPException(status_code=422, detail=str(e))
-    except simdesign.DesignError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-    except llm_client.BudgetExceeded as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except RuntimeError as e:  # llm_client's readable provider errors
-        raise HTTPException(status_code=503, detail=str(e))
+
+    def job(log):
+        try:
+            out = simdesign.design_simulation(name, body.premise,
+                                              body.places, log=log)
+        except simdesign.FedOrRefused as e:  # raced ground truth since submit
+            raise RuntimeError(f"refused: {e}") from e
+        except simdesign.DesignError as e:
+            raise RuntimeError(str(e)) from e
+        except llm_client.BudgetExceeded as e:
+            raise RuntimeError(str(e)) from e
+        except RuntimeError as e:  # llm_client's readable provider errors
+            raise RuntimeError(str(e)) from e
+        # the requested grounding places ride in the record: the design
+        # block's reload restore prefills the city/other-places fields
+        # from them (the record is the only copy after a reload)
+        out["places"] = body.places or []
+        return out
+
+    return submit_campaign_job("sim-design", name, job, take_lock=False)
 
 
 @router.get("/api/campaign/{name}/simulation")

@@ -24,7 +24,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   navTab, confirmModal, cancelModal, waitToast,
-  countPostsDuring, inlineError,
+  countPostsDuring, inlineError, setDesignDelay,
 } from './helpers';
 
 const DATA_ROOT = process.env.E2E_DATA_ROOT
@@ -63,7 +63,9 @@ test('first-DM front half: create -> design -> world -> simulation', async ({ pa
   await expect(page.locator('#campaign-select option:checked'))
     .toHaveText('E2E Probe');
 
-  // step 2 — design the sandbox (Agent Simulation)
+  // step 2 — design the sandbox (Agent Simulation) — a queued job on the
+  // no-lock lane now (ticket 42), so the step drives the queue strip, a
+  // mid-run reload, and the record restore with a slowed stub reply
   await navTab(page, 'sim', 'Agent Simulation');
   const designBlock = page.locator('.design-block');
   const designBtn = designBlock.locator('.design-run');
@@ -73,24 +75,55 @@ test('first-DM front half: create -> design -> world -> simulation', async ({ pa
 
   await designBlock.locator('.design-premise')
     .fill('The toll bridge burned; wardens and ferrymen blame each other.');
-  // no places AND no world yet: refused, naming the missing grounding
+  // no places AND no world yet: refused, naming the missing grounding —
+  // a synchronous 422, the cheap refusals never cost a queue slot
   await designBtn.click();
   await expect(designBlock.locator('.design-error'))
     .toContainText('world/geography.yaml');
 
   await designBlock.locator('.design-places').fill('Harnost');
+  await setDesignDelay(page, 8);   // the stub answers slowly from here
+  // CANCEL-WHILE-QUEUED first (ticket 42): a second design queues behind
+  // the running one and is cancelled from the queue banner — the running
+  // pass must not even flinch. (The restore fills the CREATE form, not
+  // the design inputs — a fresh pass needs its premise again.)
   const designPosts = await countPostsDuring(page, '/simulation/design',
     async () => {
       await designBtn.click();
+      // the queue strip names the pass while it runs (ticket 42)
+      await expect(page.locator('.queue-strip'))
+        .toContainText('sim-design', { timeout: 15_000 });
       await expect(designBtn).toBeDisabled({ timeout: 5_000 });
       await designBtn.click({ force: true });  // double-submit probe: a
       // disabled button swallows it — the click must not become a run
-      await expect(designBtn).toBeEnabled({ timeout: 30_000 });
+      await page.reload();  // the fresh panel's button is live again
+      await expect(page.locator('.design-inflight'))
+        .toContainText('already running', { timeout: 15_000 });
+      await designBlock.locator('.design-premise')
+        .fill('The toll bridge burned; wardens and ferrymen blame each other.');
+      await designBlock.locator('.design-places').fill('Harnost');
+      await designBtn.click();
+      const banner = page.locator('.design-block .queue-banner');
+      await expect(banner).toContainText('Queued:', { timeout: 15_000 });
+      await banner.locator('.queue-cancel').click();
+      await waitToast(page, /Job cancelled — it was still queued, nothing ran/);
+      // the running pass survived the cancel untouched
+      await expect(page.locator('.queue-strip'))
+        .toContainText('sim-design', { timeout: 15_000 });
     });
-  expect(designPosts).toBe(1);                 // exactly ONE design run
-  await expect(designBlock.locator('.design-result')).toBeVisible();
+  expect(designPosts).toBe(2);     // the real pass + the cancelled duplicate
+  // let the real pass land (the stub delay only shortens future replies)
+  await setDesignDelay(page, 0);
+  await expect(page.locator('.queue-strip'))
+    .toHaveCount(0, { timeout: 60_000 });
+  // RELOAD mid-run cost the WAIT, not the paid result: the fresh panel
+  // restores the prefill from the finished job's record
+  await page.reload();
+  await expect(page.locator('.design-restored'))
+    .toBeVisible({ timeout: 15_000 });
   await expect(page.locator('.sand-premise'))
-    .toHaveValue(/toll bridge burned/);        // prefilled
+    .toHaveValue(/toll bridge burned/);        // restored, not lost
+  await expect(designBlock.locator('.design-result')).toBeVisible();
   await expect(page.locator('.sand-faction')).toHaveCount(2);
   await expect(designBlock.locator('.design-regenerate')).toBeVisible();
 

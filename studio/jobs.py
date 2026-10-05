@@ -43,6 +43,13 @@ def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+def _finished_now() -> str:
+    # microsecond precision: two jobs can finish in the same second (a
+    # queued-cancel followed by the running job's release), and the
+    # last_finished order must follow the real finish sequence
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
 def _new_job(kind: str, campaign: str | None = None) -> dict:
     return {
         "id": uuid.uuid4().hex[:12],
@@ -53,6 +60,11 @@ def _new_job(kind: str, campaign: str | None = None) -> dict:
         "result": None,
         "error": None,
         "started": _now(),
+        # when the job reached a final state (done/error/cancelled) — the
+        # "newest finished" ordering for last_finished, which `started`
+        # cannot give (a job cancelled while queued was STARTED-after an
+        # older job but FINISHED-before it)
+        "_finished_at": None,
         # ring buffer: a 30-minute week logs every engine line; the old
         # append-everything list pinned the whole transcript in RAM
         # (the API only ever served the tail).
@@ -101,11 +113,13 @@ def _execute(job: dict, fn):
         with _LOCK:
             job["result"] = result
             job["status"] = "done"
+            job["_finished_at"] = _finished_now()
         _log.info("job %s (%s) done", job["id"], job["kind"])
     except Exception as e:  # noqa: BLE001 — any failure is a job error
         with _LOCK:
             job["error"] = f"{type(e).__name__}: {e}"
             job["status"] = "error"
+            job["_finished_at"] = _finished_now()
         _log.error("job %s (%s) failed: %s", job["id"], job["kind"], e)
     finally:
         # GC: the ring is dead weight once the job is over (the tail
@@ -221,6 +235,7 @@ class _CampaignQueue:
                 with _LOCK:
                     if job["status"] == "queued":
                         job["status"] = "cancelled"
+                        job["_finished_at"] = _finished_now()
                         job["_log_all"] = None
                 continue
             except Exception as e:  # noqa: BLE001 — it never started
@@ -229,6 +244,7 @@ class _CampaignQueue:
                 with _LOCK:
                     job["error"] = f"{type(e).__name__}: {e}"
                     job["status"] = "error"
+                    job["_finished_at"] = _finished_now()
                     job["_log_all"] = None
                 _log.error("job %s (%s) never started: %s",
                            job["id"], job["kind"], e)
@@ -323,6 +339,7 @@ def cancel(job_id: str) -> str:
     if q is not None and q.cancel(job):
         with _LOCK:
             job["status"] = "cancelled"
+            job["_finished_at"] = _finished_now()
             job["_log_all"] = None
         _log.info("job %s (%s) cancelled while queued", job_id, job["kind"])
         return "cancelled"
@@ -399,8 +416,12 @@ def last_finished(campaign: str, kinds: tuple | None = None) -> dict:
             if kinds is not None and job["kind"] not in kinds:
                 continue
             cur = newest.get(job["kind"])
-            # insertion order breaks `started` ties (later registration wins)
-            if cur is None or job["started"] >= cur["started"]:
+            # finished-at order (a queued-then-cancelled job started after
+            # an older one but finished before it); insertion order breaks
+            # same-second ties (later registration wins)
+            jk = job.get("_finished_at") or job["started"]
+            ck = cur and (cur.get("_finished_at") or cur["started"])
+            if cur is None or jk >= ck:
                 newest[job["kind"]] = job
         return {kind: _public(job) for kind, job in newest.items()}
 

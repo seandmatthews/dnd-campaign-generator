@@ -1,9 +1,9 @@
-/* Tests for the design-result restore (found 2026-10-03): a completed
-   design pass that outlived its panel — the DM checked another tab during
-   the 10+ minute await — used to fill DETACHED nodes while the form reset
-   to empty. The answer is now cached in sessionStorage when it arrives and
-   restored onto the fresh Create form. These tests drive the real
-   S.tabs.sim through the minidom shim: what is asserted is what the
+/* Tests for the design-result restore (ticket 42): the pass is a queued
+   job now, and its JOB RECORD is the durable copy — a reload mid-run (or
+   a pass finished while the DM was on another tab) restores the prefill
+   from the campaign-jobs snapshot's last_finished instead of the
+   sessionStorage cache the 2026-10-03 fix used. These tests drive the
+   real S.tabs.sim through the minidom shim: what is asserted is what the
    shipped IIFE actually renders. Zero dependencies:
      node studio/tests/js/test_design_restore.cjs
    Run by run-tests.py's studio-js-design-restore suite (skipped when node
@@ -15,8 +15,14 @@ const { boot, newPage, installFetch, flush } = require('./minidom.cjs');
 
 const { S } = boot(['sim']);
 S.state.campaign = 'testvale';
+// pollJob (the job watch the design now runs through) reads the bare
+// global StudioLogTail; the UMD wrapper only sets that in a browser
+// (module.exports wins under node), so seed it here
+global.StudioLogTail = require('../../static/js/logtail.js');
+// the maps tab is not loaded here, but sim.js builds artifact nodes via
+// new Image() on some paths — node has none
+global.Image = class Image { constructor() { this.alt = ''; } };
 
-const RESULT_KEY = 'studio-design-result';
 const DESIGN = {
   premise: 'The toll bridge burned the night the wardens raised the toll.',
   factions: [
@@ -31,22 +37,32 @@ const DESIGN = {
   ],
 };
 
-function seedCache(over) {
-  const doc = Object.assign({
-    camp: 'testvale', at: Date.now(),
-    design: DESIGN, places: ['Provis', 'Dunmore'],
+const RESULT = { design: DESIGN, notes: [], usage: { calls: 1 },
+                 places: ['Provis', 'Dunmore'] };
+
+function doneRecord(over) {
+  return Object.assign({
+    id: 'd1', kind: 'sim-design', campaign: 'testvale',
+    status: 'done', log_tail: [],
+    started: new Date().toISOString(),
+    result: RESULT, error: null,
   }, over || {});
-  global.sessionStorage.setItem(RESULT_KEY, JSON.stringify(doc));
-  return doc;
 }
 
-function clearCache() {
-  global.sessionStorage.removeItem(RESULT_KEY);
+function jobsSnap(over) {
+  return Object.assign({
+    campaign: 'testvale', running: null, queued: [],
+    running_estimate: null, last_finished: {},
+  }, over || {});
 }
 
-async function renderSim() {
+async function renderSim(snapshot) {
   global.document = newPage();
-  installFetch([]); // define fetch; unmatched requests 404 (GET /simulation)
+  installFetch([
+    { method: 'GET', match: (u) => /\/jobs$/.test(u),
+      reply: () => snapshot || jobsSnap() },
+    // GET /simulation 404s: no sandbox yet — that is the create panel's state
+  ]);
   const sec = document.querySelector('.tab-section[data-tab="sim"]');
   await S.tabs.sim(sec);
   await flush();
@@ -67,10 +83,9 @@ function ok(name, fn) {
 }
 
 async function main() {
-  await ok('a cached design refills the fresh form: premise, factions, places, extras', async () => {
-    clearCache();
-    seedCache();
-    const sec = await renderSim();
+  await ok('a finished pass\'s record refills the fresh form: premise, factions, places, extras', async () => {
+    const sec = await renderSim(jobsSnap({
+      last_finished: { 'sim-design': doneRecord() } }));
     const panel = createPanel(sec);
     assert.ok(panel, 'the create form rendered (no simulation state)');
     assert.strictEqual(panel.querySelector('.sand-premise').value, DESIGN.premise);
@@ -91,12 +106,11 @@ async function main() {
     return null;
   });
 
-  await ok('no cache: the form starts empty, no note, Regenerate hidden', async () => {
-    clearCache();
+  await ok('no finished record: the form starts empty, no note, Regenerate hidden', async () => {
     const sec = await renderSim();
     const panel = createPanel(sec);
     assert.ok(!panel.querySelector('.sand-premise').value,
-      'no premise without a cached design');
+      'no premise without a finished design');
     assert.strictEqual(panel.querySelectorAll('.f-name').length, 2,
       'exactly the two default faction rows');
     assert.strictEqual(panel.querySelector('.design-restored'), null);
@@ -104,73 +118,82 @@ async function main() {
     return null;
   });
 
-  await ok('a foreign campaign\'s cache and a stale one are both ignored', async () => {
-    clearCache();
-    seedCache({ camp: 'some-other-campaign' });
-    let sec = await renderSim();
+  await ok('a stale record and a shapeless one are both ignored', async () => {
+    let sec = await renderSim(jobsSnap({
+      last_finished: { 'sim-design': doneRecord({
+        started: new Date(Date.now() - S.DESIGN_STALE_MS - 1000)
+          .toISOString() }) } }));
     assert.strictEqual(createPanel(sec).querySelector('.design-restored'), null,
-      'another campaign\'s design must not fill this form');
+      'past the believable window the record must not self-apply');
 
-    clearCache();
-    seedCache({ at: Date.now() - S.DESIGN_STALE_MS - 1000 });
-    sec = await renderSim();
+    sec = await renderSim(jobsSnap({
+      last_finished: { 'sim-design': doneRecord({ result: { design: {} } }) } }));
     assert.strictEqual(createPanel(sec).querySelector('.design-restored'), null,
-      'past the believable window the cache must not self-apply');
+      'a record without factions is not restorable');
+
+    sec = await renderSim(jobsSnap({
+      last_finished: { 'sim-design': doneRecord({ status: 'error' }) } }));
+    assert.strictEqual(createPanel(sec).querySelector('.design-restored'), null,
+      'a failed pass has nothing to restore');
     return null;
   });
 
-  await ok('garbage in the cache is refused, not thrown', async () => {
-    clearCache();
-    global.sessionStorage.setItem(RESULT_KEY, 'garbage{');
-    let sec = await renderSim();
-    assert.strictEqual(createPanel(sec).querySelector('.design-restored'), null);
-
-    // right camp, wrong shape (no factions): not restorable either
-    global.sessionStorage.setItem(RESULT_KEY,
-      JSON.stringify({ camp: 'testvale', at: Date.now(), design: {} }));
-    sec = await renderSim();
-    assert.strictEqual(createPanel(sec).querySelector('.design-restored'), null);
+  await ok('a still queued/running pass says so instead of pretending the form is live', async () => {
+    const sec = await renderSim(jobsSnap({
+      running: { id: 'j9', kind: 'sim-design', status: 'running' } }));
+    const panel = createPanel(sec);
+    const note = panel.querySelector('.design-inflight');
+    assert.ok(note, 'the inflight note renders');
+    assert.ok(/already running/.test(note.textContent) &&
+              /Reloading is safe/.test(note.textContent),
+      'it names the state and the reload safety: ' +
+      JSON.stringify(note.textContent));
+    assert.strictEqual(panel.querySelector('.design-restored'), null,
+      'nothing is restored while the pass runs');
     return null;
   });
 
-  await ok('a completed pass saves its answer; Create consumes the cache', async () => {
-    clearCache();
+  await ok('a completed pass fills the form through the job; Create still writes the sandbox', async () => {
     global.document = newPage();
     const log = installFetch([
+      { method: 'GET', match: (u) => /\/jobs$/.test(u),
+        reply: () => jobsSnap() },
       { method: 'GET', match: (u) => /\/simulation$/.test(u),
         reply: () => ({ __status: 404, error: 'none' }) },
       { method: 'POST', match: (u) => /\/simulation\/design$/.test(u),
-        reply: () => ({ design: DESIGN, notes: ['grounded on 2 places'] }) },
+        reply: () => ({ job_id: 'dj1', queued: false, queue_position: 0 }) },
+      { method: 'GET', match: (u) => /\/api\/jobs\/dj1$/.test(u),
+        reply: () => doneRecord({ id: 'dj1' }) },
       { method: 'POST', match: (u) => /\/simulation\/state$/.test(u),
         reply: () => ({ ok: true }) },
     ]);
     const sec = document.querySelector('.tab-section[data-tab="sim"]');
     await S.tabs.sim(sec);
     await flush();
-    let panel = createPanel(sec);
+    const panel = createPanel(sec);
     panel.querySelector('.design-premise').value = 'a tension';
     panel.querySelector('.design-places').value = 'Provis, Dunmore';
     panel.querySelector('.design-run').click();
-    await flush();
-    const saved = JSON.parse(global.sessionStorage.getItem(RESULT_KEY));
-    assert.ok(saved && saved.design && saved.design.factions.length === 2,
-      'the answer was cached when it arrived');
-    assert.strictEqual(saved.camp, 'testvale');
+    await flush(10);
+    assert.strictEqual(panel.querySelector('.sand-premise').value,
+      DESIGN.premise, 'the finished job\'s result filled the live panel');
     assert.strictEqual(panel.querySelector('.sand-city').value, 'Provis',
-      'the live panel is filled as before');
+      'the recorded places filled the city field');
+    const posted = log.find((e) => e.method === 'POST' &&
+      /\/simulation\/design$/.test(e.url));
+    assert.deepStrictEqual(posted.body,
+      { premise: 'a tension', places: ['Provis', 'Dunmore'] },
+      'the submission is the queued job\'s body');
 
-    // Create consumes it: the design is canon now, the cache must go
-    panel = createPanel(sec);
+    // Create writes the sandbox through the unchanged free path
     panel.querySelector('.sand-city').value = 'Provis';
     // minidom does not reflect the season input's value attribute (the
     // create handler reads it before the city check)
     panel.querySelector('.sand-season').value = 'late autumn';
     panel.querySelector('.sand-create').click();
     await flush();
-    assert.strictEqual(global.sessionStorage.getItem(RESULT_KEY), null,
-      'a created sandbox clears the design cache');
     assert.ok(log.some((e) => e.method === 'POST' &&
-      /\/simulation\/state$/.test(e.url)));
+      /\/simulation\/state$/.test(e.url)), 'the create POST went through');
     return null;
   });
 }

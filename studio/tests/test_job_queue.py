@@ -199,6 +199,38 @@ def test_last_finished_carries_the_newest_job_per_kind(
         "last_finished"]["map-city"]["status"] == "done"
 
 
+def test_last_finished_orders_by_finish_not_submit(tmp_spine_root, client):
+    """A job CANCELLED while queued was submitted after an older job but
+    finished before it — "newest finished" must follow the finish (the
+    design block restores from the record a reload cannot wipe, ticket
+    42, and a cancelled duplicate must not bury the real pass's design)."""
+    release = threading.Event()
+
+    def slow_ok(log):
+        release.wait(timeout=10)
+        return {"slug": "first"}
+
+    first_id, _ = jobs.submit_queued(
+        "testvale", "map-city", slow_ok,
+        before_run=None)  # the no-lock lane, like sim-design
+    deadline = time.time() + 5.0
+    while time.time() < deadline and not jobs.running_jobs("testvale"):
+        time.sleep(0.02)
+    # submitted while the first is running: queued behind it, then cancelled
+    second_id, position = jobs.submit_queued(
+        "testvale", "map-city", lambda log: {"slug": "second"},
+        before_run=None)
+    assert position == 1
+    assert jobs.cancel(second_id) == "cancelled"
+    release.set()
+    assert wait_for_job(client, first_id, timeout=15.0)["status"] == "done"
+
+    lf = client.get("/api/campaign/testvale/jobs").json()["last_finished"]
+    assert lf["map-city"]["status"] == "done", \
+        "the cancelled duplicate must not be the newest finished job"
+    assert lf["map-city"]["result"] == {"slug": "first"}
+
+
 def test_cancel_running_job_is_refused(tmp_spine_root, client, monkeypatch):
     """A job that already started cannot be cancelled — the campaign's
     worker is executing it."""
