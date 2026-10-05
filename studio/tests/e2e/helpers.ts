@@ -14,6 +14,20 @@
 import { expect, type Page, type Response, type Locator } from '@playwright/test';
 
 export const STUDIO_URL = process.env.E2E_STUDIO_URL || 'http://127.0.0.1:8366';
+export const STUB_URL =
+  `http://127.0.0.1:${process.env.E2E_LLM_PORT || 8399}`;
+
+/**
+ * Harness control (not app state): set the stub LLM's sandbox-design
+ * reply delay in seconds (ticket 42 — the design is a queued job now,
+ * and the reload/cancel probes need a pass that stays running). Only the
+ * design step pays the wait; reset to 0 when done.
+ */
+export async function setDesignDelay(page: Page, seconds: number) {
+  const res = await page.request.post(`${STUB_URL}/__delay`,
+    { data: { seconds } });
+  if (!res.ok()) throw new Error(`setDesignDelay(${seconds}) failed: ${res.status()}`);
+}
 
 export async function navTab(page: Page, tabId: string, visibleName: string) {
   const tab = page.locator(`#tab-bar .tab[data-tab="${tabId}"]`);
