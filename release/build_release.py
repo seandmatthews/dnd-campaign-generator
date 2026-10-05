@@ -378,8 +378,14 @@ def verify_sfx(exe, port):
            "CAMPAIGN_STUDIO_HOME": str(dest)}
 
     def kill_all(sfx_proc):
+        # /T tree-kill on the stub takes the whole chain down — install.cmd,
+        # the `start`ed launch.cmd, the python server. Killing only the stub
+        # leaves launch.cmd parked at its final `pause` with its cwd inside
+        # the test install, which then can't be deleted (winerror 183 on the
+        # next verify run).
         if sfx_proc.poll() is None:
-            sfx_proc.kill()
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(sfx_proc.pid)],
+                           capture_output=True)
         kill_port(port)
         subprocess.run(["taskkill", "/F", "/T", "/IM", exe.name], capture_output=True)
 
