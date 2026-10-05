@@ -473,9 +473,15 @@ def generate_entries(campaign_dir, focus="", log=None):
     pending_path = _next_pending_path(campaign_dir)
     created = datetime.datetime.now(datetime.timezone.utc).isoformat(
         timespec="seconds")
+    # the timeline is a FEED here, not a pin (ticket 40): it grounds the
+    # prompt above, but it is NOT in base_revisions — a week accepted
+    # between generation and approval appends to the timeline without
+    # dead-ending this draft (the id collisions it causes renumber,
+    # ticket 37). geography + entities stay pinned: prose derived from a
+    # hand-edited page IS superseded.
     provenance = _input_provenance(
         campaign_dir,
-        files=["world/geography.yaml", "lore/timeline.yaml"]
+        files=["world/geography.yaml"]
               + [f"lore/style/{fn}" for fn in styles],
         dirs=["lore/entities"])
     # atomic: under the campaign lock (submit_campaign_job), but a concurrent

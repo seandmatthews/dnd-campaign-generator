@@ -217,12 +217,12 @@ def test_approve_renumbers_stage_ids_after_week_accept(client, tmp_spine_root):
     assert not path.exists()
 
 
-def test_approve_still_refuses_exact_reapprove_after_crash(
-        client, tmp_spine_root):
-    """The crash-between-writes guard survives ticket 37: an approval that
-    landed in the timeline but never rewrote the pending file re-approves
-    as the SAME title+text — refused (409), pending file untouched, so the
-    DM deletes the pending copy instead of silently duplicating."""
+def test_approve_lands_exact_canon_repeat(client, tmp_spine_root):
+    """Ticket 40's decision: content already in the timeline is NOT
+    refused. The old crash-between-writes guard misfired on legitimate
+    repeats and its window is owned by publication transactions +
+    receipts now — a pending entry identical to a canon entry lands
+    (as a new t-number), exactly what the DM approved from the queue."""
     path = _write_pending(tmp_spine_root, "lore/pending-entries-1.yaml", {
         "entries": [
             {"id": "t0002", "when": "year 212", "title": "The Toll Bridge",
@@ -233,8 +233,32 @@ def test_approve_still_refuses_exact_reapprove_after_crash(
     })
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": "lore/pending-entries-1.yaml", "all": True})
+    assert r.status_code == 200, r.json()
+    entries = _timeline_entries(tmp_spine_root)
+    assert [e["id"] for e in entries] == ["t0001", "t0002", "t0003"]
+    assert entries[2]["title"] == "The Toll Bridge"  # the repeat, renumbered
+    assert not path.exists()
+
+
+def test_approve_refuses_in_batch_duplicate(client, tmp_spine_root):
+    """What TimelineConflict means since ticket 40: the BATCH carries two
+    identical entries — ambiguous input (which one is the real event?),
+    refused with nothing written."""
+    path = _write_pending(tmp_spine_root, "lore/pending-entries-1.yaml", {
+        "entries": [
+            {"id": "p1-1", "when": "year 213", "title": "The Riot",
+             "text": "The docks rioted over the salt tax.", "source":
+             "authored"},
+            {"id": "p1-2", "when": "year 213", "title": "The Riot",
+             "text": "The docks rioted over the salt tax.", "source":
+             "authored"},
+        ],
+        "created": "2026-09-22T00:00:00+00:00", "focus": "",
+    })
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-entries-1.yaml", "all": True})
     assert r.status_code == 409
-    assert "crashed midway" in r.json()["error"]
+    assert "exact same text" in r.json()["error"]
     assert path.exists(), "refused: the pending file is untouched"
     assert len(_timeline_entries(tmp_spine_root)) == 2
 

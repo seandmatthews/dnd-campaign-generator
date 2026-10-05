@@ -24,11 +24,15 @@ class TimelineBadFile(Exception):
 
 
 class TimelineConflict(Exception):
-    """The entry is already in the timeline (exact title+text identity).
-    Routes map this to a 409: re-approving after a mid-crash must not
-    silently duplicate. An id COLLISION alone no longer refuses (ticket
-    37): stage-time ids are advisory, so a colliding entry is renumbered
-    to the next free t-number instead."""
+    """The BATCH itself carries two entries with the same exact
+    title+text — ambiguous input (which one is the real event?), refused
+    and mapped to a 409 by the routes. A repeat of content ALREADY IN
+    canon is not refused (ticket 40): the crash-between-writes window
+    that check used to cover is owned by publication transactions +
+    receipts now, and the check misfired on legitimate repeats — a
+    faction patrolling the same road in week 3 as in week 1 dead-ended
+    the whole week accept with a crash message for a crash that never
+    happened."""
 
 
 def timeline_path(campaign_dir: Path) -> Path:
@@ -67,26 +71,26 @@ def append(doc, entries: list, chosen: list):
     An entry whose own t-number is free keeps it; a missing OR colliding id
     gets the next free t-number — stage-time ids are advisory (loregen mints
     them against the timeline it read, but a week accepted in between can
-    take those numbers first, ticket 37). A batch whose title+text is
-    already in the timeline is refused (TimelineConflict) — that is the
-    crash-between-writes recovery path: the append landed, the pending
-    rewrite did not, and re-approving would silently duplicate.
-    Returns the doc; nothing is written here."""
+    take those numbers first, ticket 37). Content already in the timeline
+    is NOT refused (ticket 40): the crash window that check covered is
+    owned by publication transactions + receipts now, and it misfired on
+    legitimate repeats across weeks. Only an exact duplicate WITHIN the
+    batch is refused (TimelineConflict) — ambiguous input, not a crash
+    signature. Returns the doc; nothing is written here."""
     existing = existing_tnums(entries)
-    seen = {(str(e.get("title") or ""), str(e.get("text") or ""))
-            for e in entries if isinstance(e, dict)}
+    seen: set = set()
     for entry in chosen:
         eid = str(entry.get("id") or "")
         if eid and T_ID_RE.match(eid) and int(eid[1:]) not in existing:
-            existing.add(int(eid[1:]))  # also guards duplicates within the batch
+            existing.add(int(eid[1:]))  # also guards duplicate ids within the batch
             continue  # keep the entry's own t-id
         identity = (str(entry.get("title") or ""), str(entry.get("text") or ""))
         if identity != ("", "") and identity in seen:
             raise TimelineConflict(
-                f"an entry titled {identity[0]!r} with this exact text "
-                f"is already in lore/timeline.yaml — if a previous "
-                f"approve crashed midway, delete it from the pending "
-                f"file instead of re-approving")
+                f"this batch carries two entries titled {identity[0]!r} "
+                f"with the exact same text — which one is the real event? "
+                f"Delete or reword one in the source (the pending file or "
+                f"the proposal) instead of approving both")
         next_num = (max(existing) + 1) if existing else 1
         entry["id"] = f"t{next_num:04d}"
         existing.add(next_num)

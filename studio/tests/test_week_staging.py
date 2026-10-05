@@ -223,6 +223,44 @@ def test_get_proposal_reads_bundle_and_accept_publishes_once(
         "/api/campaign/testvale/simulation/proposal").json()["proposal"] is None
 
 
+def test_week_accepting_a_repeated_action_succeeds(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 40: a faction legitimately repeating an action across weeks
+    (a patrol runs weekly) must not dead-end the second week. The old
+    in-append identity check refused the whole accept because week 5's
+    timeline entry repeated week 4's exact title+text — a crash message
+    for a crash that never happened."""
+    job = _run_week(client, monkeypatch, tmp_spine_root)
+    pid = job["result"]["proposal_id"]
+    r = client.post(f"/api/campaign/testvale/simulation/proposal/{pid}/accept")
+    assert r.status_code == 200, r.text
+
+    repeat = [
+        {"week": 5, "actor": "bastard",
+         "text": "Petition the Reliquary to convene a formal examination — "
+                 "succeeded (contested vs mint), margin +3"},
+    ]
+    job2 = _run_week(client, monkeypatch, tmp_spine_root,
+                     events=repeat, week=5)
+    assert job2["status"] == "done", job2["error"]
+    pid2 = job2["result"]["proposal_id"]
+    assert job2["result"]["status"] == "pending"
+    r2 = client.post(
+        f"/api/campaign/testvale/simulation/proposal/{pid2}/accept")
+    assert r2.status_code == 200, r2.text
+
+    timeline = yaml.safe_load(
+        (tmp_spine_root / "testvale" / "lore" / "timeline.yaml").read_text(
+            encoding="utf-8"))
+    entries = timeline if isinstance(timeline, list) else timeline["entries"]
+    titles = [e["title"] for e in entries]
+    assert titles.count(
+        "Petition the Reliquary to convene a formal") == 2, \
+        "both weeks' entries landed, as distinct t-numbers"
+    assert [e["source"] for e in entries if e["when"] == "week 5"] == \
+        ["sim:week-5"]
+
+
 def test_accept_reads_chronicle_meta_from_the_bundle_not_scratch(
         client, tmp_spine_root, monkeypatch):
     """The regression: acceptance parsed chronicle metadata from the SHARED

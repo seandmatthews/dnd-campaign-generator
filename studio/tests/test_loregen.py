@@ -165,6 +165,30 @@ def test_entries_job_stages_pending_and_attaches_findings(
 # 3. Entry validation drops hallucinated places ---------------------------
 
 
+def test_staged_draft_pins_geography_but_not_the_timeline(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 40's decision: the timeline is a FEED (it grounds the
+    prompt), not a PIN. base_revisions carries geography + style only —
+    a week accepted between generation and approval appends to the
+    timeline without dead-ending this draft (its id collisions renumber,
+    ticket 37). lore/entities stays fingerprinted: prose derived from a
+    hand-edited page IS superseded."""
+    _canned_llm(monkeypatch, VALID_ENTRIES, "```json\n[]\n```")
+    camp = tmp_spine_root / CAMP
+
+    r = client.post(f"/api/campaign/{CAMP}/lore/entries",
+                    json={"focus": "the toll bridge"})
+    assert r.status_code == 202, r.text
+    job = wait_for_job(client, r.json()["job_id"], timeout=60)
+    assert job["status"] == "done", job["error"]
+
+    doc = yaml.safe_load((camp / "lore" / "pending-entries-1.yaml")
+                         .read_text("utf-8"))
+    assert "lore/timeline.yaml" not in doc["base_revisions"]
+    assert "world/geography.yaml" in doc["base_revisions"]
+    assert "lore/entities" in doc["input_fingerprints"]
+
+
 def test_hallucinated_entry_dropped_with_finding(tmp_spine_root, monkeypatch):
     _canned_llm(monkeypatch, entries_yaml="""- when: before the toll
   title: The Silver Bazaar of Qeth

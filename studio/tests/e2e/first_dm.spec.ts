@@ -274,30 +274,11 @@ async function runBackHalf(page: Page) {
   await waitToast(page, /Week 1 is canon — accepted exactly once/);
   await expect(page.locator('.clock-week').first()).toHaveText(/Week 1/);
 
-  // step 8 — approving the pending entries AFTER the week accept. TWO
-  // gates sit on this sequence: ticket 37's id collision (fixed — the
-  // entries renumber now, unit-pinned) and the draft's PROVENANCE pin:
-  // the week changed lore/timeline.yaml, the draft was generated from
-  // it, so the approval refuses as a stale review naming its remedy.
-  // The remedy works: delete the dead draft, regenerate (a stub run is
-  // free), approve — the fresh entries land. Ticket 40 tracks whether
-  // entry drafts should keep pinning the timeline at all.
-  await navTab(page, 'review', 'Review');
-  await page.locator('.review-approve-all').click();
-  await expect(page.locator('.review-inline-error').first())
-    .toContainText('stale review');
-  // delete-all is two-click armed ("Really delete?" within 4s)
-  const delAll = page.locator('.review-delete-all').first();
-  await delAll.click();
-  await expect(delAll).toHaveText('Really delete?');
-  await delAll.click();
-  await expect(page.locator('.review-card:not(.is-finding)')).toHaveCount(0,
-    { timeout: 30_000 });                      // the dead draft is gone
-  // (advisory .is-finding cards, if any, are not deletable entries)
-  await navTab(page, 'world', 'World Building');
-  await backstoryGen(page).click();
-  await confirmModal(page, 'This costs real credits');
-  await waitToast(page, /Backstory staged to Review/);
+  // step 8 — approving the pending entries AFTER the week accept, in the
+  // order the app's own Help recommends. Ticket 37 (ids renumber) and
+  // ticket 40 (drafts no longer pin the timeline; the identity guard is
+  // in-batch only) cleared both gates this sequence used to dead-end:
+  // the paid-for entries approve directly.
   await navTab(page, 'review', 'Review');
   await page.locator('.review-approve-all').click();
   await waitToast(page, /Approved /);
