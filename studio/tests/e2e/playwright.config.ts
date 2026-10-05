@@ -26,7 +26,10 @@ process.env.E2E_DATA_ROOT = DATA_ROOT;
 
 // env both the studio AND its engine subprocesses inherit (engines._run
 // passes the parent env down): the stub provider, plus the port the host
-// allowlist derives from
+// allowlist derives from. OBSIDIAN_CONFIG points the vault-registration
+// service (ticket 45) at a throwaway file so the authoring card's
+// registered/unregistered branches are hermetic — never the real
+// obsidian.json.
 const STUDIO_ENV = {
   ...process.env,
   STUDIO_PORT: String(STUDIO_PORT),
@@ -34,11 +37,12 @@ const STUDIO_ENV = {
   LLM_BASE_URL: `http://127.0.0.1:${STUB_PORT}/v1`,
   LLM_MODEL: 'e2e-stub',
   LLM_API_KEY: 'e2e-stub-key',
+  OBSIDIAN_CONFIG: join(DATA_ROOT, 'obsidian.json'),
 };
 
 export default defineConfig({
   testDir: '.',
-  testMatch: /(first_dm|second_evening)\.spec\.ts$/,
+  testMatch: /(campaign_shell|first_dm|second_evening)\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   retries: 0,

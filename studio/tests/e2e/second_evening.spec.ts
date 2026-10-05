@@ -115,6 +115,11 @@ test('second evening: places, quests, missing pages, rumors, facts, sessions, go
   await waitToast(page, /Week 1 is canon — accepted exactly once/);
   await expect(page.locator('.clock-week').first()).toHaveText(/Week 1/);
 
+  // the accept is durable: a refresh keeps the clock and drops the proposal
+  await page.reload();
+  await expect(page.locator('.clock-week').first()).toHaveText(/Week 1/);
+  await expect(page.locator('.proposal-panel')).toHaveCount(0);
+
   // ---- fixture lore files (vault writes, per the no-in-app-editor ruling)
   writePage('Harnost', [
     '---',
@@ -308,6 +313,32 @@ test('second evening: places, quests, missing pages, rumors, facts, sessions, go
     `/api/campaign/${CAMPAIGN}/disclosure/handout`);
   expect(handout.status()).toBe(200);
   expect(await handout.text()).toContain((claim || '').trim());
+
+  // the leak gate: a DM-only fact (the record form's default) never
+  // reaches the handout, while the revealed rumor stays in it
+  const SECRET = 'The wardens keep their true tally in cipher under the bridge.';
+  await factForm.locator('.fact-text').fill(SECRET);
+  await factForm.locator('.fact-vis .vis-mode').selectOption('dm_only');
+  await factForm.locator('.fact-record').click();
+  await waitToast(page, /Fact recorded/);
+  await expect(page.locator('.fact-card').filter({ hasText: 'cipher' })
+    .locator('.pill-vis-dm')).toHaveText('DM only');
+  const gated = await page.request.get(
+    `/api/campaign/${CAMPAIGN}/disclosure/handout`);
+  const gatedText = await gated.text();
+  expect(gatedText).toContain((claim || '').trim());
+  expect(gatedText).not.toContain('cipher');
+
+  // revoke (two-step arm): the party unlearns it — the handout drops the
+  // claim again, and the card offers Reveal once more, not Revoke
+  await revealedCard.locator('.fact-revoke').click();   // arm
+  await revealedCard.locator('.fact-revoke').click();   // fire
+  await waitToast(page, /Revoked — the handout no longer contains it/);
+  await expect(revealedCard.locator('.fact-revoke')).toHaveCount(0);
+  await expect(revealedCard.locator('.fact-reveal')).toBeVisible();
+  const unlearned = await page.request.get(
+    `/api/campaign/${CAMPAIGN}/disclosure/handout`);
+  expect(await unlearned.text()).not.toContain((claim || '').trim());
 
   // =============================================================== Facts
   // supersede: the corrected text replaces it; the old fact stays as a
