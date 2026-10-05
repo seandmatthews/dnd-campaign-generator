@@ -156,7 +156,11 @@ def build_stage(node_zip):
             shutil.rmtree(p) if p.is_dir() else p.unlink()
     (worlds / "raw").mkdir(exist_ok=True)
     copy_tree(REPO / "verification", STAGE / "verification")
-    shutil.copy2(REPO / "docs" / "for-new-gms" / "TUTORIAL.md", STAGE / "TUTORIAL.md")
+    # /tutorial reads <bundle root>/docs/for-new-gms/TUTORIAL.md — stage it
+    # exactly there so the help modal's link works on installed copies too.
+    (STAGE / "docs" / "for-new-gms").mkdir(parents=True)
+    shutil.copy2(REPO / "docs" / "for-new-gms" / "TUTORIAL.md",
+                 STAGE / "docs" / "for-new-gms" / "TUTORIAL.md")
     shutil.copy2(REPO / "llm.env.example", STAGE / "llm.env.example")
 
     # the data home: seeded empty (launch.cmd points CAMPAIGN_DATA_ROOT
