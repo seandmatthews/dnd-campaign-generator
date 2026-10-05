@@ -146,6 +146,65 @@ async function main() {
     assert.ok(panel.textContent.indexOf('the vault is unreadable') !== -1);
     return null;
   });
+
+  // ---- the authoring card's vault registration (ticket 45). The default
+  // /lore/path stub carries no obsidian_registered: falsy reads as
+  // unregistered, which is the first-run state.
+
+  function authoringCard(sec) {
+    return sec.querySelectorAll('.authoring-card')[0];
+  }
+
+  await ok('an unregistered folder shows the walkthrough and the register button', async () => {
+    resetFetch();
+    const sec = await renderWorld();
+    const card = authoringCard(sec);
+    assert.ok(card, 'the authoring card rendered');
+    const walk = card.querySelector('.lore-walkthrough');
+    assert.ok(walk && !walk.classList.contains('hidden'),
+      'the Vault-not-found walkthrough is visible');
+    assert.ok(walk.textContent.indexOf('Vault not found') !== -1,
+      'the walkthrough names the real first-click error');
+    const reg = card.querySelector('.lore-register');
+    assert.ok(reg && !reg.disabled, 'the register button is live');
+    assert.ok(card.querySelector('.lore-registered-note')
+      .classList.contains('hidden'),
+      'the registered note stays hidden until registering');
+    return null;
+  });
+
+  await ok('a registered folder hides the walkthrough — Open just works', async () => {
+    resetFetch([{ method: 'GET', match: (u) => /\/lore\/path$/.test(u),
+      reply: () => ({ path: 'C:/nowhere/lore',
+        obsidian_uri: 'obsidian://x', obsidian_registered: true }) }]);
+    const sec = await renderWorld();
+    const card = authoringCard(sec);
+    assert.ok(card.querySelector('.lore-walkthrough')
+      .classList.contains('hidden'),
+      'no walkthrough for a folder Obsidian already knows');
+    assert.ok(card.querySelector('.lore-open'),
+      'the Open link is present');
+    return null;
+  });
+
+  await ok('clicking Register POSTs once and flips the card to registered', async () => {
+    resetFetch([{ method: 'POST', match: (u) => /\/lore\/obsidian$/.test(u),
+      reply: () => ({ registered: true, already: false }) }]);
+    const sec = await renderWorld();
+    const card = authoringCard(sec);
+    card.querySelector('.lore-register').click();
+    await flush();
+    assert.ok(card.querySelector('.lore-walkthrough')
+      .classList.contains('hidden'),
+      'the walkthrough is gone after registering');
+    assert.ok(!card.querySelector('.lore-registered-note')
+      .classList.contains('hidden'),
+      'the quit-and-reopen note shows');
+    const posts = log.filter((e) => e.method === 'POST' &&
+      /\/lore\/obsidian$/.test(e.url));
+    assert.strictEqual(posts.length, 1, 'exactly one registration POST');
+    return null;
+  });
 }
 
 main().then(() => {

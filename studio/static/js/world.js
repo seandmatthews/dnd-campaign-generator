@@ -691,15 +691,24 @@
               'href="https://obsidian.md/download">Get Obsidian</a>' +
           '</div>' +
           '<p class="muted form-note">The copy button gives the full folder ' +
-            'path &mdash; point any editor at it. With Obsidian installed, ' +
-            'Open focuses the vault &mdash; but a folder Obsidian has never ' +
-            'seen has no vault to focus: the first click shows ' +
-            'Obsidian&rsquo;s own &ldquo;Vault not found&rdquo; error, not an ' +
-            'add-vault dialog.</p>' +
-          '<p class="muted form-note lore-open-hint">First time? If Open says ' +
-            '&ldquo;Vault not found&rdquo;, register the folder once: in ' +
-            'Obsidian, &ldquo;Open folder as vault&rdquo; &rarr; the path the ' +
-            'Copy button gives. After that one-time registration, Open works.</p>' +
+            'path &mdash; point any editor at it.</p>' +
+          '<div class="lore-walkthrough">' +
+            '<p class="muted form-note">A folder Obsidian has never seen has ' +
+              'no vault to focus: the first click on Open shows ' +
+              'Obsidian&rsquo;s own &ldquo;Vault not found&rdquo; error, not an ' +
+              'add-vault dialog. Register the folder once &mdash; with the ' +
+              'button below, or by hand in Obsidian (&ldquo;Open folder as ' +
+              'vault&rdquo; &rarr; the path the Copy button gives). After that ' +
+              'one-time registration, Open works.</p>' +
+            '<div class="inline-form">' +
+              '<button type="button" class="btn btn-primary lore-register">' +
+                'Register this folder as a vault</button>' +
+            '</div>' +
+          '</div>' +
+          '<p class="muted form-note lore-registered-note hidden">Registered. ' +
+            'If Obsidian is open right now, quit and reopen it once &mdash; it ' +
+            'keeps its vault list in memory and would drop this entry ' +
+            'otherwise. Then Open focuses the vault.</p>' +
           '<div class="form-error"></div>' +
         '</div>' +
       '</section>'
@@ -708,6 +717,10 @@
     const openLink = card.querySelector('.lore-open');
     const copyBtn = card.querySelector('.lore-copy');
     const errBox = card.querySelector('.form-error');
+    // the walkthrough shows until the folder is a registered vault (or the
+    // button registers it); the registered note explains the one caveat
+    const walkthrough = card.querySelector('.lore-walkthrough');
+    const regNote = card.querySelector('.lore-registered-note');
 
     card.querySelector('.authoring-dismiss').addEventListener('click', () => {
       try { localStorage.setItem(authoringKey(S.state.campaign), '1'); }
@@ -725,6 +738,27 @@
       }
     });
 
+    // one click instead of Obsidian's "Open folder as vault" dance: the
+    // studio merges the entry into obsidian.json (backed up first). A
+    // running Obsidian keeps its vault list in memory — hence the note.
+    card.querySelector('.lore-register').addEventListener('click', async () => {
+      const regBtn = card.querySelector('.lore-register');
+      regBtn.disabled = true;
+      errBox.innerHTML = '';
+      try {
+        await S.api(S.campUrl('/lore/obsidian'), { method: 'POST', body: {} });
+        walkthrough.classList.add('hidden');
+        regNote.classList.remove('hidden');
+        S.toast('Registered — if Obsidian is open right now, quit and reopen it once.', 'ok');
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err,
+          'Obsidian could not be registered automatically — the note above ' +
+          'still registers it by hand.'));
+        regBtn.disabled = false;
+      }
+    });
+
     // the absolute folder + its obsidian:// URI are server-resolved — the
     // browser only knows the campaign name
     S.api(S.campUrl('/lore/path')).then((p) => {
@@ -739,6 +773,10 @@
       if (p && p.obsidian_uri) {
         openLink.href = String(p.obsidian_uri); // property set: never parsed as markup
         openLink.classList.remove('hidden');
+      }
+      if (p && p.obsidian_registered) {
+        // already one of Obsidian's vaults: Open just works — calm the card
+        walkthrough.classList.add('hidden');
       }
     }).catch((err) => {
       if (!card.isConnected) return;

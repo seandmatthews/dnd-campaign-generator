@@ -147,14 +147,17 @@ async function main() {
     // the registration path, in the order a newcomer needs it
     assert.ok(/Open folder as vault/.test(text),
       'the vault-manager registration step is named');
-    // and the static hint sits under the buttons, carrying the same guidance
-    const hint = card.querySelector('.lore-open-hint');
-    assert.ok(hint, 'the first-time hint renders');
+    // and the walkthrough sits under the buttons, carrying the same guidance
+    // (ticket 45 renamed it and added the one-click Register beside it)
+    const hint = card.querySelector('.lore-walkthrough');
+    assert.ok(hint, 'the walkthrough renders while the folder is unregistered');
     const hintText = hint.textContent;
     assert.ok(/Vault not found/.test(hintText) &&
               /Open folder as vault/.test(hintText) &&
               /Copy button/.test(hintText),
       `the hint itself carries the recovery guidance — reads: ${hintText}`);
+    assert.ok(card.querySelector('.lore-register'),
+      'the one-click register button is beside the guidance');
     return null;
   });
 }

@@ -21,6 +21,7 @@ import canon
 import links
 import llm_client
 import loregen
+import obsidian_vault
 import spine
 from routers.common import (blocking_findings, campaign_lock_nowait,
                             ensure_entities_migrated, require_campaign,
@@ -118,13 +119,37 @@ def get_lore_path(name: str):
     campaign path — so the resolved folder, and the obsidian://open?path=
     URI URL-encoded from it, come from this one read-only GET. It is a
     pointer for the DM's outside editor (Obsidian); there is no write here
-    and none will be (the no-in-app-editor ruling)."""
+    and none will be (the no-in-app-editor ruling). obsidian_registered
+    tells the authoring card whether the folder is already one of
+    Obsidian's vaults — a folder Obsidian has never seen has no vault to
+    focus, and the first click shows Obsidian's own "Vault not found"
+    error."""
     lore = require_campaign(name) / "lore"
     path = str(lore.resolve())
     return {
         "path": path,
         "obsidian_uri": "obsidian://open?path=" + quote(path, safe=""),
+        "obsidian_registered": obsidian_vault.is_registered(path),
     }
+
+
+@router.post("/api/campaign/{name}/lore/obsidian", status_code=201)
+def post_lore_obsidian(name: str):
+    """Register this campaign's lore folder in Obsidian's vault list so
+    the obsidian:// link focuses it instead of erroring (ticket 45).
+
+    Writes ONE entry into Obsidian's own config (obsidian.json) — backed
+    up first, merged never clobbered, campaign path resolved server-side
+    so the request takes no path argument. Pages stay the DM's: this is
+    environment setup, not authoring. A running Obsidian keeps its vault
+    list in memory and would drop a concurrent edit, so the UI always
+    carries the quit-and-reopen note."""
+    lore = require_campaign(name) / "lore"
+    path = str(lore.resolve())
+    try:
+        return obsidian_vault.register(path)
+    except obsidian_vault.ObsidianConfigError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/api/campaign/{name}/lore/pages/missing")

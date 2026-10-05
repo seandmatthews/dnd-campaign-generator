@@ -240,11 +240,22 @@ shapes in this document true.
   `entities.yaml` still reads; the first open of the campaign (summary or
   lore GET) migrates it to pages and deletes it, under the campaign lock,
   with snapshot `campaign/<name>: migrate entities.yaml to N entity pages`.
-- `GET /api/campaign/{name}/lore/path` → `{"path":str,"obsidian_uri":str}` —
-  the resolved absolute lore folder and the `obsidian://open?path=<url-encoded
-  folder>` deep link built from it (the browser cannot know the absolute
-  campaign path). A read-only pointer for the DM's outside editor; there is
-  no write route here and none is planned (the no-in-app-editor ruling).
+- `GET /api/campaign/{name}/lore/path` → `{"path":str,"obsidian_uri":str,
+  "obsidian_registered":bool}` — the resolved absolute lore folder and the
+  `obsidian://open?path=<url-encoded folder>` deep link built from it (the
+  browser cannot know the absolute campaign path), plus whether the folder
+  is already one of Obsidian's registered vaults. A pointer for the DM's
+  outside editor; no page write route exists or is planned (the
+  no-in-app-editor ruling).
+- `POST /api/campaign/{name}/lore/obsidian` → 201
+  `{"registered":true,"already":bool,"path":str,"config":str}` — register
+  the lore folder in Obsidian's vault list (`obsidian.json`) so the deep
+  link focuses it instead of erroring with Obsidian's "Vault not found".
+  Merges one entry (backed up to `obsidian.json.studio-backup` first);
+  idempotent; the campaign path is resolved server-side so the request
+  takes no path argument. A corrupt config is a 409 that refuses rather
+  than clobbers. Caveat carried by the UI: a running Obsidian keeps its
+  vault list in memory — quit and reopen it once after registering.
 - `GET /api/campaign/{name}/lore/pages/missing` → `{"targets":[{"target":str,
   "sources":[campaign-relative files]}]}` — the dangling wiki-links grouped
   by name, most-linked first. Empty list = nothing to write. (Declared

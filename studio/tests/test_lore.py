@@ -1,5 +1,7 @@
 """Lore reads, entity pages, and the fed-or-refused generation guards."""
 
+import json
+
 
 def test_lore_get_shape(client, spine_root):
     r = client.get("/api/campaign/testvale/lore")
@@ -98,3 +100,52 @@ def test_review_now_lives_in_test_review(client, spine_root):
     test_review.py; this only pins the route's existence."""
     r = client.get("/api/campaign/testvale/review")
     assert r.status_code == 200
+
+
+def test_lore_path_carries_obsidian_registration(client, spine_root,
+                                                 tmp_path, monkeypatch):
+    """GET /lore/path tells the authoring card whether the folder is
+    already one of Obsidian's vaults (OBSIDIAN_CONFIG points the service
+    at a throwaway config)."""
+    monkeypatch.setenv("OBSIDIAN_CONFIG", str(tmp_path / "obsidian.json"))
+    r = client.get("/api/campaign/testvale/lore/path")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["obsidian_uri"].startswith("obsidian://open?path=")
+    assert body["obsidian_registered"] is False
+
+
+def test_lore_obsidian_register_roundtrip(client, spine_root, tmp_path,
+                                          monkeypatch):
+    """POST /lore/obsidian registers the campaign's RESOLVED lore folder
+    (no path argument — the server resolves it), is idempotent, and the
+    GET flips to registered."""
+    monkeypatch.setenv("OBSIDIAN_CONFIG", str(tmp_path / "obsidian.json"))
+    path = client.get("/api/campaign/testvale/lore/path").json()["path"]
+
+    r = client.post("/api/campaign/testvale/lore/obsidian")
+    assert r.status_code == 201, r.text
+    assert r.json()["registered"] is True
+    assert r.json()["already"] is False
+
+    again = client.post("/api/campaign/testvale/lore/obsidian")
+    assert again.status_code == 201
+    assert again.json()["already"] is True
+
+    assert client.get("/api/campaign/testvale/lore/path") \
+        .json()["obsidian_registered"] is True
+    # the entry names the folder the GET resolved, byte for byte
+    doc = json.loads((tmp_path / "obsidian.json").read_text(encoding="utf-8"))
+    assert [v["path"] for v in doc["vaults"].values()] == [path]
+
+
+def test_lore_obsidian_refuses_corrupt_config(client, spine_root, tmp_path,
+                                              monkeypatch):
+    """A corrupt obsidian.json is a 409 that says so — never a clobber."""
+    bad = tmp_path / "obsidian.json"
+    bad.write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("OBSIDIAN_CONFIG", str(bad))
+    r = client.post("/api/campaign/testvale/lore/obsidian")
+    assert r.status_code == 409
+    assert "refusing" in r.json()["error"]
+    assert bad.read_text(encoding="utf-8") == "{broken"
