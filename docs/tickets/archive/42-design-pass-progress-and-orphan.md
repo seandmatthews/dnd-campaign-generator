@@ -94,9 +94,11 @@ same commit).
 - **`last_finished` orders by finish, not submit:** a duplicate design
   cancelled while queued was submitted after the real pass but finished
   before it — `started`-order buried the real design behind the
-  cancelled record. Jobs now carry an internal microsecond
-  `_finished_at`; pinned by
-  `test_last_finished_orders_by_finish_not_submit`.
+  cancelled record. Jobs now carry an internal monotonic `_finish_seq`
+  stamped at each final state; pinned by
+  `test_last_finished_orders_by_finish_not_submit`. (A first cut used
+  microsecond timestamps — two finishes inside one Windows clock tick
+  tie, and the tie broke the wrong way; a counter cannot tie.)
 - **E2E:** the design step now slows the stub's design reply via a
   runtime harness control (`POST /__delay` on `llm_stub.py` — only this
   step pays the wait), then drives the queue strip ("Running:

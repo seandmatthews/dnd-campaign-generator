@@ -1,6 +1,6 @@
 # 44 — Second-evening e2e: cover the surfaces the first-DM pass skips
 
-**Status:** proposed
+**Status:** completed (2026-10-05)
 **Priority:** P3
 **Area:** `studio/tests/e2e/` (new spec, helpers, `llm_stub.py`, `playwright.config.ts`)
 **Found by:** live GM pass on a fresh campaign (2026-10-04) diffed against `first_dm.spec.ts` coverage; findings recorded in tickets 41–43
@@ -98,43 +98,85 @@ without new harness work.
 
 ## Acceptance criteria
 
-- [ ] `second_evening.spec.ts` runs green alongside `first_dm.spec.ts`
+- [x] `second_evening.spec.ts` runs green alongside `first_dm.spec.ts`
       in one `npx playwright test` invocation (testMatch widened) —
       pinned by the suite itself
-- [ ] Places: suggested join appears for the fixture place page; Link
+- [x] Places: suggested join appears for the fixture place page; Link
       flips the pill to "linked" and writes `place_id:` into the page
       (fs assert); place detail lists the page under Mentions —
       `second_evening.spec.ts`
-- [ ] Quests: the fixture quest page groups under "active" with its
+- [x] Quests: the fixture quest page groups under "active" with its
       "due week 2" line; a status flip through the page view regroups
       the card — `second_evening.spec.ts`
-- [ ] Missing pages: the fixture dangling link appears in the card; the
+- [x] Missing pages: the fixture dangling link appears in the card; the
       run stages draft(s) grounded in the linking page; approve creates
       the page — `second_evening.spec.ts` (stub reply required)
-- [ ] Rumor chain: Tell the party switches to Knowledge with the
+- [x] Rumor chain: Tell the party switches to Knowledge with the
       "Prefilled from a rumor" note and prefilled fields; Record then
       Reveal puts the line in the party-disclosure handout body —
       `second_evening.spec.ts`
-- [ ] Facts: supersede keeps the provenance row (labeled superseded,
+- [x] Facts: supersede keeps the provenance row (labeled superseded,
       never compiled) and the corrected fact's Reveal state —
       `second_evening.spec.ts`
-- [ ] Sessions: a manual suggestion without a citation is refused at
+- [x] Sessions: a manual suggestion without a citation is refused at
       prepare; with it excluded, prepare succeeds; append-revision
       evidence cites `notes/0002.md` — `second_evening.spec.ts`
-- [ ] Goal review: propose stages a goal-updates proposal; discard
+- [x] Goal review: propose stages a goal-updates proposal; discard
       leaves the campaign unchanged (receipt toast) —
       `second_evening.spec.ts`
-- [ ] Forecast: the card labels its weeks as forecast/HYPOTHETICAL,
+- [x] Forecast: the card labels its weeks as forecast/HYPOTHETICAL,
       offers Discard and no Accept, and discard keeps the receipt —
       `second_evening.spec.ts`
-- [ ] Battlemap (`HAS_FMG` only): the scene appears in the Maps tab and
+- [x] Battlemap (`HAS_FMG` only): the scene appears in the Maps tab and
       `maps/sites/<slug>/` carries the `.uvtt` + companion note —
       `second_evening.spec.ts`
-- [ ] `llm_stub.py` serves the goal-review and missing-pages prompt
+- [x] `llm_stub.py` serves the goal-review and missing-pages prompt
       shapes (prompt-keyed, same dispatch style as existing replies) —
       exercised by the criteria above
 
-## Implementation notes (YYYY-MM-DD)
+## Implementation notes (2026-10-05)
 
-How it actually landed: commit refs, deliberate deviations from the
-proposal, follow-ups. Written when the status flips.
+Landed as one change on `master` (ticket moved to `archive/` in the
+same commit).
+
+- **One spec, one play, ~55 s on this machine** (stub-fast throughout;
+  the whole `studio-e2e` suite — both specs — runs ~2.5 min). The
+  battlemap leg ran green behind `HAS_FMG` here (FMG tools present); on
+  machines without them it skips with the note, like first_dm steps 4-5.
+  The run-tests suite label is now `studio-e2e` (it is no longer only
+  the first-DM pass).
+- **Harness fix the spec surfaced:** specs that write fixture FILES must
+  land them in the root the studio actually reads. The config's
+  `mkdtempSync` data root was invisible to the test workers — first_dm
+  never noticed because its fixture-writing back half skips on FMG
+  machines. `playwright.config.ts` now exports the resolved root as
+  `E2E_DATA_ROOT` to the workers.
+- **Stub additions:** missing-pages (marker "Write the missing pages";
+  the draft declares its target in `new_names` so the hallucination
+  check grounds it) and goal review (marker "Propose goal updates
+  ONLY"; one update for `the_bridge_wardens`, the sandbox's minted id).
+  Both branch BEFORE the week-proposal catch, whose
+  "Reply with the YAML block ONLY" marker would otherwise swallow the
+  missing-pages prompt.
+- **Deviation (quest status flip):** there is no in-app flip UI — the
+  no-in-app-lore-editor ruling keeps quest edits in the vault, and
+  `PATCH /quests/{page}` has no client. The spec flips the status the
+  way the GM does (a vault write) and pins the regroup on re-render;
+  the row's lore-page view is driven separately.
+- **Deviation (manual-citation refusal shape):** the refusal fires for
+  a hand-authored card added to an EXTRACTION-origin draft
+  (`sessions.py` — manual-origin drafts legitimately need no citation).
+  The fresh render keeps the refused card selected (the refusal's save
+  persisted its selection), so the spec unchecks it explicitly before
+  the succeeding prepare — pinned honestly, blocker and all.
+- **The goal-discard state check is scoped to the sim section:** inactive
+  tab sections stay in the DOM, and a sessions draft card contains the
+  faction's name in its unresolved-actor select — an unscoped article
+  locator matched that instead of the faction card.
+- **Ride-along from verification (named):** the `last_finished` finish
+  order from ticket 42 flaked under cross-test timing — two finishes
+  inside one Windows clock tick produced identical timestamps and the
+  tie broke toward the cancelled duplicate. `jobs.py` now stamps a
+  monotonic `_finish_seq` at every final state (counter, not clock);
+  ticket 42's archived notes amended, and
+  `test_last_finished_orders_by_finish_not_submit` pins the ordering.

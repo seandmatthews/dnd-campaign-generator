@@ -210,6 +210,28 @@ def _reply_for(prompt: str) -> str:
         if DESIGN_DELAY["s"] > 0:
             time.sleep(DESIGN_DELAY["s"])
         return json.dumps(DESIGN_JSON)
+    if "Write the missing pages" in prompt:
+        # loregen's missing-pages writer (ticket 44): the target name is
+        # declared in new_names so the hallucination check grounds it
+        return ("```yaml\n"
+                "- name: The Salt King\n"
+                "  kind: place\n"
+                "  aliases: []\n"
+                "  body: The Salt King rules the old landing across the\n"
+                "    water; the ferrymen moor there in storm weeks.\n"
+                "  new_names: [The Salt King]\n"
+                "```\n")
+    if "Propose goal updates ONLY" in prompt:
+        # the engine's goals review (ticket 44): one grounded update for a
+        # roster faction — the_id must match the sandbox the spec creates
+        return ("```yaml\n"
+                "updates:\n"
+                "  - faction_id: the_bridge_wardens\n"
+                "    goal: Hold the crossing through storm season and\n"
+                "      outlast the ferry league\n"
+                "    reason: Week 1 recorded the wardens holding the\n"
+                "      crossing road; the charter deadline reframes the aim.\n"
+                "```\n")
     if "timeline entries" in prompt or (
             "TASK: write 3 to 6 timeline entries" in prompt):
         return "```yaml\n" + _entries_yaml(prompt) + "```"

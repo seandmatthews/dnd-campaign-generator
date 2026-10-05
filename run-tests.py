@@ -98,11 +98,11 @@ if _node:
     _E2E_CLI = _E2E_DIR / "node_modules" / "@playwright" / "test" / "cli.js"
     if _E2E_CLI.is_file():
         FAST_SUITES.append(
-            ("studio-e2e-first-dm",
+            ("studio-e2e",
              [_node, str(_E2E_CLI.relative_to(ROOT)), "test",
               "--config=studio/tests/e2e/playwright.config.ts"]))
     else:
-        print("note: studio-e2e-first-dm skipped — studio/tests/e2e has "
+        print("note: studio-e2e skipped — studio/tests/e2e has "
               "no node_modules (run: cd studio/tests/e2e && npm install "
               "&& npx playwright install chromium)")
 else:
@@ -111,7 +111,7 @@ else:
           "toast/design/design-restore/maps-seed/maps-burg-form/prep/"
           "api-timeout/"
           "log-clean/copy-claims/campaign-select-order) and the "
-          "studio-e2e-first-dm suites")
+          "studio-e2e suites (first_dm + second_evening)")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.
 # -m integration overrides the studio/pytest.ini addopts (-m "not integration").

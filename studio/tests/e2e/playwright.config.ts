@@ -17,6 +17,12 @@ const BASE = `http://127.0.0.1:${STUDIO_PORT}`;
 // failing run's campaign around for inspection (deliberately NOT deleted
 // on exit: the studio process must die first, and on Windows it holds locks)
 const DATA_ROOT = process.env.E2E_DATA_ROOT || mkdtempSync(join(tmpdir(), 'e2e-first-dm-'));
+// specs that write fixture FILES must land them in the SAME root the
+// studio reads — export the resolved root to the test workers (ticket 44;
+// without this the spec's fs writes went to a directory the studio never
+// saw, and the first_dm spec only got away with it because its fixture
+// leg skips on FMG machines)
+process.env.E2E_DATA_ROOT = DATA_ROOT;
 
 // env both the studio AND its engine subprocesses inherit (engines._run
 // passes the parent env down): the stub provider, plus the port the host
@@ -32,7 +38,7 @@ const STUDIO_ENV = {
 
 export default defineConfig({
   testDir: '.',
-  testMatch: /first_dm\.spec\.ts$/,
+  testMatch: /(first_dm|second_evening)\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
   retries: 0,
