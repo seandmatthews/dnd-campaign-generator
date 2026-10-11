@@ -142,10 +142,12 @@ beside its image — under
 `campaign-data/campaigns/<name>/maps/sites/<slug>/` (scenes only; city
 maps don't come in this flavor). Get it onto the table by hand:
 
-1. In Atlas, **Add map → import a Universal VTT**, and pick the
-   `<slug>.uvtt`. The image beside it (`<slug>.png`) is the same picture
-   the studio made — point the import at it when asked (or drag the PNG
-   in first and the `.uvtt` onto it).
+1. Open Atlas's **Create maps** window (Asset Manager → Maps → the
+   **+** → Add Map), then **drag the `<slug>.uvtt` in from your file
+   manager**. Drag it — the *browse* button's picker only offers images,
+   so the `.uvtt` is greyed out there (Atlas's filter, not a problem
+   with the file). Everything travels inside that one file — picture
+   included — so the `.png` beside it needs no separate import.
 2. Walls, doors, and lights come with the file — that is what `.uvtt`
    carries. **You should see:** the scene on the grid at the right scale
    (5-foot squares per the preset), walls blocking movement and sight,
@@ -228,7 +230,8 @@ that you didn't approve. (Full detail on the review cards:
 |---|---|---|
 | Atlas won't enable / doesn't appear | Obsidian older than 1.8.7, or Obsidian mobile | Update Obsidian desktop; the plugin is desktop-only |
 | The preset doesn't show in the picker | File not under the vault's `atlas-vtt/system-presets/`, wrong extension, or JSON typo | The folder is watched live — fix the path and it appears without a restart; a file with no usable `id` is left out silently |
-| Imported map has no walls/doors/lights | The `.uvtt` didn't come along (only the PNG did), or the import ran without it | Re-import picking the `.uvtt`; every generated *site* has one beside its PNG |
+| Imported map has no walls/doors/lights | The `.uvtt` didn't come along (only the PNG did), or the import ran without it | Drag the `.uvtt` into the Create-maps window — every generated *site* has one beside its PNG, and the picture is embedded in it |
+| Can't pick the `.uvtt` in the browse dialog | The browse picker filters to images | Drag the `.uvtt` in from your file manager instead — the drop accepts `.dd2vtt`, `.uvtt`, `.df2vtt` |
 | Map is there but everything is dark | The `.uvtt` says lighting is baked, so imported lights start off | Turn lights on in the light menu, or enable scene lighting in scene settings |
 | Tokens have no Hearts | The collection's system preset isn't set (or you edited the preset's `id`) | Pick the preset in collection settings; changing `id` in the file makes Atlas treat it as a different preset |
 | `import` says nothing / wrong file | The path given to `--notes-file` isn't the note you pinned | Give the full path to the pinned note; import copies it into the studio's session store as revision 1 |

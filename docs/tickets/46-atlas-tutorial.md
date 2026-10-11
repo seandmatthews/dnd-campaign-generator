@@ -137,6 +137,14 @@ simulation, hand-authored person page):
   walls/doors/lights checkpoint); collection settings -> system preset
   picker -> "ICRPG (house)" appears; Open player window; pin
   `table-notes/2026-10-10.md` to the scene.
+- **Found by real use (2026-10-10, the DM's own first import):** Atlas 0.7.1's
+  Create-maps BROWSE button filters to `image/*` — the `.uvtt` is greyed out
+  there and cannot be picked. The file's way in is DRAG-AND-DROP (the drop
+  accepts .dd2vtt/.uvtt/.df2vtt). The .uvtt passed the full 0.7.1 validation
+  chain when simulated against the installed bundle (structure, walls, doors,
+  lights, budgets, embedded PNG), so this is a picker filter, not a file
+  problem — and the PNG need not be imported separately (the .uvtt embeds it).
+  ATLAS.md step 4 + troubleshooting rewritten accordingly.
 - Deviation found by the walkthrough: the community-list install path was
   replaced by placing the 0.7.1 release files + community-plugins.json
   (Obsidian's trust prompt appeared and was accepted) - same end state;
