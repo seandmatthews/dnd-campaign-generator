@@ -605,9 +605,14 @@ shapes in this document true.
   `lore/entities/<Title>.md` (create-only — an existing page wins and the
   draft is discarded, counted in `pages_skipped`); approved entries'
   validated `new_names` are stubbed as pages (`kind: unknown`) so the graph
-  grows with the story → `{"approved":n,"entries":n,"pages":n,
-  "pages_skipped":n,"stubs":n,"transaction":id,"snapshot":{...}}`. The
-  whole approval (timeline + pending rewrite + pages + stubs) is ONE
+  grows with the story; statblock-fence entries (`target` + `fence`,
+  ticket 49) insert into an EXISTING entity page's body byte-surgically
+  (the in-place write pins the page's current revision — an external edit
+  answers 409; a missing target is counted in `fences_skipped`) →
+  `{"approved":n,"entries":n,"pages":n,
+  "pages_skipped":n,"stubs":n,"fences":n,"fences_skipped":n,
+  "transaction":id,"snapshot":{...}}`. The
+  whole approval (timeline + pending rewrite + pages + stubs + fences) is ONE
   transactional publication (studio/publication.py): staged first, applied,
   verified; a crash leaves an open transaction that boot recovery rolls
   forward, or parks as a conflict (409 on later publications) when a file

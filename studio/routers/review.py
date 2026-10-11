@@ -269,12 +269,16 @@ def get_review(name: str):
                     continue
                 eid = str(entry.get("id"))
                 is_page = isinstance(entry.get("page"), dict)
+                is_fence = "fence" in entry
                 items.append({
                     "id": eid,
-                    "kind": "lore-page" if is_page else kind,
+                    "kind": ("statblock" if is_fence else
+                             "lore-page" if is_page else kind),
                     "source": str(entry.get("source") or "unknown"),
-                    "title": str(entry.get("title") or "(untitled)"),
-                    "body": str(entry.get("text") or ""),
+                    "title": str(entry.get("target")
+                                 or entry.get("title") or "(untitled)"),
+                    "body": str(entry.get("fence")
+                                or entry.get("text") or ""),
                     "when": entry.get("when"),
                     "findings": per_entry.get(eid, []),
                     "file": inside,
@@ -523,8 +527,15 @@ def approve_items(name: str, d, body: ReviewBody, *,
         doc = _load_pending(path, inside)
         chosen_idx = _select(doc, body)
         chosen = [dict(doc["entries"][k]) for k in chosen_idx]
-        pages = [e for e in chosen if isinstance(e.get("page"), dict)]
-        entries = [e for e in chosen if not isinstance(e.get("page"), dict)]
+        # statblock fence entries (ticket 49) classify BEFORE the page/
+        # timeline split: shaped like neither, both existing branches do
+        # the wrong thing (a page-dict fence is silently skipped; an
+        # entry-shaped one is dumped raw into the timeline)
+        fences = [e for e in chosen if "fence" in e]
+        pages = [e for e in chosen if "fence" not in e
+                 and isinstance(e.get("page"), dict)]
+        entries = [e for e in chosen
+                   if "fence" not in e and not isinstance(e.get("page"), dict)]
 
         writes: list[dict] = []
         base: dict = {}
@@ -567,6 +578,43 @@ def approve_items(name: str, d, body: ReviewBody, *,
             base[rel_written] = publication.ABSENT  # create-only, race-safe
             written += 1
         new_timeline = None
+        fenced, fences_skipped = 0, 0
+        for e in fences:
+            target = str(e.get("target") or "").strip()
+            if (not target or "/" in target or "\\" in target
+                    or ".." in target or any(ord(ch) < 32 for ch in target)):
+                # target is hand-editable: traversal refuses loudly (the
+                # input_fingerprints precedent), never probes outside
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"statblock target is not an entity page "
+                           f"filename: {target!r}")
+            rel = f"lore/entities/{target}"
+            page_path = d / rel
+            if not page_path.is_file():
+                fences_skipped += 1  # the page went away; counted, not fatal
+                continue
+            _claim_page_target(claimed, rel)
+            try:
+                raw = page_path.read_bytes().decode("utf-8")
+                new_text = spine.apply_statblock_fence(
+                    raw, str(e.get("fence") or ""))
+            except UnicodeDecodeError:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{rel} is not valid UTF-8 — fix the page by "
+                           "hand first")
+            except spine.CampaignError as ex:
+                raise HTTPException(status_code=422, detail=str(ex))
+            writes.append({"path": rel, "text": new_text})
+            # in-place write: pin the revision read this loop turn — an
+            # external edit lands as an honest 409 at publish time. A
+            # recorded base_revision (a generated draft) already sits in
+            # `base` and wins: the pin the generator made is the honest
+            # expectation, not this read.
+            if rel not in base:
+                base[rel] = publication.file_revision(page_path)
+            fenced += 1
         if entries:
             new_timeline = _append_approved(d, entries)
             writes.append({
@@ -632,6 +680,7 @@ def approve_items(name: str, d, body: ReviewBody, *,
 
     result = {"approved": len(chosen), "entries": len(entries),
               "pages": written, "pages_skipped": skipped, "stubs": stubbed,
+              "fences": fenced, "fences_skipped": fences_skipped,
               "transaction": pub["transaction"]}
     if auto:
         result["auto"] = True
@@ -644,6 +693,9 @@ def approve_items(name: str, d, body: ReviewBody, *,
     if written or skipped:
         msg += f" (+{written} page(s)" + \
             (f", {skipped} skipped" if skipped else "") + ")"
+    elif fenced or fences_skipped:
+        msg += f" (+{fenced} statblock fence(s)" + \
+            (f", {fences_skipped} skipped" if fences_skipped else "") + ")"
     elif stubbed:
         msg += f" (+{stubbed} stub page(s))"
     result["snapshot"] = finalize_publication(

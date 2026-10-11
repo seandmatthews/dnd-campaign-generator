@@ -58,6 +58,9 @@ if _node:
         ("studio-js-review-order", [_node,
                                     "studio/tests/js/test_review_order.cjs"]))
     FAST_SUITES.append(
+        ("studio-js-review-statblock", [_node,
+                                        "studio/tests/js/test_review_statblock.cjs"]))
+    FAST_SUITES.append(
         ("studio-js-sessions-tab", [_node,
                                     "studio/tests/js/test_sessions_tab.cjs"]))
     FAST_SUITES.append(

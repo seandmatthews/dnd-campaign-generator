@@ -165,6 +165,23 @@ finally:
 ok("older vale Rule key still works",
    any(x["rule"] == "vale/Tabletop.Regression" for x in vfindings_old), str(vfindings_old))
 
+# --- statblock fences (ticket 49) -----------------------------------------
+fenced = ("The ferryman watches the quay.\n\n"
+          "```statblock\nhearts: 4\neffort: d6\nac: 12\n```\n")
+sf = check.structural_findings(pathlib.Path("x.md"), fenced)
+ok("well-formed fence draws no statblock finding",
+   not any(x["rule"] == "structural/statblock-fence" for x in sf), str(sf))
+bad = "Prose line.\n\n```statblock\nhearts: many\n\nshield:\nnot a pair\n```\n"
+bf = [x for x in check.structural_findings(pathlib.Path("x.md"), bad)
+      if x["rule"] == "structural/statblock-fence"]
+ok("non-numeric value flagged", any("many" in x["note"] for x in bf), str(bf))
+ok("empty value flagged", any("empty value" in x["note"] for x in bf))
+ok("empty line flagged", any("empty line" in x["note"] for x in bf))
+ok("non key:value line flagged", any("not a `key: value`" in x["note"] for x in bf))
+ok("every statblock finding validates against the schema",
+   all(check.validate(x)[0] for x in bf))
+
+
 # --- findings schema ------------------------------------------------------
 good = {"file": "x.md", "line": 3, "rule": "vale/Regression", "level": "error", "quote": "ancient evil"}
 ok("valid finding accepted", check.validate(good)[0])

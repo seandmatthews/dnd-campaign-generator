@@ -304,3 +304,86 @@ def test_doctor_route_caches_the_full_run(client, monkeypatch):
     # quick stays uncached and never spends the full path
     assert client.get("/api/doctor?quick=1").status_code == 200
     assert calls["n"] == 1
+
+
+# ------------------------------------------------- workspace gitignore (47)
+
+
+def test_workspace_ignore_check_missing_file_is_advisory_ok(
+        tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    c = doctor.check_workspace_ignore()
+    assert c["ok"] is True and c["required"] is False
+    assert "next snapshot" in c["detail"]
+
+
+def test_workspace_ignore_check_complete_file(tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    (tmp_path / ".gitignore").write_text(
+        ".obsidian/\n**/simulation/forecasts/\n", encoding="utf-8")
+    c = doctor.check_workspace_ignore()
+    assert c["ok"] is True and c["required"] is False
+
+
+def test_workspace_ignore_check_missing_lines_names_the_untrack_fix(
+        tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    (tmp_path / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    c = doctor.check_workspace_ignore()
+    assert c["ok"] is False and c["required"] is False
+    assert ".obsidian/" in c["detail"]
+    assert "**/simulation/forecasts/" in c["detail"]
+    assert "rm -r --cached" in (c["fix"] or ""), \
+        "an ignore does not untrack: the fix must name the command"
+
+
+# ------------------------------------------------ campaign system field (48)
+
+
+def _campaign_with_system(root, name, system):
+    camp = root / name
+    camp.mkdir(parents=True, exist_ok=True)
+    (camp / "campaign.yaml").write_text(
+        f"name: {name}\ntitle: {name}\n"
+        + (f"system: {system}\n" if system is not None else ""),
+        encoding="utf-8")
+    return camp
+
+
+def test_campaign_system_check_unset_everywhere_is_normal(
+        tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    _campaign_with_system(tmp_path, "ember-coast", None)
+    c = doctor.check_campaign_system()
+    assert c["ok"] is True and c["required"] is False
+    assert "normal" in c["detail"]
+
+
+def test_campaign_system_check_names_the_value_lowercase(
+        tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    _campaign_with_system(tmp_path, "ember-coast", "ICRPG")
+    # a typo passes too — freeform, findings never verdicts
+    _campaign_with_system(tmp_path, "salt-marsh", "icrpggg")
+    c = doctor.check_campaign_system()
+    assert c["ok"] is True and c["required"] is False
+    assert "ember-coast: icrpg" in c["detail"]
+    assert "salt-marsh: icrpggg" in c["detail"]
+
+
+def test_campaign_system_check_nonstring_is_the_only_wrongness(
+        tmp_path, monkeypatch):
+    import spine
+    monkeypatch.setattr(spine, "CAMPAIGNS_ROOT", tmp_path)
+    camp = _campaign_with_system(tmp_path, "ember-coast", None)
+    (camp / "campaign.yaml").write_text(
+        "name: ember-coast\nsystem: 5\n", encoding="utf-8")
+    c = doctor.check_campaign_system()
+    assert c["ok"] is False and c["required"] is False
+    assert "not a plain string" in c["detail"]
+    assert "system: icrpg" in (c["fix"] or "")

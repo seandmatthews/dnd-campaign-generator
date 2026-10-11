@@ -158,9 +158,13 @@ def build_stage(node_zip):
     copy_tree(REPO / "verification", STAGE / "verification")
     # /tutorial reads <bundle root>/docs/for-new-gms/TUTORIAL.md — stage it
     # exactly there so the help modal's link works on installed copies too.
+    # ATLAS.md travels with it (ticket 46): the at-the-table tutorial's
+    # audience is installed copies.
     (STAGE / "docs" / "for-new-gms").mkdir(parents=True)
     shutil.copy2(REPO / "docs" / "for-new-gms" / "TUTORIAL.md",
                  STAGE / "docs" / "for-new-gms" / "TUTORIAL.md")
+    shutil.copy2(REPO / "docs" / "for-new-gms" / "ATLAS.md",
+                 STAGE / "docs" / "for-new-gms" / "ATLAS.md")
     shutil.copy2(REPO / "llm.env.example", STAGE / "llm.env.example")
 
     # the data home: seeded empty (launch.cmd points CAMPAIGN_DATA_ROOT

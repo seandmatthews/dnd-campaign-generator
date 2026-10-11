@@ -40,7 +40,10 @@ this scale.)
 
 ```text
 campaigns/<name>/
-  campaign.yaml            name, which world seed, pointers, created date
+  campaign.yaml            name, which world seed, pointers, created date;
+                           optional freeform `system:` (lowercased on read,
+                           no catalog — the core does not know systems;
+                           ticket 48)
   world/
     source.map|source.json FMG dump — the raw genesis record
     geography.yaml         nations, cultures, settlements (import_fmg output)

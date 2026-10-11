@@ -110,11 +110,15 @@ def test_findings_budget_skip_notes(tmp_spine_root):
 def _core(r):
     """The pre-transactional response fields. Approve/delete now also carry
     `transaction` and `snapshot` (Phase 1: recoverable publication + visible
-    snapshot status) — intentional contract change, asserted separately."""
+    snapshot status) — intentional contract change, asserted separately.
+    The statblock counters (ticket 49) are asserted in
+    test_statblock_fence.py."""
     d = dict(r.json())
     d.pop("transaction", None)
     d.pop("snapshot", None)
     d.pop("noop", None)
+    d.pop("fences", None)
+    d.pop("fences_skipped", None)
     return d
 
 

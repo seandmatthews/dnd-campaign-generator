@@ -189,6 +189,8 @@ def test_approve_fastfails_while_a_job_holds_the_lock(client, tmp_spine_root):
     body = r.json()
     body.pop("transaction", None)
     body.pop("snapshot", None)
+    body.pop("fences", None)
+    body.pop("fences_skipped", None)
     assert r.status_code == 200 and body == {
         "approved": 1, "entries": 1, "pages": 0, "pages_skipped": 0,
         "stubs": 0}

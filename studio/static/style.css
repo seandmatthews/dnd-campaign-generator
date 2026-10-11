@@ -618,6 +618,12 @@ textarea.input {
   color: #2f4d6e;
 }
 
+.kind-statblock {
+  background: #dedbd4;
+  border-color: #a8a294;
+  color: #57503f;
+}
+
 .kind-finding {
   background: #eed3cd;
   border-color: #c98a7d;

@@ -265,6 +265,17 @@ def build_campaign_yaml(camp, state):
         "engines": dict(ENGINE_POINTERS),
     }
     dest = camp / "campaign.yaml"
+    # `system:` passes through a re-run (ticket 48): it is edge-authored —
+    # the DM writes it by hand — so it is the one field an idempotent
+    # rebuild must not revert. Preserved verbatim; readers normalize.
+    if dest.is_file():
+        try:
+            old = yaml.safe_load(dest.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            old = None
+        if (isinstance(old, dict) and isinstance(old.get("system"), str)
+                and old["system"].strip()):
+            data["system"] = old["system"]
     _write_yaml(dest, data)
     return ("campaign.yaml", "built", "premise from state meta")
 

@@ -107,6 +107,53 @@ def _edit_distance_le1(a, b):
     return True
 
 
+_STATBLOCK_FENCE_RE = re.compile(
+    r"(?ms)^[ \t]*```statblock[^\n]*\n(.*?)^[ \t]*```[ \t]*\r?$")
+# A statblock value: a number, dice (`2d6`, `d6`), or a range (`2-4`).
+_STATBLOCK_VALUE_RE = re.compile(
+    r"^[+-]?\d+(\.\d+)?$|^[+-]?\d*\s*d\d+$|^\d+\s*[-–]\s*\d+$")
+
+
+def _statblock_fence_findings(path, text):
+    """Shape-only checks on ```statblock fences (ticket 49): every fence
+    line parses as `key: value`, keys and values are non-empty, and values
+    parse as a number or dice expression. Findings, never verdicts — the
+    ladder cannot know a pack's field vocabulary, so a text-valued field
+    draws a finding the DM is free to ignore (the note says so)."""
+    out = []
+    for m in _STATBLOCK_FENCE_RE.finditer(text):
+        first = text[:m.start()].count("\n") + 1
+        for offset, line in enumerate(m.group(1).splitlines()):
+            n = first + 1 + offset
+            s = line.strip()
+            if not s:
+                out.append({"file": str(path), "line": n,
+                            "rule": "structural/statblock-fence",
+                            "level": "warning", "quote": "",
+                            "note": "empty line inside the fence"})
+                continue
+            key, sep, value = s.partition(":")
+            key, value = key.strip(), value.strip()
+            if not sep or not key:
+                out.append({"file": str(path), "line": n,
+                            "rule": "structural/statblock-fence",
+                            "level": "warning", "quote": s[:80],
+                            "note": "not a `key: value` line"})
+            elif not value:
+                out.append({"file": str(path), "line": n,
+                            "rule": "structural/statblock-fence",
+                            "level": "warning", "quote": s[:80],
+                            "note": f"empty value for '{key}'"})
+            elif not _STATBLOCK_VALUE_RE.match(value):
+                out.append({"file": str(path), "line": n,
+                            "rule": "structural/statblock-fence",
+                            "level": "suggestion", "quote": s[:80],
+                            "note": f"'{value}' does not parse as a number "
+                                    "or dice (4, 2d6) — if this field "
+                                    "carries text, ignore this finding"})
+    return out
+
+
 def structural_findings(path, text):
     """The rhythm checks Vale cannot express as regex."""
     findings, sents = [], sentences(text)
@@ -145,6 +192,8 @@ def structural_findings(path, text):
         findings.append({"file": str(path), "line": line_no, "rule": "structural/canon-variant",
                          "level": "error", "quote": variant,
                          "note": f"one edit away from canon term '{term}'"})
+
+    findings.extend(_statblock_fence_findings(path, text))
     return findings
 
 

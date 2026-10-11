@@ -609,6 +609,22 @@ def load_campaign_yaml(name: str) -> dict:
     return _safe_load(require_campaign(name) / "campaign.yaml") or {}
 
 
+def campaign_system(ydoc) -> "str | None":
+    """The campaign's `system:` field, normalized: `value.strip().lower()`
+    for a plain string; None for missing, empty, or a non-string scalar
+    (YAML parses `system: 5` as an int). The ONE sanctioned accessor in
+    core — the companion repo's pack installer re-implements these exact
+    semantics (no shared code is allowed either direction), so neither side
+    may drift (ticket 48). No enum, no catalog: the core does not know
+    systems, and must not grow one."""
+    if not isinstance(ydoc, dict):
+        return None
+    value = ydoc.get("system")
+    if not isinstance(value, str):
+        return None
+    return value.strip().lower() or None
+
+
 def load_geography(name: str) -> dict:
     geo = _safe_load(campaign_dir(name) / "world" / "geography.yaml")
     return geo or {}
@@ -794,6 +810,44 @@ def entity_page_text(page_name: str, frontmatter: dict, body: str) -> str:
     text = yaml.safe_dump(meta, sort_keys=False, allow_unicode=True,
                           default_flow_style=False).strip()
     return f"---\n{text}\n---\n\n{body.strip()}\n" if text else f"{body.strip()}\n"
+
+
+_STATBLOCK_FENCE_RE = re.compile(
+    r"(?ms)^[ \t]*```statblock[^\n]*\n.*?^[ \t]*```[ \t]*\r?$")
+
+
+def apply_statblock_fence(page_text: str, fence: str) -> str:
+    """Insert — or replace — a ```statblock fence in an entity page's text,
+    byte-surgically (ticket 49). Every byte OUTSIDE the fence region is
+    returned unchanged: frontmatter, prose, unknown keys, comments, and
+    line endings all survive (an entity_page_text round-trip would drop
+    empty-valued frontmatter keys and re-dump the YAML — the ticket-10 bug
+    class). The fence lands at the end of the body, after one blank line;
+    a previous fence (the LAST one — appends live at the end) is replaced
+    in place, so re-approve updates and never duplicates. The inserted
+    text takes the page's dominant newline (by count, not mere presence —
+    one pasted CRLF line must not flip an LF page). `page_text` must be
+    the file decoded as-is (no newline translation): publication writes
+    text bytes verbatim, so CRLF stays CRLF."""
+    fence = (fence or "").replace("\r\n", "\n").replace("\r", "\n")
+    fence = fence.strip("\n")
+    if not fence.startswith("```statblock"):
+        raise CampaignError(
+            "a statblock fence must start with a ```statblock line")
+    nl = ("\r\n" if page_text.count("\r\n")
+          > page_text.count("\n") - page_text.count("\r\n") else "\n")
+    block = nl.join(fence.split("\n")) + nl
+    last = None
+    for last in _STATBLOCK_FENCE_RE.finditer(page_text):
+        pass  # scan to the LAST fence; earlier ones stay history
+    if last is not None:
+        return page_text[:last.start()] + block[:-len(nl)] \
+            + page_text[last.end():]
+    if not page_text.endswith(nl):
+        page_text += nl
+    if not page_text.endswith(nl * 2):
+        page_text += nl
+    return page_text + block
 
 
 def write_entity_page(name: str, page_name: str, frontmatter: dict,

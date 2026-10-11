@@ -172,7 +172,7 @@ them:
 |---|---|---|
 | `world/map.svg` | embeds natively, vector stays crisp | studio worldmap |
 | city `<slug>.svg` + `<slug>.geojson` | the SVG | GeoJSON stays the structured source the studio reads |
-| site `scene.png` + `<slug>.uvtt` | the PNG | UVTT is Foundry-facing; the note records which file to drop into the VTT |
+| site `scene.png` + `<slug>.uvtt` | the PNG | UVTT is Foundry-facing; the note records which file to drop into the VTT. Atlas VTT is the second consumer (the at-the-table surface — [`atlas-seam.md`](atlas-seam.md)): same files, and the note's embed line (below) points at the published scene |
 
 **Companion notes are generated, not hand-made.** Every city and site
 generation emits the `<slug>.md` alongside the artifact: the embed, the
@@ -180,6 +180,31 @@ seed/params summary, links to the entities and chronicle weeks it involves,
 and a `place:` frontmatter link saying where the map is. Companion notes land
 with their artifact the way `params.yaml` does today — generated metadata,
 not reviewed prose.
+
+**Publisher-owned lines (the embed-line convention, ticket 50):** a
+companion note may carry appended lines owned by outside publishers — the
+first is the Atlas-scene embed/link the (companion-repo) scene publisher
+adds when it publishes the site. The ownership rule is over bytes:
+
+- A publisher's line is appended at the **end of the note body**, is
+  **self-identifying** (recognizable without parsing the rest of the
+  note), and a publisher deduplicates only its own line — so the scene
+  publisher and any later one (party tokens, P4) coexist without risking
+  each other's lines.
+- Appends **preserve the note's existing line-ending style** (notes are
+  CRLF on disk here).
+- **Body-preserving writers must leave publisher lines untouched** — the
+  attach-to-place write already complies (frontmatter only, body
+  byte-for-byte, `places.py`).
+- **`_companion_note` is the grandfathered exception:** it rewrites the
+  whole note on map re-import (`hand edits do not survive`), and that is
+  accepted — the line is publisher-owned and the publisher re-appends it.
+  The heal is the publisher's *required* behavior: on every `scenes` run
+  for a site — including a refuse-on-diff no-op, which still repairs the
+  note — the publisher re-appends its line when missing. The companion
+  README pins this before its scene publisher writes its first line.
+- Any **new** in-core note writer must either preserve foreign lines or
+  document its healing story the same way.
 
 The DM's half is the **attach-to-place field** on the Maps tab: an optional
 picker on the *Map a burg* and *Battlemap scenes* forms. Mapping a burg
@@ -199,8 +224,12 @@ new generations emit slugged names, and existing site directories get a
 one-time mechanical rename. The same argument settles the vault boundary:
 **one vault per campaign** (`map.svg`, `params.yaml` recur in every
 campaign; a vault spanning the campaigns root would collide). If plugins get
-installed, add a `.gitignore` for `campaigns/*/.obsidian/` — canon snapshots
-must not sweep plugin state into commits.
+installed, `.obsidian/` must stay out of canon snapshots — the campaigns
+workspace's own `.gitignore` carries a depth-agnostic `.obsidian/` line
+(any depth, so both a campaign-root vault and a lore-folder vault are
+covered), and the studio ensures it on every snapshot (ticket 47;
+`studio/canon.py` `WORKSPACE_IGNORE`). An ignore does not untrack: files
+committed before the line landed need `git rm -r --cached` once.
 
 ## 5. Plugin survey (September 2026)
 

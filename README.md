@@ -20,6 +20,11 @@ tested on its own; the studio is the only one that invokes the others.
   world history, compressed into a couple of hours at the keyboard, with
   a "you should see" checkpoint at every step and each long step's
   expected duration stated before it runs.
+- **Running the table? [`ATLAS.md`](docs/for-new-gms/ATLAS.md)** — the
+  same campaign on a screen at the table with
+  [Atlas VTT](https://github.com/ByteMirror/atlas-vtt): the generated
+  battlemaps run as-is, and the session's story comes home through the
+  review queue.
 - **Just run the app:** `python studio/run.py` (or `studio/start.bat`) —
   if anything is missing, the doctor script (`python studio/doctor.py`)
   checks every prerequisite and tells you the exact command that fixes it.

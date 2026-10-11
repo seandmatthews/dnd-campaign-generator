@@ -371,6 +371,91 @@ def check_data_root():
                required=False)
 
 
+def check_workspace_ignore():
+    """campaigns/.gitignore carries the pinned lines (ticket 47): Obsidian's
+    app-config dir and forecast bundles must not ride in canon snapshots.
+    One AGGREGATED advisory check (the check_vault pattern — duplicate check
+    names collapse in by_name). Purely textual: no git dependency. An
+    ignore does not untrack, so the fix names the rm --cached command for
+    anything committed before the line landed; the studio (re)writes the
+    file itself on the next snapshot."""
+    import canon  # lazy, like check_vault's links
+    root = spine.campaigns_root()
+    p = root / ".gitignore"
+    if not p.is_file():
+        return _mk("campaigns gitignore", True,
+                   "no campaigns/.gitignore yet — the studio writes one "
+                   "(.obsidian/, forecast bundles) on the next snapshot",
+                   required=False)
+    have = {ln.strip() for ln in p.read_text(encoding="utf-8",
+                                            errors="replace").splitlines()}
+    missing = [ln for ln in canon.WORKSPACE_IGNORE if ln not in have]
+    if not missing:
+        return _mk("campaigns gitignore", True,
+                   "campaigns/.gitignore ignores .obsidian/ and forecast "
+                   "bundles", required=False)
+    return _mk("campaigns gitignore", False,
+               f"campaigns/.gitignore is missing: {', '.join(missing)} — "
+               "those files ride into every canon snapshot",
+               fix="add the line(s) to campaigns/.gitignore (the studio "
+                   "does it on the next snapshot). An ignore does not "
+                   "untrack: for files committed earlier, run git -C "
+                   "campaigns rm -r --cached -- <name>/.obsidian/",
+               required=False)
+
+
+def check_campaign_system():
+    """The `system:` field across campaigns (ticket 48): freeform, no
+    catalog — the core does not know systems and must not grow one. One
+    AGGREGATED advisory check (the check_vault pattern): unset everywhere
+    is normal and stays silent; the only wrongness it can see is a value
+    that is not a plain string."""
+    root = spine.campaigns_root()
+    if not root.is_dir():
+        return _mk("campaign system", True, "no campaigns folder yet",
+                   required=False)
+    named = []
+    bad = []
+    unread = []
+    for d in sorted(root.iterdir()):
+        if not d.is_dir() or not (d / "campaign.yaml").is_file():
+            continue
+        if not spine.valid_name(d.name):
+            continue
+        try:
+            doc = spine.load_campaign_yaml(d.name)
+        except Exception as e:  # noqa: BLE001 — a corrupt file must not kill the check
+            unread.append(f"{d.name}: {e}")
+            continue
+        raw = doc.get("system")
+        if raw is None:
+            continue
+        norm = spine.campaign_system(doc)
+        if norm is None:
+            bad.append(f"{d.name}: system: {raw!r} is not a plain string")
+        else:
+            named.append(f"{d.name}: {norm}")
+    if bad:
+        return _mk("campaign system", False, "; ".join(bad),
+                   fix="set system: to a plain string (e.g. system: icrpg) "
+                       "in the campaign's campaign.yaml",
+                   required=False)
+    if named:
+        detail = "system: " + ", ".join(named) \
+            + " (freeform — packs match on the exact string)"
+        if unread:
+            detail += "; unreadable campaign.yaml: " + "; ".join(unread[:3])
+        return _mk("campaign system", True, detail, required=False)
+    if unread:
+        return _mk("campaign system", True,
+                   "no campaign declares a system (normal); unreadable "
+                   "campaign.yaml: " + "; ".join(unread[:3]),
+                   required=False)
+    return _mk("campaign system", True,
+               "no campaign declares a system (normal — the studio stays "
+               "system-agnostic)", required=False)
+
+
 # --------------------------------------------------------------- migration
 
 
@@ -667,6 +752,8 @@ def run_all_checks(probe=None, modules=None, live_llm=True):
     checks.append(check_vale())
     checks.append(check_campaigns())
     checks.append(check_vault())
+    checks.append(check_workspace_ignore())
+    checks.append(check_campaign_system())
     checks.append(check_llm(probe) if live_llm else check_llm_key())
     return checks
 

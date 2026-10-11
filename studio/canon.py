@@ -40,6 +40,14 @@ MESSAGE_MAX = 72
 
 _COMMIT_RE = re.compile(r"^\[[^\]]+ ([0-9a-f]+)\]", re.MULTILINE)
 
+# Lines campaigns/.gitignore must carry (ticket 47): Obsidian's app-config
+# dir is chalk and plugin state, not canon — and it appears at whatever
+# depth a vault was opened (the campaign root, or lore/ via the one-click
+# registration), so the pattern is depth-agnostic. Forecast bundles are
+# projections, not canon — forecasts.py's docstring has promised their
+# git-ignoring since they shipped; this is where it becomes true.
+WORKSPACE_IGNORE = (".obsidian/", "**/simulation/forecasts/")
+
 # One snapshot at a time, process-wide: concurrent snapshots race on git's
 # index.lock and the loser silently loses its undo point. Campaign locks are
 # always held OUTSIDE this one, so no lock cycle.
@@ -73,6 +81,32 @@ def _ensure_repo(root) -> bool:
         log.info("campaigns repo: local commit identity set "
                  "(Campaign Studio <studio@localhost>) — git had none")
     return True
+
+
+def ensure_workspace_ignore(root) -> None:
+    """Idempotently give the campaigns workspace a .gitignore carrying
+    WORKSPACE_IGNORE. Runs on the snapshot path (NOT inside _ensure_repo —
+    that early-returns on an existing repo, and pre-existing workspaces
+    must gain the lines too), appending only what is missing so a file the
+    user maintains is never rewritten. Failure logs and proceeds: this is
+    VCS furniture, and a furniture problem never stands between the DM and
+    their files."""
+    try:
+        p = root / ".gitignore"
+        text = p.read_text(encoding="utf-8") if p.is_file() else ""
+        have = {ln.strip() for ln in text.splitlines()}
+        missing = [ln for ln in WORKSPACE_IGNORE if ln not in have]
+        if not missing:
+            return
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += "".join(ln + "\n" for ln in missing)
+        spine.write_text_atomic(p, text)
+        log.info("campaigns workspace .gitignore: added %s",
+                 ", ".join(missing))
+    except OSError as e:
+        log.warning("could not update campaigns/.gitignore (snapshots "
+                    "continue): %s", e)
 
 
 def snapshot(campaign_name: str, message: str):
@@ -112,6 +146,7 @@ def snapshot_result(campaign_name: str, message: str) -> dict:
                           "as a git repository"}
 
     with _SNAPSHOT_LOCK:
+        ensure_workspace_ignore(root)
         return _snapshot_locked(root, campaign_name, message)
 
 

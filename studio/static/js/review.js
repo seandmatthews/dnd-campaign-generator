@@ -11,6 +11,7 @@
     let cls = 'pill-kind-neutral';
     if (k === 'lore-entry') cls = 'kind-lore-entry';
     else if (k === 'timeline-approval') cls = 'kind-timeline-approval';
+    else if (k === 'statblock') cls = 'kind-statblock';
     else if (k === 'finding') cls = 'kind-finding';
     return '<span class="pill ' + cls + '">' + S.esc(k || 'item') + '</span>';
   }
