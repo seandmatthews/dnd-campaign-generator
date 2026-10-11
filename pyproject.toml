@@ -2,6 +2,7 @@
 name = "campaign-studio"
 version = "0.1.0"
 description = "One localhost app over three D&D engines — maps, world building, agent simulation, one review queue. A campaign is a directory of files."
+license = "AGPL-3.0-only"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.141",

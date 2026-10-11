@@ -54,3 +54,12 @@ tested on its own; the studio is the only one that invokes the others.
 - `run-tests.py` is stdlib-only, list-form subprocess throughout — nothing
   ever goes through a shell (a rule kept from when the parent path
   contained `&`).
+
+## License
+
+AGPL-3.0-only — see [`LICENSE`](LICENSE), the same license its Atlas seam
+companion ([dcg-avtt-integration](https://github.com/seandmatthews/dcg-avtt-integration))
+carries. Third-party trees keep their own licenses: the vendored Fantasy
+Map Generator under `dnd-mapping/tools/` is MIT and settlemaker there is
+GPL-3.0-only; the release bundle ships both with their license files and
+sources intact.
