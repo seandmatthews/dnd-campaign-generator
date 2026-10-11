@@ -140,30 +140,19 @@ the meantime — the seam spec's own v0 alternative; fences are short.
       ruravaqan person page → Atlas links a token to the page and renders
       it — the seam M1 verify
 
-## Implementation notes (2026-10-10)
+## Implementation notes (2026-10-10, updated after the live walkthrough attempt)
 
-Landed with the seam batch. `spine.apply_statblock_fence` is the
-byte-surgical insert/replace (last fence wins, blank line before an
-append, dominant-newline fence — pinned by exact-full-page and
-pasted-CRLF tests); `approve_items` classifies fence entries before the
-page/timeline split and pins what it reads (`base[rel] =
-file_revision(...)` ONLY when the doc recorded no base_revision for the
-target — a recorded pin wins, so a generated draft's stale source still
-409s; deviation from the first draft, which unconditionally overwrote).
-Traversal targets 422 loudly; missing targets count in `fences_skipped`;
-same-batch duplicates 409 through `_claim_page_target`. The Review GET
-serves `kind: "statblock"` (target as title, fence as body) and review.js
-gives it a pill; the response gained `fences`/`fences_skipped` (API.md
-updated; exact-shape tests updated). The ladder rule
-`structural/statblock-fence` is shape-only with a uniform vocabulary-free
-value rule (number, dice `2d6`/`d6`, or range) — a text-valued field
-draws a *suggestion* whose note says to ignore it if the field carries
-text (deviation: the acceptance example `hearts: many` flags via that
-uniform rule, not a per-key vocabulary). base_revisions are OPTIONAL in
-the doc format: generated fences record them; hand-authored ones omit
-them and approval pins at read time (insertion is positional, so a newer
-page is safe) — deviation from the criterion as first written, which
-assumed recorded pins. Docs amended (atlas-seam P1 rewritten: freeform
-kinds, prose-first convention, dormant-by-design; next-steps W2 kinds
-fixed). Full fast tier green incl. browser e2e. REMAINING for completed:
-the manual once-with-Atlas check (token links + renders).
+Landed with the seam batch (see the boxes above - all pinned tests green,
+live approve on a real page). The live Atlas check then ran against the
+real `ember-coast` campaign: the fence was approved through the pending
+flow into `lore/entities/Sera Vael.md` (fences: 1, prose intact, snapshot
+committed), the campaign vault is Atlas-0.7.1-enabled, and the person
+page is in the vault tree Atlas watches.
+
+**Remaining for completed (human hands - the automation cannot drive
+Atlas's dropdowns/file dialog):** import the site's `.uvtt` (Create maps
+dialog is already open in the Atlas window), create a scene, place a
+token named "Sera Vael", link it to the note - the fence
+(hearts: 4 / effort: d6 / ac: 12) should render on the token with no FS
+plugin installed. Everything up to that click is verified; the last click
+is the M1 verify.

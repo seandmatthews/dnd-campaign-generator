@@ -111,18 +111,34 @@ Plus:
       changing zero product code beyond the staging line — with the "you
       should see" checkpoints verified at each step
 
-## Implementation notes (2026-10-10)
+## Implementation notes (2026-10-10, updated after the live walkthrough attempt)
 
-Landed with the seam batch: `docs/for-new-gms/ATLAS.md` (the corrected
-loop — manual open-as-vault on the campaign root, inline example ICRPG
-preset with every field verified against the atlas-vtt 0.6.0 parser
-source, real session-note flow, sites-only `.uvtt`), the README "Start
-here" pointer, the `atlas-seam.md` P3 path correction, and the one code
-touch: `release/build_release.py` stages ATLAS.md beside TUTORIAL.md.
-Every command/path in the page was checked against the code
-(`session_notes.py` CLI surface, `maps.py` site artifacts, Obsidian/Atlas
-folder names from the plugin source). REMAINING for completed: the
-start-to-finish walkthrough on a real campaign (needs a campaign with a
-generated site + a simulation), and one full release build to see the
-staged file ship (the copy2 line mirrors the TUTORIAL one; not
-build-verified yet).
+Landed with the seam batch: ATLAS.md, README pointer, seam-spec P3 path
+fix, build staging (boxes 1-4 above). The live walkthrough then ran on a
+REAL campaign (`ember-coast`, built through the studio API: world 11
+nations, battlemap site `the-drowned-crypt` with its `.uvtt`, 3-faction
+simulation, hand-authored person page):
+
+- **Verified live:** Obsidian 1.8.10/1.13.7 installed; the campaign folder
+  opened as the vault through the REAL Open-folder-as-vault flow; Atlas
+  VTT 0.7.1 installed and enabled in the vault (Settings UI confirmed);
+  the example ICRPG preset staged at
+  `atlas-vtt/system-presets/icrpg-house.json` and its every field verified
+  present in the INSTALLED 0.7.1 parser (unitType/dice/initiative/
+  resources/widgets incl. clock segments/lightPresets); the session loop
+  ran END-TO-END: pinned table note -> import -> metered extract (8
+  suggestions, 1 honestly blocked) -> prepare (the blocked card was
+  REFUSED without explicit grade confirmation - the tutorial's exact
+  claim, proven live) -> accept: 5 facts + 2 history events into canon.
+- **Remaining for completed (human hands, ~3 minutes - the automation
+  cannot drive Atlas's dropdowns/file dialog):** in the open Atlas Asset
+  Manager: + -> Create Collection; + -> Add Map -> pick
+  `maps/sites/the-drowned-crypt/the-drowned-crypt.uvtt` -> Create (the
+  walls/doors/lights checkpoint); collection settings -> system preset
+  picker -> "ICRPG (house)" appears; Open player window; pin
+  `table-notes/2026-10-10.md` to the scene.
+- Deviation found by the walkthrough: the community-list install path was
+  replaced by placing the 0.7.1 release files + community-plugins.json
+  (Obsidian's trust prompt appeared and was accepted) - same end state;
+  0.7.1 is newer than the 0.6.0 floor the page mentions, which the page's
+  "0.6.0 or newer" wording already covers.
