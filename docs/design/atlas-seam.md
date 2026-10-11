@@ -1,7 +1,9 @@
 # The Atlas VTT Seam
 ## The studio publishes canon into Atlas's vault files; the table writes prose back
 
-**Status:** design / proposal — not built. Verified against `atlas-vtt` at
+**Status:** design — built so far: P0 presets (companion repo, ticket 04
+there, 2026-10-11) and P1 fences (core ticket 49); P2 scenes pending.
+Verified against `atlas-vtt` at
 v0.6.0 (2026-10-09 source read; the repo was cloned for this).
 **Serves:** the DM who generates canon in the studio and runs the table in
 [Atlas VTT](https://github.com/atlas-vtt/atlas-vtt) with nothing manually

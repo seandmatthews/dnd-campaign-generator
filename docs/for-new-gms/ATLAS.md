@@ -31,9 +31,12 @@ the table are the ones the studio's review queue reads.
 > whole seam.
 
 Every step below is the plain-file path you can always fall back on, not
-a consolation for missing tooling. (A companion repo that automates the
-copying is planned — when it lands, these steps stay true; it just does
-the dragging for you.)
+a consolation for missing tooling. (The companion repo that automates
+some of the copying now exists —
+[dcg-avtt-integration](https://github.com/seandmatthews/dcg-avtt-integration):
+its presets publisher is built; the scenes publisher is still planned.
+These manual steps stay true either way — the publisher just does the
+dragging.)
 
 ## Prerequisites
 
@@ -125,8 +128,11 @@ point** — edit them to yours (the timer is ICRPG's alarm clock in
 seconds; the condition list, colors, and lights are all yours to change).
 Atlas ships built-in presets for several systems too: if your table runs
 one of those, skip this file entirely and pick the built-in in the next
-step. (The fields are Atlas's; when the planned companion repo lands it
-will maintain this file so hand-editing stays optional.)
+step. (The fields are Atlas's. The companion repo's presets publisher
+installs and validates this exact file — `uv run publish.py <campaign>
+presets` from a checkout of dcg-avtt-integration; it refuses unless your
+campaign.yaml declares `system: icrpg`. Hand-editing stays optional
+either way.)
 
 **You should see:** in Atlas, open or create a collection
 (**Atlas ribbon → New collection** — a collection is one table's world:
@@ -157,9 +163,9 @@ maps don't come in this flavor). Get it onto the table by hand:
 
 This is the always-true path: it works on a fresh install with nothing
 but the files the studio already made. (It is also exactly what the
-planned publisher automates — one click per site row, landing the map,
-scene, and lighting into a collection for you. Until then, the drag is
-the feature.)
+companion repo's planned *scenes publisher* will automate — landing the
+map, scene, and lighting into a collection for you. Not built yet; the
+drag is the feature.)
 
 ## Step 5 — two screens
 
@@ -176,9 +182,10 @@ Everything you tune at the table — moved doors, light levels, revealed
 fog — lives in the scene files under the campaign's `atlas-vtt/` folder,
 and the campaign's git history snapshots those files like everything else:
 your tuning is an artifact, diffable and recoverable, never silently
-regenerated away. (When the planned publisher arrives, it will refuse to
-overwrite a tuned scene rather than clobber it — until then, the hand
-drag of Step 4 is the path, and what you tune by hand stays yours.)
+regenerated away. (When the planned scenes publisher arrives, it will
+refuse to overwrite a tuned scene rather than clobber it — until then,
+the hand drag of Step 4 is the path, and what you tune by hand stays
+yours.)
 
 ## Step 6 — play: pin the session note
 
@@ -241,8 +248,10 @@ that you didn't approve. (Full detail on the review cards:
 ## Where this is going
 
 The seam is deliberately files-only, so every step above survives whatever
-tooling comes later. Planned, not yet built: a companion repo that
-publishes presets and scenes with one click (and refuses to overwrite a
-map you've hand-tuned), and statblock fences on entity pages so Atlas can
-link a token straight to an NPC's lore page. This page updates as those
-land — the manual paths above stay true either way.
+tooling comes and goes. The companion repo —
+[dcg-avtt-integration](https://github.com/seandmatthews/dcg-avtt-integration)
+— is real: the presets publisher (Step 3) ships today. Still planned: the
+scenes publisher (one publish per site row, refusing to overwrite a map
+you've hand-tuned) and ICRPG fence templates for the statblock convention
+the studio already carries. This page updates as those land — the manual
+paths above stay true either way.
