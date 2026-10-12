@@ -34,9 +34,10 @@ Every step below is the plain-file path you can always fall back on, not
 a consolation for missing tooling. (The companion repo that automates
 some of the copying now exists —
 [dcg-avtt-integration](https://github.com/seandmatthews/dcg-avtt-integration):
-its presets publisher is built; the scenes publisher is still planned.
-These manual steps stay true either way — the publisher just does the
-dragging.)
+its presets and scenes publishers are built — the scenes publisher hands
+you the `.uvtt` to drag through its `_inbox/` whenever it can't confirm
+the installed Atlas version against its pinned golden file. These manual
+steps stay true either way — the publisher just does the dragging.)
 
 ## Prerequisites
 
@@ -163,9 +164,28 @@ maps don't come in this flavor). Get it onto the table by hand:
 
 This is the always-true path: it works on a fresh install with nothing
 but the files the studio already made. (It is also exactly what the
-companion repo's planned *scenes publisher* will automate — landing the
-map, scene, and lighting into a collection for you. Not built yet; the
-drag is the feature.)
+companion repo's *scenes publisher* automates — landing the map, scene,
+and lighting into a collection for you. While its golden-fixture capture
+is pending it hands you the `.uvtt` through its `_inbox/` and you do
+this drag. The drag is the feature either way.)
+
+> **If Atlas says the walls are too crowded.** When you drag in a
+> `.uvtt`, Atlas checks the map's walls before importing. The notice
+> "Could not import `<file>`. The walls in the file end too close
+> together in too many places for Atlas to join them." means the walls
+> are too finely chopped — not that the file is corrupt. To stop light
+> leaking through hairline gaps, Atlas welds together wall ends that sit
+> within about 13 pixels of each other (a bit more on very large maps).
+> A map whose walls are drawn as thousands of tiny pieces — typical of
+> auto-generated maps that put a wall stub on every tile edge — packs so
+> many near-touching ends together that this welding becomes a job Atlas
+> refuses to take on. Nothing was imported and the file is untouched, so
+> retrying is safe. Fix it in the map's source: redraw the walls as a
+> few long lines per room instead of one segment per tile edge, delete
+> leftover duplicate segments, export a fresh `.uvtt`, and drag it in
+> again. (A related refusal, "The file has more than 20,000 wall
+> segments.", means the same fix.) The repo's `publish` command never
+> hits this — it writes the scene file directly, past the importer.
 
 ## Step 5 — two screens
 
@@ -250,8 +270,9 @@ that you didn't approve. (Full detail on the review cards:
 The seam is deliberately files-only, so every step above survives whatever
 tooling comes and goes. The companion repo —
 [dcg-avtt-integration](https://github.com/seandmatthews/dcg-avtt-integration)
-— is real: the presets publisher (Step 3) ships today. Still planned: the
-scenes publisher (one publish per site row, refusing to overwrite a map
-you've hand-tuned) and ICRPG fence templates for the statblock convention
-the studio already carries. This page updates as those land — the manual
-paths above stay true either way.
+— is real: the presets publisher (Step 3) and the scenes publisher ship
+today (the scenes publisher refuses to overwrite a map you've hand-tuned,
+and falls back to this page's drag when it can't pin the installed Atlas
+version). Still planned: ICRPG fence templates for the statblock
+convention the studio already carries. This page updates as those land —
+the manual paths above stay true either way.
