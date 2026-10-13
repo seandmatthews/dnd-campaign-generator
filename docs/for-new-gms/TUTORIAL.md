@@ -84,8 +84,9 @@ Python and offers the pip line for you. `Ctrl+C` stops the server.
 If anything fails to start, run `python studio/doctor.py` and do what the
 FAIL lines say.
 
-**You should now see:** a page titled *Campaign Studio* with four tabs —
-Maps, World Building, Agent Simulation, Review. If a colored strip appears
+**You should now see:** a page titled *Campaign Studio* with seven tabs —
+Maps, World Building, Agent Simulation, Sessions, Places, Knowledge,
+Review. If a colored strip appears
 under the header listing setup notes (missing Node, missing API key), that
 is the app telling you what will be limited — nothing is broken. New to
 the page? The **?** button in the header has a two-minute summary.
@@ -239,13 +240,18 @@ immutable revision; it never rewrites the evidence behind a review.
 ## Step 7 — where everything lives, and your next campaign
 
     campaign-data/campaigns/<name>/
-      campaign.yaml          # name, title, created
+      campaign.yaml          # name, title, created (optional system: tag)
       world/                 # geography.yaml, the map generator's dump, map.svg
       lore/                  # timeline.yaml, entities/ (one markdown page per
                              # entity, wiki-linked), style/voice.md
-      simulation/            # state.yaml (the sandbox), chronicle/*.md
+      simulation/            # state.yaml (the sandbox), knowledge.yaml,
+                             # proposals/, chronicle/*.md
+      sessions/              # one folder per play session — raw notes,
+                             # extraction drafts, decisions (DM material)
       maps/                  # cities/<slug>/, sites/<slug>/ (incl. Foundry
                              # .uvtt and each map's companion note <slug>.md)
+      atlas-vtt/             # what Atlas VTT reads at the table (ATLAS.md)
+      table-notes/           # notes written at the table, awaiting import
 
 Every generation, approval and week auto-commits just that campaign folder
 to the campaigns workspace's own git repo —

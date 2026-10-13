@@ -7,7 +7,8 @@ hands the human a review queue.
 
 Sibling projects: `../agentic-simulator` (the faction sandbox whose
 chronicles this can check) and `../dnd-mapping` (worlds, cities,
-battlemaps). All three live under the `D&D` parent directory.
+battlemaps). All three live under the `dnd-campaign-generator` parent
+directory.
 
 ## The ladder
 
@@ -46,7 +47,7 @@ human-readable `queue.md`. Nothing blocks; the DM decides.
 
 ```bash
 python tests/test_check.py                                  # the kit tests itself
-python check.py ../agentic-simulator/chronicle/0004-*.md    # structural layer only
+python check.py ../campaign-data/chronicle/0004-*.md         # structural layer only
 python check.py draft.md --state ../campaign-data/engine-home/state.yaml --llm
 python check.py --discriminate canon.md generic-one.md generic-two.md         --state ../campaign-data/engine-home/state.yaml
 ```

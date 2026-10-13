@@ -1,5 +1,5 @@
 # Campaign Studio
-## One application, five tabs, one shared spine
+## One application, seven tabs, one shared spine
 
 **Status:** design / iteration plan — built as `dnd-campaign-generator/studio/`
 when commissioned
@@ -39,7 +39,7 @@ infinite-dm doc's YAML-over-SQL: reviewable diffs beat schema migrations at
 this scale.)
 
 ```text
-campaigns/<name>/
+campaign-data/campaigns/<name>/   (the git-ignored runtime home — ticket 35)
   campaign.yaml            name, which world seed, pointers, created date;
                            optional freeform `system:` (lowercased on read,
                            no catalog — the core does not know systems;
@@ -126,7 +126,8 @@ stays the default). Known offenders today: `tick.py` prints YAML views
 
 **D4 — Path overrides where engines have fixed paths.** `import_fmg.py`
 writes to `dnd-mapping/worlds/{raw,candidates}` and `tick.py` reads a fixed
-`world/state.yaml`. Rather than refactor engines around the workspace, the
+`campaign-data/engine-home/state.yaml`. Rather than refactor engines around
+the workspace, the
 studio *copies artifacts in*: generate in the engine's home, then place the
 outputs into the workspace. Where an engine already takes a path
 (`battlemap.py --dir`, FMG's `FMG_OUT` env), use it directly. Copying keeps

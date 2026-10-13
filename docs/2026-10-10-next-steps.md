@@ -1,6 +1,9 @@
 # Atlas seam — core-side next steps
 
-**Status:** plan (2026-10-10). These are the seam work items that live in
+**Status:** plan (2026-10-10) — and the plan landed 2026-10-10..12: W1, W4,
+W5 shipped as core tickets 48, 47, 50; W2 and W3 are implemented (tickets
+49, 46) with their final live verifies pending. The items below are the
+seam work items that live in
 THIS repo after the residency ruling — what stays here, why, what each one
 ships, and how it interlocks with the companion repo.
 **Reads with:** [`design/atlas-seam.md`](design/atlas-seam.md) (the full seam

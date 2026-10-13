@@ -874,7 +874,8 @@ markdown renderer shows the display text; Obsidian gets the real links.
 
 One page (guardrail 6). `index.html` loads, in order, plain scripts
 (no modules, no build): `js/esc.js, js/logtail.js, js/core.js, js/handoff.js,
-js/maps.js, js/world.js, js/sim.js, js/knowledge.js, js/review.js`
+js/maps.js, js/world.js, js/sim.js, js/sessions.js, js/places.js,
+js/knowledge.js, js/review.js`
 (`esc.js`/`logtail.js`/`handoff.js` are UMD and
 double as CommonJS modules for the Node suites `studio/tests/js/`).
 

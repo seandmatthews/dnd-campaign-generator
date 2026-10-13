@@ -2,8 +2,8 @@
 
 **CHOSEN 2026-09-21: candidate 3, Bonia.** The sandbox (Varn premise) is
 anchored to **Ruravaqan**, a non-capital port of Shadia (merchant republic,
-~29,600 inhabitants, coordinates 276.8/442.9) — see `meta.atlas` in
-`world/state.yaml`. Other candidates remain here for future campaigns.
+~29,600 inhabitants, coordinates 276.8/442.9) — see `meta.atlas` in the
+sandbox's state file. Other candidates remain here for future campaigns.
 
 Generated 2026-09-21 with the locally built FMG (v1.153.0, `tools/Fantasy-Map-Generator`),
 except candidate-01 (live site, v1.153.1). Raw sources in `worlds/raw/`
@@ -35,7 +35,7 @@ pinned `candidate-5-full.json` test fixture.
 
 | World | Seed | Raw source | Notes |
 |-------|------|------------|-------|
-| world-913 (Tasospon) | 913 | `campaigns/sable-ford/world/source.json` (full JSON export) | The Sable Ford campaign world. Re-imported with the river/culture schema 2026-09-25; the raw stays in the campaign repo, so `--all` does not regenerate this one. |
+| world-913 (Tasospon) | 913 | `campaigns/sable-ford/world/source.json` (full JSON export; lost in the 2026-10-05 campaign-data wipe) | The Sable Ford campaign world. Re-imported with the river/culture schema 2026-09-25; the raw is gone with the wipe, so regeneration means re-entering the seed through real FMG UI input. |
 | world-607942 | 7942 | none tracked | Imported with the river/culture schema 2026-09-25. SUPERSEDED by world-607942-7942-eafab7 (the biome/latitude schema import has different bytes, so the collision-widened filename is now the canonical one). |
 | world-607942-7942-eafab7 | 7942 | none tracked | Re-imported with the biome/latitude schema 2026-09-28 (first import whose bytes carry per-settlement biome/latitude). |
 | world-uie2e9 | e2e9 | none tracked | Steered generation 2026-09-28: highFantasy culture set + climate options (recorded in `meta.culture_set`/`meta.climate`); biome/latitude schema. |

@@ -1,8 +1,8 @@
 # Campaign Studio
 
 One localhost app over the three D&D engines. It boots a single web page
-with four tabs — Maps, World Building, Agent Simulation, Review — that read
-and write campaign folders full of YAML. No database, no accounts, no
+with seven tabs — Maps, World Building, Agent Simulation, Sessions, Places,
+Knowledge, Review — that read and write campaign folders full of YAML. No database, no accounts, no
 internet required: the server binds `127.0.0.1`, and a campaign is one
 directory you can zip and move.
 
@@ -133,7 +133,7 @@ a studio campaign exists, the studio's next week will copy right over your
 hand-run — the flag/`.bak` mechanism protects the studio's direction only.
 Work through the app, or copy the state back into the campaign yourself.
 
-## The four tabs
+## The tabs
 
 - **Maps** — generate a world from a seed, map a burg (a town on the world
   map) into a city, roll a battlemap scene (dungeon / cave / camp) with a
@@ -168,6 +168,17 @@ Work through the app, or copy the state back into the campaign yourself.
   audit receipt and changes nothing. New chronicles are linkified at
   accept: the first mention of each known name becomes a wiki-link, so
   backlinks answer "where did this faction show up in the story".
+- **Sessions** — bring the table's notes home: one record per play session
+  (raw notes kept as immutable revisions), a bounded extraction drafts fact
+  changes as reviewable suggestions, and what you accept lands through the
+  Review queue — the same pipeline the table loop in
+  [`ATLAS.md`](../docs/for-new-gms/ATLAS.md) feeds.
+- **Places** — one consolidated view per place: the entity page, the
+  simulation's place record, attached maps, child places, events and
+  mentions — with link/rename/associate actions that are reviewed writes
+  like everything else. Deterministic, no LLM.
+- **Knowledge** — approved facts with faction visibility; it feeds the
+  briefing and the player handout (see below).
 - **Review** — one queue for everything awaiting your decision: pending
   lore, pending page drafts, legacy pending week events (timeline-only —
   the old flow's weeks were already committed; approving never re-applies

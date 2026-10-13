@@ -8,7 +8,7 @@ Split out of the sibling `agentic-simulator` project on 2026-09-21 (all three
 projects live under the common parent
 `Documents/dnd-campaign-generator/`) so
 the maps can be used on their own. That project consumes this one as an
-**optional input** (a provenance block in its `world/state.yaml`); this
+**optional input** (a provenance block in its state file); this
 project never reads game state.
 
 ## The three tiers
@@ -32,8 +32,8 @@ the command quickstart is [`AGENTS.md`](AGENTS.md).
   (git-ignored); promoting one is a copy here + `git add`.
 - `worlds/ruravaqan/` — a 29,600-population port city generated from Bonia's
   own burg record, plus the harbour-quay battlemap scene.
-- `campaign-data/maps/sites/` — procedural scenes (dungeon, cave, camp,
-  mine), each with a Foundry-importable `.uvtt` (walls, doors, lights);
+- `campaign-data/maps/sites/` — procedural scenes (dungeon, cave, camp),
+  each with a Foundry-importable `.uvtt` (walls, doors, lights);
   regenerated on demand (scratch under the git-ignored campaign-data root,
   ticket 35). `tests/test_import_fmg.py` is the suite for the
   importer; run it via `python run-tests.py` at the repo root.

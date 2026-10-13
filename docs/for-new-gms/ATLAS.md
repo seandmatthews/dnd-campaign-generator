@@ -17,7 +17,7 @@ you want it, is [`../design/atlas-seam.md`](../design/atlas-seam.md).
 
 ## What this is
 
-[Atlas VTT](https://github.com/ByteMirror/atlas-vtt) is an Obsidian
+[Atlas VTT](https://github.com/atlas-vtt/atlas-vtt) is an Obsidian
 community plugin that runs battle maps at the table: tokens, fog of war,
 grids, dice, and a separate player view. It stores its whole world as
 files inside your vault — and your campaign folder *is* a vault. So there

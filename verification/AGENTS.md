@@ -25,6 +25,8 @@ Non-negotiables:
 
 `check.py`'s `_find_key` finds the Z.ai key in this order: `$ZAI_API_KEY`,
 then a walk of `~/.zcode/v2/provider_config.json`'s `providerRules` taking
-the first non-`enc:` key, then a clear RuntimeError. The sibling copies
-(`agentic-simulator/src/llm.py`, `studio/llm_client.py`) keep the same
-order and error — never hardcode a provider index, the rules array reorders.
+the first non-`enc:` key, then a clear RuntimeError. The siblings
+(`agentic-simulator/src/llm.py`, `studio/llm_client.py`) additionally honor
+`LLM_API_KEY` / the repo-root `llm.env` **before** this order — check.py
+does not read llm.env. Never hardcode a provider index, the rules array
+reorders.

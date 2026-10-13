@@ -1,6 +1,6 @@
 # D&D tooling
 
-Four engines and one app under one parent. Every project is runnable and
+Three engines and one app under one parent. Every project is runnable and
 tested on its own; the studio is the only one that invokes the others.
 
 | project | what it is | entry point |
@@ -22,7 +22,7 @@ tested on its own; the studio is the only one that invokes the others.
   expected duration stated before it runs.
 - **Running the table? [`ATLAS.md`](docs/for-new-gms/ATLAS.md)** — the
   same campaign on a screen at the table with
-  [Atlas VTT](https://github.com/ByteMirror/atlas-vtt): the generated
+  [Atlas VTT](https://github.com/atlas-vtt/atlas-vtt): the generated
   battlemaps run as-is, and the session's story comes home through the
   review queue.
 - **Just run the app:** `python studio/run.py` (or `studio/start.bat`) —
