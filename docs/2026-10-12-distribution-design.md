@@ -146,3 +146,22 @@ core 53 (bundle + card)    → after companion 07; independent of 51/52
 - No silent companion tracking of main; tags only.
 - The avtt companion's own distribution stays `git clone` + `uv run` for
   developers; only the bundle path reaches friends.
+
+## 8. Revisit log
+
+**2026-10-17 — the installer question, examined again, still shelved.**
+The bootstrap-installer rejection (§2) was stress-tested: an installer
+that fetches versioned RELEASE ARTIFACTS (this repo's, never live
+upstreams) genuinely escapes §2's original rationale — the objection was
+to assembling from sources at install time, and a manifest of
+hash-verified release assets is a different animal. Shelved anyway: the
+big exe stays the first-install vehicle and `update.cmd` the update
+channel — one channel, fewer first-install failure modes, and per-release
+upload cost is not yet the pain. If it revives, the settled points:
+artifacts never sources; the tools pack doubles as the pinned-upstream
+insurance copy (official sources are a build-time concern only — the
+install never touches official FMG, which no official source serves in
+patched form); installer and update.cmd share one fetch-verify-swap
+mechanism; prompted key ⇒ artifacts can sit on public GitHub, bundled key
+⇒ Discord-only forever (§3 unchanged). Mirrors of pinned upstreams on our
+own GitHub = insurance for BUILD time, not a distribution path.

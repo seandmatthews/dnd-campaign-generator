@@ -31,7 +31,10 @@ Per the design doc §4–§5:
    root, source + AGPL LICENSE intact — the GPL settlemaker precedent
    (the bundler already ships third-party license + source; prove the
    LICENSE file lands and name the tag + its ATLAS_PIN in the VERSION
-   stamp).
+   stamp). Unlike settlemaker, the companion is not inside this repo —
+   the builder grows a clone-at-tag step, with setup-tools.py's hygiene:
+   an existing `avtt-integration/` that is not a clone at the pinned tag
+   is refused (move it aside).
 2. **One button, one endpoint**: "Install the ICRPG preset" on the
    World-building tab's table-setup card → a studio endpoint spawns the
    bundled Python on `avtt-integration/publish.py <campaign> presets`
@@ -54,7 +57,16 @@ Per the design doc §4–§5:
    (`world.js:742` — the lore-subfolder vault, not the campaign-root
    vault; ATLAS.md Step 2 already explains the difference). ATLAS.md
    remains the always-true manual twin of every button here. Scenes
-   buttons are NOT this ticket (companion ticket 05 lands first).
+   buttons: companion ticket 05 landed 2026-10-12, so they are unblocked —
+   fold the scenes publish into this ticket at implementation time while
+   it still fits one sitting, else mint the follow-up (same endpoint
+   pattern either way).
+
+**Open ruling (call it when this ticket starts):** the bundle pins the
+companion's v0.1.0, whose `ATLAS_PIN` is Atlas 0.6.0, while the table
+machine runs 0.7.1 — ship v0.1.0 as-is and exercise the designed mismatch
+warning inline (the lean), or wait for the companion's 0.7.1 pin bump
+(its ticket 08).
 
 ## Acceptance criteria
 
@@ -63,7 +75,9 @@ Per the design doc §4–§5:
       extension.
 - [ ] Fresh campaign with `system: icrpg` → button →
       `atlas-vtt/system-presets/icrpg.json` lands and Atlas picks it up
-      live (manual check once, per the seam spec's M1 verify).
+      live (manual check once, per the seam spec's M1 verify). The
+      rebuilt campaign here can be the same one that closes tickets 46
+      and 49's pending live verifies — one sitting, three tickets.
 - [ ] Pin mismatch (companion pin 0.6.0, installed Atlas 0.7.1 — the
       real state on this machine) renders the warning inline; the install
       still succeeds (companion ticket 07's policy).
