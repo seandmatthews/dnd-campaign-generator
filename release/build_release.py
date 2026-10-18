@@ -329,7 +329,8 @@ def smoke(port):
     try:
         wait_http(f"http://127.0.0.1:{port}/", 60)
         wait_http(f"http://127.0.0.1:{port}/tutorial", 30)
-        print("  / and /tutorial -> 200; killing server")
+        wait_http(f"http://127.0.0.1:{port}/atlas", 30)
+        print("  /, /tutorial and /atlas -> 200; killing server")
     finally:
         kill_port(port)
         if proc.poll() is None:
@@ -468,9 +469,10 @@ def verify_sfx(exe, port):
         print(f"  installed into {dest}")
         wait_http(f"http://127.0.0.1:{port}/", 600)
         wait_http(f"http://127.0.0.1:{port}/tutorial", 30)
+        wait_http(f"http://127.0.0.1:{port}/atlas", 30)
         if not (dest / "studio" / "run.py").exists():
             raise SystemExit("FAILED: bundle contents did not land in the install home")
-        print("  install pass: / and /tutorial -> 200")
+        print("  install pass: /, /tutorial and /atlas -> 200")
     finally:
         kill_all(proc)
 

@@ -173,3 +173,15 @@ def test_companion_home_prefers_env_then_bundle_then_sibling(monkeypatch):
         assert home is not None and home.name == "dcg-avtt-integration"
     else:
         assert home is None
+
+
+def test_atlas_route_serves_the_real_file(client):
+    """The card's links point at /atlas — the same one-file contract as
+    /tutorial: the route reads the real file, never a copy."""
+    from conftest import STUDIO_DIR
+    r = client.get("/atlas")
+    assert r.status_code == 200
+    assert "text/plain" in r.headers["content-type"]
+    disk = (STUDIO_DIR.parent / "docs" / "for-new-gms" / "ATLAS.md").read_text(
+        encoding="utf-8")
+    assert r.text == disk

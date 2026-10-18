@@ -7,7 +7,8 @@ internet required: the server binds `127.0.0.1`, and a campaign is one
 directory you can zip and move.
 
 New here? Follow [`TUTORIAL.md`](../docs/for-new-gms/TUTORIAL.md) (served live at
-`/tutorial` once the app runs) — it walks a first campaign end to end.
+`/tutorial` once the app runs; [`ATLAS.md`](../docs/for-new-gms/ATLAS.md)
+likewise at `/atlas`) — it walks a first campaign end to end.
 The **?** button in the app header has the short version, and on boot the
 page shows a setup strip whenever the doctor finds something missing.
 
