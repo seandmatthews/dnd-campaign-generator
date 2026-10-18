@@ -37,7 +37,11 @@ Per the design doc §4–§5:
    is refused (move it aside).
 2. **One button, one endpoint**: "Install the ICRPG preset" on the
    World-building tab's table-setup card → a studio endpoint spawns the
-   bundled Python on `avtt-integration/publish.py <campaign> presets`
+   bundled Python on `avtt-integration/src/avtt/publish.py <campaign>
+   presets` (verified 2026-10-17: the script self-shims `src/` onto
+   `sys.path` and runs standalone under a bare interpreter; the
+   companion's only runtime dep is PyYAML, which the bundle's Python
+   already carries — nothing to install, no launcher shim needed)
    (list-form args, explicit cwd, never shell — the subprocess
    discipline both repos already share) and streams stdout into the
    card. The companion writes only `atlas-vtt/` + the embed line;
