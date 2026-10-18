@@ -53,6 +53,13 @@ TEMPLATES = RELEASE / "templates"
 PY_VERSION = "3.11.9"
 PY_MM = "311"
 NODE_MAJOR = 24
+# The avtt companion (dcg-avtt-integration) rides in the bundle at a
+# pinned RELEASE TAG — tags only, never main (the companion's own ticket
+# 07 discipline; design doc §4). The stamp records the tag + its
+# ATLAS_PIN so an installed copy can say what it carries.
+COMPANION_REPO = "https://github.com/seandmatthews/dcg-avtt-integration.git"
+COMPANION_TAG = "v0.1.0"
+COMPANION_CACHE = CACHE / "avtt-integration"
 # The installer SFX module (bin/7zSD.sfx) ships in the LZMA SDK package
 # (the -extra packages stopped carrying it). Igor's minimal module extracts
 # to a TEMP dir and runs RunProgram from there — hence the install.cmd step.
@@ -137,6 +144,32 @@ def copy_tree(src, dst, extra_ignores=()):
                     ignore=shutil.ignore_patterns(*IGNORE_BASE, *extra_ignores))
 
 
+def ensure_companion():
+    """The pinned companion clone in the build cache: cloned once, reused
+    while the cache sits exactly at the pin, re-cloned when the pin moves
+    (tags are immutable, so a stale cache is safe to replace) — same
+    hygiene as setup-tools.py: an existing dir that is not a git clone is
+    refused, never clobbered."""
+    step(f"companion: dcg-avtt-integration pinned at {COMPANION_TAG}")
+    if COMPANION_CACHE.exists():
+        head = subprocess.run(["git", "-C", str(COMPANION_CACHE),
+                               "rev-parse", "HEAD"],
+                              capture_output=True, text=True)
+        pinned = subprocess.run(["git", "-C", str(COMPANION_CACHE),
+                                 "rev-parse", f"{COMPANION_TAG}^{{commit}}"],
+                                capture_output=True, text=True)
+        if head.returncode == 0 and pinned.returncode == 0 \
+                and head.stdout.strip() == pinned.stdout.strip():
+            print("  cache is at the pin")
+            return
+        if head.returncode != 0:
+            raise SystemExit(f"FAILED: {COMPANION_CACHE} exists but is not a "
+                             "git clone — move it aside first")
+        shutil.rmtree(COMPANION_CACHE)
+    run(["git", "clone", "--depth", "1", "--branch", COMPANION_TAG,
+         COMPANION_REPO, str(COMPANION_CACHE)])
+
+
 def build_stage(node_zip):
     step("stage: copy sources (preserving the repo's sibling layout)")
     if STAGE.exists():
@@ -156,6 +189,11 @@ def build_stage(node_zip):
             shutil.rmtree(p) if p.is_dir() else p.unlink()
     (worlds / "raw").mkdir(exist_ok=True)
     copy_tree(REPO / "verification", STAGE / "verification")
+    step("stage: avtt companion (pinned release: source + LICENSE, no .git)")
+    # IGNORE_BASE strips .git — the bundle carries the pinned snapshot,
+    # not a working copy (design doc §4: source + AGPL LICENSE intact,
+    # the settlemaker precedent).
+    copy_tree(COMPANION_CACHE, STAGE / "avtt-integration")
     # /tutorial reads <bundle root>/docs/for-new-gms/TUTORIAL.md — stage it
     # exactly there so the help modal's link works on installed copies too.
     # ATLAS.md travels with it (ticket 46): the at-the-table tutorial's
@@ -227,8 +265,27 @@ def build_stage(node_zip):
     # Build stamp included: install.cmd's fast path compares this file
     # byte-for-byte, so every rebuild is an update — no version bump to
     # remember when re-sharing. STAMP_FMT carries seconds; see its note.
+    # The stamp also names the bundled companion's tag + its ATLAS_PIN
+    # (ticket 53) — read from the staged companion by the bundled python,
+    # so the stamp cannot drift from what actually shipped.
+    r = run([py, "-c",
+             "import sys; sys.path.insert(0, sys.argv[1]); "
+             "from avtt._version import VERSION, ATLAS_PIN; "
+             "print(VERSION, ATLAS_PIN)",
+             str(STAGE / "avtt-integration" / "src")],
+            capture_output=True, text=True)
+    try:
+        companion_version, atlas_pin = r.stdout.split()
+    except ValueError:
+        raise SystemExit(f"FAILED: could not read the companion's version "
+                         f"report: {r.stdout!r} / {r.stderr!r}")
+    if f"v{companion_version}" != COMPANION_TAG:
+        raise SystemExit(f"FAILED: the staged companion reports "
+                         f"{companion_version} but the pin is {COMPANION_TAG}")
     stamp = time.strftime(STAMP_FMT)
-    (STAGE / "VERSION").write_text(f"{APP_VERSION}+{stamp}", encoding="ascii")
+    (STAGE / "VERSION").write_text(
+        f"{APP_VERSION}+{stamp}+{COMPANION_TAG}+atlas-{atlas_pin}",
+        encoding="ascii")
 
 
 def wait_http(url, timeout_s):
@@ -280,6 +337,14 @@ def smoke(port):
         log.close()
     if kill_port(port):
         raise SystemExit(f"FAILED: port {port} still busy after kill")
+    step("smoke: the avtt companion rides the bundle (ticket 53)")
+    if not (STAGE / "avtt-integration" / "LICENSE").is_file():
+        raise SystemExit("FAILED: the avtt companion's LICENSE did not land "
+                         "in the stage (the bundle ships license + source — "
+                         "the settlemaker precedent)")
+    run([py, str(STAGE / "avtt-integration" / "src" / "avtt" / "publish.py"),
+         "--help"], stdout=subprocess.DEVNULL)
+    print("  LICENSE present; publish.py runs on the bundled python")
     step("smoke: clean test artifacts out of the stage before packing")
     # the smoke boot ran with CAMPAIGN_DATA_ROOT pointed at the stage's
     # campaign-data/ (launch.cmd) — reset it wholesale to the seeded state
@@ -453,6 +518,7 @@ def main():
         if not payload.exists():
             raise SystemExit("--sfx-only: release/work/payload.7z not found")
     else:
+        ensure_companion()
         build_stage(node_zip)
         if not ARGS.no_smoke:
             smoke(PORT_STAGE)

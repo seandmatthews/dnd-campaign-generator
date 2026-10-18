@@ -1,6 +1,9 @@
 # 53 — Table-setup card: bundle the pinned companion, spawn it behind buttons
 
-**Status:** proposed
+**Status:** in-progress (implemented 2026-10-17 — builder staging + stamp
++ smoke, the spawn endpoint, the card, 8 studio tests; the live verify
+pends the shared campaign rebuild with 46/49; the scenes button spun out
+as ticket 54)
 **Priority:** P1 — the friend's path to the seam's "cool stuff" (needs
 companion ticket 07; independent of core 51/52)
 **Area:** `release/build_release.py` (bundle + stamp), `studio/routers/`
@@ -90,6 +93,44 @@ warning inline (the lean), or wait for the companion's 0.7.1 pin bump
 - [ ] Detection is read-only: no `.obsidian/` writes from the card path
       — studio tests.
 
-## Implementation notes (YYYY-MM-DD)
+## Implementation notes (2026-10-17)
 
-_lands here when the status flips._
+- **Builder** (`build_release.py`): `ensure_companion()` clones the
+  companion at the pinned tag into `release/cache/avtt-integration` —
+  reused while the cache sits exactly at the pin, re-cloned when the pin
+  moves (tags are immutable), refused if the dir is not a git clone.
+  `build_stage` copies it to `avtt-integration/` (`IGNORE_BASE` strips
+  `.git`). The VERSION stamp gained `+v0.1.0+atlas-<pin>`, read from the
+  staged companion by the bundled python (`avtt._version`) so it cannot
+  drift from what shipped; install.cmd's byte-compare is untouched (it
+  never parsed VERSION). Smoke grew the two builder acceptance checks:
+  the LICENSE must land, and `publish.py --help` must run on the bundled
+  python.
+- **Studio** (`routers/table.py`): `GET …/table-setup/status`
+  (existence-only detection: companion found, Atlas plugin dir present)
+  and `POST …/table-setup/publish-presets` — the spawn seam: list-form
+  args, explicit cwd, never a shell, 120s cap, campaign lock, the
+  campaign dir server-resolved only, refusal = 200 + `ok:false` with the
+  publisher's text verbatim, success = canon snapshot. Companion home:
+  `$AVTT_INTEGRATION_HOME` → bundle layout → dev sibling; never imported
+  (D1). `/atlas` serves ATLAS.md like `/tutorial` (the file was already
+  staged by ticket 46; the card links it).
+- **Card** (`world.js` `tableCard()`): status line, the Install-the-
+  ICRPG-preset button, the publisher's stdout verbatim in a `<pre>`, and
+  the manual-twin notes (ATLAS.md steps; the lore-subfolder vs
+  campaign-root vault distinction).
+- **Tests:** `studio/tests/test_table_setup.py` (8) — list-form/no-shell/
+  resolved-dir spawn, verbatim refusal with no snapshot, honest 504,
+  404-before-any-spawn (including a crafted escaping name), honest 409
+  without the companion, read-only `.obsidian/`, home-resolution order.
+- **Deviations:** (a) the card's status line checks plugin *existence*
+  only — the authoritative version report stays a companion subprocess
+  away rather than the studio re-implementing pin comparison; (b) the
+  scenes button did not fit this sitting — spun out as ticket 54 (same
+  endpoint pattern); (c) the pin ruling was taken as this ticket's
+  recorded lean: v0.1.0 (ATLAS_PIN 0.6.0) against the table machine's
+  0.7.1 — the designed mismatch warning is the expected behavior;
+  companion ticket 08 lands on its own cadence.
+- **Still open:** the live verify (acceptance 2) — the shared campaign
+  rebuild with `system: icrpg` closes this ticket's manual check and
+  tickets 46/49's pending verifies in one sitting.

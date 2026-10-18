@@ -718,6 +718,31 @@ shapes in this document true.
   never a fallback to the DM briefing. No mechanics, no pending proposals,
   no secret titles or file paths.
 
+### Table setup (the bundled avtt companion — ticket 53)
+- The companion (`dcg-avtt-integration`) is spawned, never imported (D1).
+  The studio resolves its home via `$AVTT_INTEGRATION_HOME`, then
+  `avtt-integration/` beside the studio (the bundle's layout), then the
+  dev sibling `dcg-avtt-integration/`. All publisher logic — the `system:`
+  gate, the Atlas pin-mismatch policy — is companion-side; this API
+  returns its stdout verbatim and the card shows it as-is.
+- `GET /api/campaign/{name}/table-setup/status` →
+  `{companion_found: bool, atlas_plugin: bool}`. Existence checks only:
+  `atlas_plugin` is whether `<campaign>/.obsidian/plugins/atlas-vtt/`
+  exists (read-only — the spine ignores `.obsidian/` everywhere).
+- `POST /api/campaign/{name}/table-setup/publish-presets`
+  `{"pack"?: str}` (default `icrpg`) → `{ok, exit_code, stdout, stderr}`.
+  Spawns the companion's `src/avtt/publish.py <campaign> presets --pack
+  <pack>` under the studio's own Python (list-form args, explicit cwd,
+  never a shell, 120s cap). The request carries no path: the campaign
+  directory is server-resolved and a malformed name 404s before anything
+  spawns. A publisher refusal comes back `ok: false` with its text in
+  `stdout` — a result, not an error. Exit 0 snapshots the campaign
+  (`atlas-vtt/` files are committed canon policy, ticket 47). 409 when
+  the companion is not found (ATLAS.md's manual steps are the fallback),
+  409 on the campaign lock, 504 on timeout.
+- `/atlas` serves `docs/for-new-gms/ATLAS.md` as plain text — the same
+  one-file, never-a-stale-copy contract as `/tutorial` (ticket 46).
+
 ### Places (place-centered campaign view — deterministic, no LLM)
 - One campaign-local `place_id` joins lore pages (a `kind: place` page with
   `place_id:` frontmatter OWNS identity), simulation places

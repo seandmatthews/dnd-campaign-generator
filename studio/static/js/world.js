@@ -827,6 +827,99 @@
     return card;
   }
 
+  /* ----- table setup: the bundled avtt companion behind one button
+     (ticket 53). The studio spawns the companion's presets publisher and
+     shows its stdout verbatim — every companion behavior (the system:
+     gate, the Atlas pin-mismatch policy) stays companion-side; this card
+     is the button, the status line, and the refusal text. ATLAS.md is
+     the always-true manual twin of everything here. */
+
+  function tableCard() {
+    const card = S.el(
+      '<section class="panel panel-card table-setup-card">' +
+        '<h3 class="panel-title">Table setup (Atlas VTT)</h3>' +
+        '<p class="panel-note">Run the campaign at the table: the battlemaps ' +
+          'you generate run as-is in <a href="https://github.com/atlas-vtt/atlas-vtt" target="_blank" rel="noopener">Atlas VTT</a>, ' +
+          'and the session&rsquo;s story comes home through the Review queue. ' +
+          '<a href="/atlas">ATLAS.md</a> is the full walkthrough &mdash; every ' +
+          'step here has its manual twin there.</p>' +
+        '<div class="form-block">' +
+          '<p class="muted form-note table-status">Checking the table setup&hellip;</p>' +
+          '<div class="inline-form">' +
+            '<button type="button" class="btn btn-primary table-publish" disabled ' +
+              'title="Checking the companion&hellip;">Install the ICRPG preset</button>' +
+          '</div>' +
+          '<pre class="table-output hidden"></pre>' +
+          '<div class="form-error"></div>' +
+          '<p class="muted form-note">The vault Atlas wants is the campaign ' +
+            'folder itself (ATLAS.md Step 2). The &ldquo;Register this folder as ' +
+            'a vault&rdquo; button in the Authoring lore card registers the ' +
+            'lore subfolder only &mdash; that one is for the lore deep-link.</p>' +
+        '</div>' +
+      '</section>'
+    );
+    const statusEl = card.querySelector('.table-status');
+    const publishBtn = card.querySelector('.table-publish');
+    const outEl = card.querySelector('.table-output');
+    const errBox = card.querySelector('.form-error');
+
+    function statusLine(st) {
+      const lines = [];
+      if (!st.companion_found) {
+        lines.push('This copy of the studio does not carry the preset ' +
+          'companion &mdash; the manual steps in ATLAS.md are the ' +
+          'always-true path.');
+      }
+      lines.push(st.atlas_plugin
+        ? '&#10003; Atlas VTT is installed in this vault.'
+        : 'Atlas VTT is not in this vault yet: in Obsidian, Settings &rarr; ' +
+          'Community plugins &rarr; Browse &rarr; &ldquo;Atlas VTT&rdquo; &rarr; ' +
+          'Install &rarr; Enable (ATLAS.md Step 1).');
+      return lines.join(' ');
+    }
+
+    S.api(S.campUrl('/table-setup/status')).then((st) => {
+      if (!card.isConnected) return;
+      statusEl.innerHTML = statusLine(st);
+      publishBtn.disabled = !st.companion_found;
+      publishBtn.title = st.companion_found
+        ? '' : 'The companion is not bundled with this copy';
+    }).catch((err) => {
+      if (!card.isConnected) return;
+      statusEl.textContent = 'The table-setup status could not be loaded.';
+      errBox.innerHTML = '';
+      errBox.appendChild(S.errorPanel(err));
+    });
+
+    publishBtn.addEventListener('click', async () => {
+      publishBtn.disabled = true;
+      errBox.innerHTML = '';
+      outEl.classList.add('hidden');
+      try {
+        const res = await S.api(S.campUrl('/table-setup/publish-presets'),
+                                { method: 'POST', body: {} });
+        outEl.textContent = (res.stdout || '') + (res.stderr || '');
+        outEl.classList.remove('hidden');
+        if (res.ok) {
+          S.toast('Preset installed into the campaign\u2019s atlas-vtt/.', 'ok');
+          const st = await S.api(S.campUrl('/table-setup/status'));
+          if (card.isConnected) statusEl.innerHTML = statusLine(st);
+        } else {
+          // the publisher refused (system: mismatch etc.) — its text is the answer
+          S.toast('The publisher refused — see its output below.', 'error');
+        }
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err,
+          'The preset could not be installed \u2014 ATLAS.md\u2019s manual ' +
+          'steps still work.'));
+      } finally {
+        publishBtn.disabled = false;
+      }
+    });
+    return card;
+  }
+
   /* ----- quests: first-class entities on lore pages (ticket 06) -----
      A quest IS a lore page (kind: quest frontmatter); this card only
      reads it — grouping, due flags, overdue rows — and opens the same
@@ -942,6 +1035,7 @@
     });
     root.appendChild(head);
     if (!authoringDismissed(S.state.campaign)) root.appendChild(authoringCard());
+    root.appendChild(tableCard());
 
     // Geography digest.
     const geoPanel = S.el(

@@ -52,6 +52,7 @@ from routers import (
     review,
     simulation,
     system,
+    table,
 )
 from routers import sessions as sessions_router
 import engines  # boot-time engine-home restore lives with the home manager
@@ -136,7 +137,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Campaign Studio", version="0.1.0", lifespan=lifespan)
 
-for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, quests, sessions_router):
+for r in (campaigns, system, maps, simulation, lore, review, knowledge, places, quests, sessions_router, table):
     app.include_router(r.router)
 
 
@@ -149,6 +150,19 @@ def tutorial():
         raise StarletteHTTPException(
             404, "TUTORIAL.md is missing — it lives at "
                  "docs/for-new-gms/TUTORIAL.md")
+    return PlainTextResponse(path.read_text(encoding="utf-8"))
+
+
+@app.get("/atlas", response_class=PlainTextResponse)
+def atlas():
+    """The at-the-table walkthrough (ticket 46), served the same way as
+    /tutorial — the table-setup card links here, and the bundle stages the
+    file so installed copies serve the real thing."""
+    path = STUDIO_DIR.parent / "docs" / "for-new-gms" / "ATLAS.md"
+    if not path.is_file():
+        raise StarletteHTTPException(
+            404, "ATLAS.md is missing — it lives at "
+                 "docs/for-new-gms/ATLAS.md")
     return PlainTextResponse(path.read_text(encoding="utf-8"))
 
 
