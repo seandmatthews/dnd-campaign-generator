@@ -133,7 +133,9 @@ step. (The fields are Atlas's. The companion repo's presets publisher
 installs and validates this exact file — `uv run publish.py <campaign>
 presets` from a checkout of dcg-avtt-integration; it refuses unless your
 campaign.yaml declares `system: icrpg`. Hand-editing stays optional
-either way.)
+either way. On a studio install the *Table setup* card on the World
+Building tab runs that publisher for you — its **Install the ICRPG
+preset** button; this page stays the always-true manual twin.)
 
 **You should see:** in Atlas, open or create a collection
 (**Atlas ribbon → New collection** — a collection is one table's world:
@@ -167,7 +169,10 @@ but the files the studio already made. (It is also exactly what the
 companion repo's *scenes publisher* automates — landing the map, scene,
 and lighting into a collection for you. While its golden-fixture capture
 is pending it hands you the `.uvtt` through its `_inbox/` and you do
-this drag. The drag is the feature either way.)
+this drag. The drag is the feature either way. The *Table setup* card's
+**Publish site scene** button runs that publisher: pick the site, click,
+and the publisher's output shows under the button — an `_inbox/` note is
+the designed degrade, not an error; drag as above.)
 
 > **If Atlas says the walls are too crowded.** When you drag in a
 > `.uvtt`, Atlas checks the map's walls before importing. The notice

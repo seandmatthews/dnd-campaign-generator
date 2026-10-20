@@ -11,6 +11,7 @@
        compounds of those, and descendant chains of them
      - appendChild/remove/insertAdjacentElement/closest/isConnected
      - classList, get/setAttribute/removeAttribute, className
+     - <select>: options / value (first-option fallback, like a real DOM)
      - addEventListener + fire(), textContent/innerHTML, firstElementChild
      - document.createElement('template') with .content.firstElementChild
        (what S.el builds on), getElementById, the app's page skeleton
@@ -175,6 +176,26 @@ class El {
   }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   removeAttribute(name) { delete this.attrs[name]; }
+
+  /* <select>: the options collection and the selected value — the
+     table-setup card's site picker (ticket 54) is the first flow the
+     shim must read a select back for. A select with no explicitly
+     selected option answers its first option, like a real DOM. Other
+     tags keep plain-property .value semantics (textarea/input store
+     whatever the app assigns). */
+  get options() { return this.children.filter((n) => n.tagName === 'option'); }
+  get value() {
+    if (this.tagName !== 'select') return this._value;
+    const opts = this.options;
+    const picked = opts.find((o) => o.selected) || opts[0];
+    if (!picked) return '';
+    return picked.attrs.value !== undefined ? picked.attrs.value
+      : picked.textContent;
+  }
+  set value(v) {
+    if (this.tagName !== 'select') { this._value = v; return; }
+    this.options.forEach((o) => { o.selected = o.attrs.value === String(v); });
+  }
   hasAttribute(name) { return this.attrs[name] !== undefined; }
 
   addEventListener(type, fn) {

@@ -64,6 +64,38 @@ class PublishBody(BaseModel):
     pack: str = "icrpg"
 
 
+class ScenesBody(BaseModel):
+    site: str | None = None
+
+
+def _spawn_publisher(name: str, home: Path, cmd: list[str], what: str,
+                     snapshot_msg: str) -> dict:
+    """The one spawn seam both buttons share: run the companion subcommand
+    under the campaign lock, cap it, snapshot canon on success, and return
+    the publisher's stdout verbatim. A nonzero exit is a refusal — a
+    result, not an error; the publisher's own text is what the card
+    shows."""
+    with campaign_lock_nowait(name, f"the {what}"):
+        try:
+            proc = subprocess.run(
+                cmd, cwd=str(home), capture_output=True, text=True,
+                encoding="utf-8", errors="replace",
+                timeout=PUBLISH_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            raise HTTPException(
+                status_code=504,
+                detail=f"the {what} did not finish within "
+                       f"{PUBLISH_TIMEOUT_S}s — nothing was changed")
+        except OSError as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"could not start the avtt companion: {e}")
+    if proc.returncode == 0:
+        canon.snapshot(name, snapshot_msg)
+    return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
+            "stdout": proc.stdout, "stderr": proc.stderr}
+
+
 @router.get("/api/campaign/{name}/table-setup/status")
 def get_table_status(name: str):
     """The card's status line: is the companion here, is Atlas in the
@@ -99,24 +131,42 @@ def post_publish_presets(name: str, body: PublishBody | None = None):
     pack = (body.pack if body else None) or "icrpg"
     cmd = [sys.executable, str(home / "src" / "avtt" / "publish.py"),
            str(d), "presets", "--pack", pack]
-    with campaign_lock_nowait(name, "the preset publish"):
-        try:
-            proc = subprocess.run(
-                cmd, cwd=str(home), capture_output=True, text=True,
-                encoding="utf-8", errors="replace",
-                timeout=PUBLISH_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            raise HTTPException(
-                status_code=504,
-                detail=f"the preset publisher did not finish within "
-                       f"{PUBLISH_TIMEOUT_S}s — nothing was changed")
-        except OSError as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"could not start the avtt companion: {e}")
-    if proc.returncode == 0:
-        canon.snapshot(
-            name, f"table-setup: installed the {pack} preset "
-                  "(avtt companion)")
-    return {"ok": proc.returncode == 0, "exit_code": proc.returncode,
-            "stdout": proc.stdout, "stderr": proc.stderr}
+    return _spawn_publisher(
+        name, home, cmd, "preset publish",
+        f"table-setup: installed the {pack} preset (avtt companion)")
+
+
+@router.post("/api/campaign/{name}/table-setup/publish-scenes")
+def post_publish_scenes(name: str, body: ScenesBody | None = None):
+    """Convert + publish site battlemap scene(s) into the campaign's
+    atlas-vtt/ by spawning the bundled companion's scenes publisher.
+
+    The same seam as publish-presets: no client-supplied path — the
+    campaign dir is resolved server-side and the site slug is the
+    publisher's own to validate (an unknown one is a verbatim refusal,
+    not a pre-check here). The optional site travels as ONE joined
+    ``--site=<slug>`` argument so a crafted value can never smuggle an
+    option flag of its own. Omitting the site publishes every site.
+
+    On this machine's expected state the vault does not run the pinned
+    Atlas — the publisher takes its designed ``_inbox/`` degrade path
+    (exit 0, the note in stdout): the .uvtt is staged for a hand
+    drag-in, the card shows that note as the answer, not as an error."""
+    d = require_campaign(name)
+    home = companion_home()
+    if home is None:
+        raise HTTPException(
+            status_code=409,
+            detail="the avtt companion is not bundled with this copy of "
+                   "the studio — the manual steps in ATLAS.md are the "
+                   "always-true path (drag the .uvtt into Atlas; walls, "
+                   "doors and lights come along)")
+    cmd = [sys.executable, str(home / "src" / "avtt" / "publish.py"),
+           str(d), "scenes"]
+    site = ((body.site if body else None) or "").strip()
+    if site:
+        cmd.append(f"--site={site}")
+    return _spawn_publisher(
+        name, home, cmd, "scene publish",
+        "table-setup: published site scene(s) to atlas-vtt/ "
+        "(avtt companion)")

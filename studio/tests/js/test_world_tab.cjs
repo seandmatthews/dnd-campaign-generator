@@ -250,6 +250,91 @@ async function main() {
       'a done run clears the note');
     return null;
   });
+
+  // ---- the table-setup card's scenes half (ticket 54): the picker lists
+  // the campaign's site battlemaps; the publish button gates on the
+  // companion AND a site; the click carries the picked slug.
+
+  const TABLE_STATUS_OK = { method: 'GET',
+    match: (u) => /\/table-setup\/status$/.test(u),
+    reply: () => ({ companion_found: true, atlas_plugin: false }) };
+  const MAPS_ONE_SITE = { method: 'GET', match: (u) => /\/maps$/.test(u),
+    reply: () => ({ cities: [], sites: [
+      { slug: 'the-drowned-crypt', label: 'The Drowned Crypt' }] }) };
+
+  function tableCard(sec) {
+    return sec.querySelector('.table-setup-card');
+  }
+
+  await ok('the scenes picker lists site battlemaps; the button is live', async () => {
+    resetFetch([TABLE_STATUS_OK, MAPS_ONE_SITE]);
+    const sec = await renderWorld();
+    const card = tableCard(sec);
+    assert.ok(card, 'the table-setup card rendered');
+    const sel = card.querySelector('.table-site');
+    assert.strictEqual(sel.options.length, 1, 'one site in the picker');
+    assert.strictEqual(sel.value, 'the-drowned-crypt',
+      'the first site is the picked one');
+    assert.strictEqual(sel.options[0].textContent,
+      'The Drowned Crypt (the-drowned-crypt)',
+      'the option shows the human label with the slug');
+    const btn = card.querySelector('.table-publish-scenes');
+    assert.strictEqual(btn.disabled, false,
+      'companion + site → the button is live');
+    return null;
+  });
+
+  await ok('no sites keeps the scene button off with an honest title', async () => {
+    resetFetch([TABLE_STATUS_OK,
+      { method: 'GET', match: (u) => /\/maps$/.test(u),
+        reply: () => ({ cities: [], sites: [] }) }]);
+    const sec = await renderWorld();
+    const card = tableCard(sec);
+    const sel = card.querySelector('.table-site');
+    assert.strictEqual(sel.options[0].textContent, 'no site battlemaps yet');
+    const btn = card.querySelector('.table-publish-scenes');
+    assert.strictEqual(btn.disabled, true);
+    assert.ok(btn.title.indexOf('No site battlemaps') !== -1,
+      'title: ' + btn.title);
+    return null;
+  });
+
+  await ok('a missing companion keeps the scene button off too', async () => {
+    resetFetch([{ method: 'GET',
+        match: (u) => /\/table-setup\/status$/.test(u),
+        reply: () => ({ companion_found: false, atlas_plugin: false }) },
+      MAPS_ONE_SITE]);
+    const sec = await renderWorld();
+    const btn = tableCard(sec).querySelector('.table-publish-scenes');
+    assert.strictEqual(btn.disabled, true);
+    assert.ok(btn.title.indexOf('companion is not bundled') !== -1,
+      'title: ' + btn.title);
+    return null;
+  });
+
+  await ok('clicking Publish site scene POSTs the picked slug and shows stdout', async () => {
+    resetFetch([TABLE_STATUS_OK, MAPS_ONE_SITE,
+      { method: 'POST',
+        match: (u) => /\/table-setup\/publish-scenes$/.test(u),
+        reply: () => ({ ok: true, exit_code: 0,
+          stdout: 'the-drowned-crypt: copied maps/sites/the-drowned-crypt/... '
+            + '-> atlas-vtt/_inbox/the-drowned-crypt.uvtt\n',
+          stderr: '' }) }]);
+    const sec = await renderWorld();
+    const card = tableCard(sec);
+    card.querySelector('.table-publish-scenes').click();
+    await flush();
+    const posts = log.filter((e) => e.method === 'POST' &&
+      /\/table-setup\/publish-scenes$/.test(e.url));
+    assert.strictEqual(posts.length, 1, 'exactly one scenes POST');
+    assert.deepStrictEqual(posts[0].body, { site: 'the-drowned-crypt' },
+      'the picked slug rides the body');
+    const out = card.querySelector('.table-output');
+    assert.ok(!out.classList.contains('hidden'), 'the output shows');
+    assert.ok(out.textContent.indexOf('_inbox') !== -1,
+      'the publisher stdout renders verbatim');
+    return null;
+  });
 }
 
 main().then(() => {

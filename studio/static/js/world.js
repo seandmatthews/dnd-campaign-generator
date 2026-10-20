@@ -849,6 +849,11 @@
             '<button type="button" class="btn btn-primary table-publish" disabled ' +
               'title="Checking the companion&hellip;">Install the ICRPG preset</button>' +
           '</div>' +
+          '<div class="inline-form">' +
+            '<select class="table-site" aria-label="Site battlemap"></select>' +
+            '<button type="button" class="btn table-publish-scenes" disabled ' +
+              'title="Checking the companion&hellip;">Publish site scene</button>' +
+          '</div>' +
           '<pre class="table-output hidden"></pre>' +
           '<div class="form-error"></div>' +
           '<p class="muted form-note">The vault Atlas wants is the campaign ' +
@@ -860,8 +865,24 @@
     );
     const statusEl = card.querySelector('.table-status');
     const publishBtn = card.querySelector('.table-publish');
+    const scenesBtn = card.querySelector('.table-publish-scenes');
+    const siteSel = card.querySelector('.table-site');
     const outEl = card.querySelector('.table-output');
     const errBox = card.querySelector('.form-error');
+    let companionFound = null; // null = the status call is still in flight
+
+    // the scene button needs BOTH answers — the companion is here and a
+    // site exists to publish — so it stays disabled until both land
+    function syncScenesBtn() {
+      if (companionFound === null) return;
+      const hasSite = siteSel.options.length > 0 && !!siteSel.value;
+      scenesBtn.disabled = !(companionFound && hasSite);
+      scenesBtn.title = !companionFound
+        ? 'The companion is not bundled with this copy'
+        : (hasSite ? ''
+          : 'No site battlemaps yet \u2014 generate one from a place '
+            + '(ATLAS.md Step 4; cities have none)');
+    }
 
     function statusLine(st) {
       const lines = [];
@@ -881,14 +902,43 @@
     S.api(S.campUrl('/table-setup/status')).then((st) => {
       if (!card.isConnected) return;
       statusEl.innerHTML = statusLine(st);
-      publishBtn.disabled = !st.companion_found;
-      publishBtn.title = st.companion_found
+      companionFound = !!st.companion_found;
+      publishBtn.disabled = !companionFound;
+      publishBtn.title = companionFound
         ? '' : 'The companion is not bundled with this copy';
+      syncScenesBtn();
     }).catch((err) => {
       if (!card.isConnected) return;
       statusEl.textContent = 'The table-setup status could not be loaded.';
       errBox.innerHTML = '';
       errBox.appendChild(S.errorPanel(err));
+    });
+
+    // the picker lists the campaign's site battlemaps — the same set the
+    // Maps tab shows; cities carry no .uvtt (sites only)
+    S.api(S.campUrl('/maps')).then((doc) => {
+      if (!card.isConnected) return;
+      const sites = (doc && Array.isArray(doc.sites)) ? doc.sites : [];
+      siteSel.innerHTML = '';
+      sites.forEach((s) => {
+        const label = (s.label && s.label !== s.slug)
+          ? s.label + ' (' + s.slug + ')' : s.slug;
+        siteSel.appendChild(S.el('<option value="' + S.esc(s.slug) + '">'
+          + S.esc(label) + '</option>'));
+      });
+      if (!sites.length) {
+        siteSel.appendChild(S.el('<option value=""></option>'));
+        siteSel.options[0].textContent = 'no site battlemaps yet';
+      }
+      syncScenesBtn();
+    }).catch(() => {
+      // a maps listing that will not load keeps the button off with a
+      // say-nothing option; the Maps tab's own error surface explains
+      if (!card.isConnected) return;
+      siteSel.innerHTML = '';
+      siteSel.appendChild(S.el('<option value=""></option>'));
+      siteSel.options[0].textContent = 'sites unavailable';
+      syncScenesBtn();
     });
 
     publishBtn.addEventListener('click', async () => {
@@ -915,6 +965,39 @@
           'steps still work.'));
       } finally {
         publishBtn.disabled = false;
+      }
+    });
+
+    scenesBtn.addEventListener('click', async () => {
+      scenesBtn.disabled = true;
+      publishBtn.disabled = true;
+      errBox.innerHTML = '';
+      outEl.classList.add('hidden');
+      const site = siteSel.value || null;
+      try {
+        const res = await S.api(S.campUrl('/table-setup/publish-scenes'),
+                                { method: 'POST',
+                                  body: site ? { site: site } : {} });
+        outEl.textContent = (res.stdout || '') + (res.stderr || '');
+        outEl.classList.remove('hidden');
+        if (res.ok) {
+          // the pin-mismatch degrade stages into atlas-vtt/_inbox/ and says
+          // so in the output — the designed behavior, not an error
+          S.toast((res.stdout || '').indexOf('_inbox') !== -1
+            ? 'Staged in atlas-vtt/_inbox/ \u2014 drag it into Atlas by hand.'
+            : 'Scene published into the campaign\u2019s atlas-vtt/.', 'ok');
+        } else {
+          // the publisher refused — its text is the answer
+          S.toast('The publisher refused — see its output below.', 'error');
+        }
+      } catch (err) {
+        errBox.innerHTML = '';
+        errBox.appendChild(S.errorPanel(err,
+          'The scene could not be published \u2014 ATLAS.md\u2019s manual ' +
+          'steps still work.'));
+      } finally {
+        scenesBtn.disabled = false;
+        publishBtn.disabled = !companionFound;
       }
     });
     return card;
