@@ -6,7 +6,8 @@ What this is
 A self-contained local web app for running a D&D campaign: fantasy map
 generation, world building, a living faction simulation, and one review
 queue that turns session notes into canon. It runs entirely on your
-machine and talks only to your browser.
+machine and talks only to your browser. Not affiliated with or endorsed
+by Wizards of the Coast.
 
 Starting it
 -----------

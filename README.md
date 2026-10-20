@@ -3,6 +3,9 @@
 Three engines and one app under one parent. Every project is runnable and
 tested on its own; the studio is the only one that invokes the others.
 
+Not affiliated with or endorsed by Wizards of the Coast — "D&D" here names
+the kind of table the tool prepares for, nothing more.
+
 | project | what it is | entry point |
 |---|---|---|
 | [`dnd-mapping/`](dnd-mapping/) | worlds → cities → battlemaps; everything regenerated from a recorded seed | [`AGENTS.md`](dnd-mapping/AGENTS.md) |

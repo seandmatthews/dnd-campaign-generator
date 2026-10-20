@@ -8,6 +8,11 @@ but the Tier-1 headless pipeline depends on **custom files that exist only as
 local modifications inside the FMG clone**. This directory is the tracked
 copy of those files. If the working tree is lost, these restore Tier 1.
 
+These files modify [Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator)
+— MIT, Copyright 2017–2024 Max Haniyeu (Azgaar). The clone that receives them
+keeps its own LICENSE, and any release bundle built from it ships that license
+and source intact.
+
 ## Contents
 
 | file | applies to | what it is |
