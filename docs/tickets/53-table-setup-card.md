@@ -134,3 +134,39 @@ warning inline (the lean), or wait for the companion's 0.7.1 pin bump
 - **Still open:** the live verify (acceptance 2) — the shared campaign
   rebuild with `system: icrpg` closes this ticket's manual check and
   tickets 46/49's pending verifies in one sitting.
+
+## Live verify (2026-10-20, ember-coast, dev studio on :8766)
+
+The sitting ran against the real campaign through the real card in a
+browser:
+
+- **The refusal renders verbatim** (acceptance 4's spirit): with no
+  `system:` in campaign.yaml the button came back with the publisher's
+  own text — "refusing: set `system: icrpg` in `campaign.yaml` (no
+  system declared) — never writing a pack into a campaign that did not
+  ask for it" — in the card's output pane, toast saying the publisher
+  refused, no snapshot.
+- **Then the install succeeded** (acceptance 2, studio half): after
+  setting `system: icrpg` by hand (the documented manual path), the
+  button wrote `atlas-vtt/system-presets/icrpg.json` and the success
+  toast fired; canon snapshot `00ab24f`.
+- **The pin-mismatch box is obsolete on this machine** (acceptance 3):
+  companion v0.2.0 landed its 0.7.1 pin bump (companion ticket 08), so
+  the dev sibling now matches the vault's Atlas 0.7.1 exactly — there
+  is no mismatch to render here. The bundle pin followed (build_release
+  `COMPANION_TAG` → v0.2.0, the stamp still auto-reads ATLAS_PIN). The
+  verbatim-stdout mechanism that would carry the warning is proven by
+  the two refusals above.
+- **Found by real use — the scenes button refused our generated map**,
+  which cracked two core bugs open (fixed same day, see ticket 54's
+  notes): the exporter wrote the Dungeondraft uvtt dialect (map_size in
+  pixels) where Atlas reads squares, and `_cell_walls` laid horizontal
+  wall runs out transposed. With those fixed and the map regenerated,
+  the scenes publish ran the FULL path (no `_inbox/` degrade): 174
+  walls, 1 door, 4 lights into
+  `atlas-vtt/collections/ember-coast/scenes/`, snapshot `265b676`.
+- **Remaining for completed (human hands):** open the campaign vault in
+  Obsidian, and in Atlas's Asset Manager confirm the **ember-coast**
+  collection shows The Drowned Crypt with walls/doors/lights, and the
+  **ICRPG** preset (the publisher's `icrpg.json`) appears in collection
+  settings' system-preset picker beside the hand-staged *ICRPG (house)*.

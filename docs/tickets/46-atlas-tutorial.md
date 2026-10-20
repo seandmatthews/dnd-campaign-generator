@@ -137,6 +137,24 @@ simulation, hand-authored person page):
   walls/doors/lights checkpoint); collection settings -> system preset
   picker -> "ICRPG (house)" appears; Open player window; pin
   `table-notes/2026-10-10.md` to the scene.
+
+### Update 2026-10-20 — the map file was wrong; the publisher now does step 4
+
+The remaining steps above got SIMPLER by the table-setup card's live
+verify (ticket 53/54): the generated `.uvtt` had never actually been
+importable — the exporter wrote map_size in pixels (Dungeondraft
+dialect) where Atlas reads squares, and the dungeon walls themselves
+were generated transposed (both fixed in core that day; the Drowned
+Crypt artifacts regenerated from the same seed, walls now correct).
+The card's **Publish site scene** button landed the fixed scene into
+the `ember-coast` collection itself (174 walls, 1 door, 4 lights), so
+the remaining human steps are: open the campaign vault in Obsidian →
+Atlas Asset Manager → confirm the **ember-coast** collection shows The
+Drowned Crypt with walls/doors/lights (the old hand-drag through
+Create maps is no longer needed) → collection settings' system-preset
+picker shows **ICRPG** (the publisher's pack) beside *ICRPG (house)* →
+Open player window → pin the table note. The walkthrough page's step-4
+hand-drag stays as the always-true manual twin.
 - **Found by real use (2026-10-10, the DM's own first import):** Atlas 0.7.1's
   Create-maps BROWSE button filters to `image/*` — the `.uvtt` is greyed out
   there and cannot be picked. The file's way in is DRAG-AND-DROP (the drop

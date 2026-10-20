@@ -209,15 +209,21 @@ def _cell_walls(cells, cols, rows):
     """Wall rectangles around every edge between floor and non-floor cells,
     collinear runs merged into single rings. Returns [ [(x,y)...] ] in meters."""
     T = 0.25  # wall thickness (m)
+    # h_edges ride (kind, y, x) — runs() groups by the SECOND element and
+    # the consumer reads it as the fixed axis; grouping a horizontal edge
+    # by its X used to lay every horizontal wall run at a Y taken from a
+    # cell column (walls transposed and half off-canvas, found live
+    # 2026-10-20 when Atlas first refused the map). v_edges already group
+    # by their fixed X.
     h_edges, v_edges = [], []
     for y in range(rows):
         for x in range(cols):
             if not cells[y][x]:
                 continue
             if y == 0 or not cells[y - 1][x]:
-                h_edges.append(("top", x, y))
+                h_edges.append(("top", y, x))
             if y == rows - 1 or not cells[y + 1][x]:
-                h_edges.append(("bot", x, y))
+                h_edges.append(("bot", y, x))
             if x == 0 or not cells[y][x - 1]:
                 v_edges.append(("lef", x, y))
             if x == cols - 1 or not cells[y][x + 1]:
@@ -520,8 +526,22 @@ def wrap(png_name="scene.png"):
         sys.exit(f"error: {png_name} is {pw}x{ph} but the scene resolves to "
                  f"{W}x{H} — re-render and re-rasterize before wrapping")
 
+    def cell_units(px):
+        """scene pixels -> whole cells when exact, else 4-decimal cells.
+        map_size and every coordinate ride in CELL units: Atlas derives
+        one cell as imageWidth / mapSize.x (uvttCellSize), so a map_size
+        in pixels reads as a 1-pixel-per-cell grid and is refused "too
+        small for its grid" — live-proven against the installed 0.7.1
+        bundle (2026-10-20) and its faithful port (companion scene.py).
+        The Dungeondraft dialect's pixels+pixels_per_grid pair is not
+        what the seam's target reads; pixels_per_grid is dropped rather
+        than shipped next to a cells-valued map_size it would
+        contradict."""
+        v = px / PIXELS_PER_GRID
+        return int(v) if float(v).is_integer() else round(v, 4)
+
     def pt(p):
-        return {"x": u(p[0]), "y": u(p[1])}
+        return {"x": cell_units(u(p[0])), "y": cell_units(u(p[1]))}
 
     line_of_sight = [
         [pt(p) for p in f["polygon"]]
@@ -534,13 +554,13 @@ def wrap(png_name="scene.png"):
     # spec-conforming VTTs.
     portals = []
     for d in scene["doors"]:
-        cx, cy = u(d["at"][0]), u(d["at"][1])
-        half = u(d["width_m"]) / 2
+        cx, cy = cell_units(u(d["at"][0])), cell_units(u(d["at"][1]))
+        half = cell_units(u(d["width_m"])) / 2
         ang = math.radians(d["angle"])
         dx, dy = math.cos(ang) * half, math.sin(ang) * half
         portals.append({
-            "bounds": [{"x": round(cx - dx, 2), "y": round(cy - dy, 2)},
-                       {"x": round(cx + dx, 2), "y": round(cy + dy, 2)}],
+            "bounds": [{"x": round(cx - dx, 4), "y": round(cy - dy, 4)},
+                       {"x": round(cx + dx, 4), "y": round(cy + dy, 4)}],
             "closed": d.get("closed", True),
             "color": "#a25a3c",
             "position": {"x": cx, "y": cy},
@@ -549,7 +569,7 @@ def wrap(png_name="scene.png"):
         })
     uvtt = {
         "format": 0.3,
-        "resolution": {"map_size": {"x": W, "y": H}, "pixels_per_grid": PIXELS_PER_GRID},
+        "resolution": {"map_size": {"x": cell_units(W), "y": cell_units(H)}},
         "image": base64.b64encode(png).decode(),
         "line_of_sight": line_of_sight,
         "portals": portals,
@@ -557,8 +577,8 @@ def wrap(png_name="scene.png"):
         "lights": [
             {"angle": 360, "brightness": 0.4, "color": f["color"], "contrast": 0,
              "enabled": True, "intensity": 1,
-             "position": {"x": u(f["at"][0]), "y": u(f["at"][1])},
-             "range": u(f["r"]), "shadows": 0}
+             "position": {"x": cell_units(u(f["at"][0])), "y": cell_units(u(f["at"][1]))},
+             "range": cell_units(u(f["r"])), "shadows": 0}
             for f in scene["features"] if f["kind"] == "light"
         ],
     }
@@ -566,7 +586,8 @@ def wrap(png_name="scene.png"):
     out = SCENE_DIR / f"{slug}.uvtt"
     out.write_bytes(json.dumps(uvtt).encode())
     print(f"wrote {out} ({out.stat().st_size // 1024} KB): {len(line_of_sight)} wall loops, "
-          f"{len(portals)} portals, {W}x{H}px @ {PIXELS_PER_GRID}px/grid")
+          f"{len(portals)} portals, {W}x{H}px @ {PIXELS_PER_GRID}px/grid "
+          f"= {cell_units(W)}x{cell_units(H)} cells")
 
 
 if __name__ == "__main__":

@@ -58,7 +58,9 @@ NODE_MAJOR = 24
 # 07 discipline; design doc §4). The stamp records the tag + its
 # ATLAS_PIN so an installed copy can say what it carries.
 COMPANION_REPO = "https://github.com/seandmatthews/dcg-avtt-integration.git"
-COMPANION_TAG = "v0.1.0"
+COMPANION_TAG = "v0.2.0"  # the 0.7.1 Atlas pin bump (companion ticket 08) —
+# v0.1.0 pinned Atlas 0.6.0 and would warn + _inbox-degrade on the table
+# machine's 0.7.1 vaults; ticket 53's lean was always to follow this bump
 COMPANION_CACHE = CACHE / "avtt-integration"
 # The installer SFX module (bin/7zSD.sfx) ships in the LZMA SDK package
 # (the -extra packages stopped carrying it). Igor's minimal module extracts

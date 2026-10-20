@@ -156,3 +156,12 @@ token named "Sera Vael", link it to the note - the fence
 (hearts: 4 / effort: d6 / ac: 12) should render on the token with no FS
 plugin installed. Everything up to that click is verified; the last click
 is the M1 verify.
+
+**Update 2026-10-20:** the scene exists now without any import — the
+table-setup card's Publish-site-scene button (tickets 53/54) published
+The Drowned Crypt into the `ember-coast` collection with correct walls
+(the generated map needed two core exporter fixes that day, recorded
+in ticket 54). The remaining human step is unchanged in substance:
+open the ember-coast collection in Atlas, place a token named
+"Sera Vael", link it to the person page - the fence should render on
+the token.

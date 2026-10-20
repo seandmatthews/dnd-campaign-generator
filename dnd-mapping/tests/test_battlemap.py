@@ -6,7 +6,10 @@ Zero dependencies — run directly:  python tests/test_battlemap.py
 Pins two 2026-09-23 findings: an '&' in a site name used to make scene.svg
 unparseable (the rasterizer then died with an opaque sharp error), and the
 .uvtt portals/lights did not match the Universal VTT (dd2vtt) shape, so
-doors and lights silently failed to import in Foundry.
+doors and lights silently failed to import in Foundry. Plus a 2026-10-20
+finding from the first live table-setup publish: map_size rode in pixels
+(Dungeondraft's dialect) while Atlas VTT — the seam's target — reads it
+as squares, so every generated map was refused on import.
 """
 
 import json
@@ -103,8 +106,80 @@ def test_uvtt_portals_and_lights_match_the_spec():
        all({"x", "y"} <= set(l["position"]) and isinstance(l["range"], (int, float))
            for l in lights))
     ok("resolution is spec-shaped",
-       uvtt["format"] == 0.3
-       and {"map_size", "pixels_per_grid"} <= set(uvtt["resolution"]))
+       uvtt["format"] == 0.3 and "map_size" in uvtt["resolution"])
+
+
+def test_uvtt_map_size_is_cells_not_pixels():
+    """Found live 2026-10-20: the file used to carry map_size in PIXELS
+    (Dungeondraft's dialect, with pixels_per_grid beside it), but Atlas
+    derives one cell as imageWidth / mapSize.x — so the generated map
+    read as a 1-pixel-per-cell grid and was refused "too small for its
+    grid" by Atlas 0.7.1 itself and by the companion's faithful port.
+    The file now speaks Atlas's dialect: map_size in cells, coordinates
+    in cells, no contradicting pixels_per_grid."""
+    scene, uvtt, _svg = build_site("Marsh & Fen")
+    res = uvtt["resolution"]["map_size"]
+    px_w = battlemap.u(scene["grids"]["x"] * scene["meters_per_grid"])
+    px_h = battlemap.u(scene["grids"]["y"] * scene["meters_per_grid"])
+    ok("map_size is in cells (px/grid recovers the image size)",
+       abs(res["x"] * battlemap.PIXELS_PER_GRID - px_w) < 0.51
+       and abs(res["y"] * battlemap.PIXELS_PER_GRID - px_h) < 0.51,
+       f"map_size={res} vs image {px_w}x{px_h}px")
+    ok("map_size is squares, not pixels",
+       res["x"] < px_w and res["y"] < px_h)
+    ok("no pixels_per_grid beside a cells-valued map_size",
+       "pixels_per_grid" not in uvtt["resolution"])
+    in_bounds = all(
+        0 <= p["x"] <= res["x"] + 0.01 and 0 <= p["y"] <= res["y"] + 0.01
+        for wall in uvtt["line_of_sight"] for p in wall)
+    ok("wall coordinates are in cells within the map", in_bounds)
+    in_bounds = all(
+        0 <= p["position"]["x"] <= res["x"] + 0.01
+        and 0 <= p["position"]["y"] <= res["y"] + 0.01
+        and 0 < l["range"] <= max(res["x"], res["y"])
+        for p in uvtt["portals"] for l in uvtt["lights"])
+    ok("portal and light coordinates are in cells within the map", in_bounds)
+
+
+def test_walls_hug_the_floor_cells():
+    """Found live 2026-10-20 beside the map_size dialect bug: _cell_walls
+    grouped horizontal edge runs by the cell's X while the consumer read
+    that group key as Y — horizontal walls were laid out transposed,
+    past the canvas edge (a 28-row grid grew rings at row 39), and never
+    bounding the rooms they were generated from. Every wall ring must
+    sit on a boundary of actual floor cells."""
+    scene, _uvtt, _svg = build_site("Marsh & Fen")
+    mpg = scene["meters_per_grid"]
+    T = 0.25
+    cells = set()
+    for f in scene["features"]:
+        if f["kind"] == "prop" and f.get("label") == "floor":
+            cells.add((round(f["at"][0] / mpg - 0.5),
+                       round(f["at"][1] / mpg - 0.5)))
+    ok("floor cells exist", len(cells) > 0)
+
+    def hugs(xs, ys):
+        if (max(ys) - min(ys)) <= (max(xs) - min(xs)):
+            # a horizontal run: fixed axis is the row boundary
+            row = round((min(ys) + T) / mpg)
+            col_range = range(int((min(xs) + T) / mpg),
+                              int((max(xs) - T) / mpg) + 1)
+            return (any((x, row) in cells for x in col_range)
+                    or any((x, row - 1) in cells for x in col_range))
+        # a vertical run: fixed axis is the column boundary
+        col = round((min(xs) + T) / mpg)
+        row_range = range(int((min(ys) + T) / mpg),
+                          int((max(ys) - T) / mpg) + 1)
+        return (any((col, y) in cells for y in row_range)
+                or any((col - 1, y) in cells for y in row_range))
+
+    walls = [f for f in scene["features"]
+             if f.get("walls") and f["kind"] in ("building", "wall")]
+    bad = [f for f in walls
+           if not hugs([p[0] for p in f["polygon"]],
+                       [p[1] for p in f["polygon"]])]
+    ok("every wall ring bounds real floor cells", not bad,
+       f"{len(bad)}/{len(walls)} rings off the floor plan")
 
 
 def test_door_cell_matches_the_wall_the_corridor_pierces():
@@ -128,6 +203,8 @@ if __name__ == "__main__":
     test_ampersand_name_survives_the_pipeline()
     test_rendered_svg_parses_and_escapes_labels()
     test_uvtt_portals_and_lights_match_the_spec()
+    test_uvtt_map_size_is_cells_not_pixels()
+    test_walls_hug_the_floor_cells()
     test_door_cell_matches_the_wall_the_corridor_pierces()
     if FAILED:
         print(f"FAILED: {', '.join(FAILED)}")
