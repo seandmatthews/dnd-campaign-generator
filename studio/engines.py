@@ -152,6 +152,37 @@ def fmg_dir() -> Path:
     return DND_MAPPING / "tools" / "Fantasy-Map-Generator"
 
 
+def fmg_checkout_version(root: Path | None = None) -> str | None:
+    """The FMG clone's live version (ticket 60): `git describe --tags` —
+    exact at the pinned tag, tag-N-g<hash> the moment the checkout drifts —
+    with the clone's recorded package.json version as fallback. None when
+    neither resolves (no clone / no git); callers must treat None as
+    "unknown", never as a match. describe runs only when the tree itself
+    holds .git — git searches parent directories for a repository, and a
+    cwd inside some OUTER repo (a test tmp tree) must not leak its tags in
+    as a fake answer. The headless runner stamps the dump's info.version
+    the same way, and routers.compare the stamp against this on regen.
+    The standalone twin is setup-tools.py:_checkout_version (setup runs
+    before studio deps exist, so the two are synced by hand). List-form
+    args, never a shell (D3)."""
+    root = root or fmg_dir()
+    if (root / ".git").exists():
+        try:
+            proc = subprocess.run(["git", "describe", "--tags"],
+                                  cwd=str(root), capture_output=True,
+                                  text=True, timeout=15)
+            if proc.returncode == 0 and (proc.stdout or "").strip():
+                return proc.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # no git / hung git: the package record answers
+    try:
+        doc = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        v = doc.get("version")
+        return v if isinstance(v, str) and v else None
+    except (OSError, ValueError):
+        return None
+
+
 WEEK_FLAG_NAME = ".week-run-flag"
 ENGINE_HOME_LOCK_NAME = ".engine-home.lock"
 

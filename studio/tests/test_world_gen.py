@@ -13,6 +13,7 @@ import json
 import engines
 import llm_client
 import spine
+import yaml
 from conftest import tiny_fmg_dump, wait_for_job
 
 
@@ -195,7 +196,9 @@ def test_world_post_422_bad_options(client, spine_root):
 
 def test_world_job_carries_fmg_options(client, tmp_spine_root, monkeypatch):
     """Steering rides to the runner as FMG_OPTIONS, translated onto FMG's
-    real option paths; with nothing set the env key is absent entirely."""
+    real option paths; a forced regen that omits options replays the
+    recorded steering verbatim (ticket 60 — the Maps tab omits the key
+    entirely when the form is empty)."""
     calls = {}
 
     def fake_run_node(engine_root, *args, timeout=600, on_line=None, env=None):
@@ -238,14 +241,184 @@ def test_world_job_carries_fmg_options(client, tmp_spine_root, monkeypatch):
                             "temperature": {"northPole": -45}}},
     }
     assert any("steering" in ln for ln in job["log_tail"])
+    first_payload = calls["env"]["FMG_OPTIONS"]
 
+    # ticket 60 changed the no-options contract: a forced regen that omits
+    # options now REPLAYS the recorded steering (the Maps tab omits the key
+    # entirely when the form is empty) instead of silently re-rolling — so
+    # the env key is present again, carrying the same payload. The
+    # fresh-record case (nothing set, nothing recorded -> no env key) is
+    # asserted in test_world_force_regen_preserves_the_genesis_record.
     calls.clear()
     r = client.post("/api/campaign/testvale/world",
                     json={"seed": "43", "force": True})
     assert r.status_code == 202
     job = wait_for_job(client, r.json()["job_id"])
     assert job["status"] == "done", job["error"]
-    assert "FMG_OPTIONS" not in (calls.get("env") or {})
+    assert calls["env"]["FMG_OPTIONS"] == first_payload
+
+
+# ------------------------------------------- ticket 60: the replay record
+
+def _fake_engines(monkeypatch, tmp_spine_root, dumps):
+    """The standard fake engine pair: run_node writes a dump marked per
+    seed into FMG_OUT (so two regens are distinguishable on disk), run_py
+    drops an importable candidate yaml. `dumps` collects each run's env."""
+    def fake_run_node(engine_root, *args, timeout=600, on_line=None, env=None):
+        dumps.append(dict(env or {}))
+        dump = tiny_fmg_dump(env["FMG_SEED"])
+        dump["info"]["marker"] = f"gen-{env['FMG_SEED']}-{len(dumps)}"
+        with open(f"{env['FMG_OUT']}/headless-{env['FMG_SEED']}.json", "w",
+                  encoding="utf-8") as f:
+            json.dump(dump, f)
+        return 0, ["headless export"]
+
+    def fake_run_py(engine_root, script, *args, timeout=600, on_line=None,
+                    env=None):
+        candidates = engines.candidate_drop_dir()
+        candidates.mkdir(parents=True, exist_ok=True)
+        (candidates / "cand.yaml").write_text(
+            "meta:\n  seed: '42'\nsummary:\n  nations: 0\n  settlements: 0\n",
+            encoding="utf-8")
+        return 0, ["headless.json -> cand.yaml: 'X' (seed 1): 0 nations, "
+                   "0 settlements, 0 cultures"]
+
+    monkeypatch.setattr(engines, "run_node", fake_run_node)
+    monkeypatch.setattr(engines, "run_py", fake_run_py)
+    monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    monkeypatch.setattr(spine, "DATA_ROOT", tmp_spine_root / "campaign-data")
+
+
+def test_world_force_regen_refuses_on_fmg_version_mismatch(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 60 AC: the recorded world names the FMG version that made it
+    (geography meta.fmg_version, stamped by the headless runner from the
+    checkout); a checkout at a different version would silently regenerate
+    a DIFFERENT world from the same seed — the regen must refuse, loudly,
+    before anything runs. A matching version passes (the '-headless'
+    suffix the runner appends is not a mismatch)."""
+    world = tmp_spine_root / "testvale" / "world"
+    geo = world / "geography.yaml"
+    doc = yaml.safe_load(geo.read_text(encoding="utf-8"))
+    doc.setdefault("meta", {})["fmg_version"] = "1.153.1-headless"
+    geo.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
+                   encoding="utf-8")
+
+    real_version = engines.fmg_checkout_version
+    monkeypatch.setattr(engines, "fmg_checkout_version",
+                        lambda root=None: "9.9.9-drifted")
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "12345", "force": True})
+    assert r.status_code == 409
+    err = r.json()["error"]
+    assert "1.153.1" in err and "9.9.9-drifted" in err, err
+
+    # matching checkout (the runner's -headless suffix aside): gate passes
+    dumps = []
+    _fake_engines(monkeypatch, tmp_spine_root, dumps)
+    monkeypatch.setattr(engines, "fmg_checkout_version",
+                        lambda root=None: "1.153.1")
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "12345", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+
+    # either side unknown never refuses: restore the REAL resolver — the
+    # tmp tree has no FMG clone, so the live side resolves to None (and
+    # the regen above replaced geography.yaml, so no recorded side either)
+    monkeypatch.setattr(engines, "fmg_checkout_version", real_version)
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "12346", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+
+
+def test_world_force_regen_preserves_the_genesis_record(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 60 AC: world/source.json is the only full record of the
+    world's resolved options, and a force regen used to overwrite it in
+    place — the old dump now survives under world/genesis/ (never a
+    source.* sibling: world_source globs source.* and must keep resolving
+    to the LIVE dump)."""
+    dumps = []
+    _fake_engines(monkeypatch, tmp_spine_root, dumps)
+
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "42", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    world = tmp_spine_root / "testvale" / "world"
+    first = (world / "source.json").read_bytes()
+    assert json.loads(first)["info"]["marker"] == "gen-42-1"
+    # fresh record, nothing set: the env key is absent entirely (the
+    # pre-ticket-60 behavior for every no-options gen — still true when
+    # there is no record to replay)
+    assert "FMG_OPTIONS" not in dumps[0]
+
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "43", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+
+    aside = world / "genesis" / "source-42.json"
+    assert aside.is_file(), "the previous genesis record must survive"
+    assert aside.read_bytes() == first
+    live = json.loads((world / "source.json").read_text(encoding="utf-8"))
+    assert live["info"]["seed"] == "43"  # the live dump is the NEW world
+    # spine.world_source still resolves to the live dump, not the record
+    assert spine.world_source("testvale") == world / "source.json"
+    assert any("genesis record preserved" in ln for ln in job["log_tail"])
+    # the steering record + fingerprint landed beside the geography
+    assert (world / "options.yaml").is_file()
+    assert any("fingerprint" in ln for ln in job["log_tail"])
+    recorded = yaml.safe_load((world / "options.yaml").read_text(
+        encoding="utf-8"))
+    assert recorded == {"seed": "43", "options": {}}
+
+
+def test_world_force_regen_replays_recorded_options(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 60: a forced regen with no explicit options (the Maps tab
+    omits options when the form is empty) replays the steering the
+    recorded world was generated with — same seed + same options + same
+    FMG = the same world. Explicit options, {} included, re-steer
+    deliberately and become the new record."""
+    dumps = []
+    _fake_engines(monkeypatch, tmp_spine_root, dumps)
+    steered = {"culture_set": "highFantasy", "template": "continents",
+               "burgs": 800}
+
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "42", "force": True, "options": steered})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert "FMG_OPTIONS" in dumps[-1]
+
+    # no options key at all -> the recorded steering replays verbatim
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "42", "force": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert dumps[-1]["FMG_OPTIONS"] == dumps[-2]["FMG_OPTIONS"]
+    assert any("replaying recorded options" in ln for ln in job["log_tail"])
+
+    # explicit {} is a deliberate re-steer to unsteered, not a replay
+    r = client.post("/api/campaign/testvale/world",
+                    json={"seed": "42", "force": True, "options": {}})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert "FMG_OPTIONS" not in dumps[-1]
+    recorded = yaml.safe_load(
+        (tmp_spine_root / "testvale" / "world" / "options.yaml")
+        .read_text(encoding="utf-8"))
+    assert recorded == {"seed": "42", "options": {}}
 
 
 # ------------------------------------------------- world-options (LLM)

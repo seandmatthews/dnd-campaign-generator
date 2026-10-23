@@ -324,7 +324,11 @@ def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
     lights = [{"kind": "light", "at": [(x + w / 2) * METERS_PER_GRID, (y + h / 2) * METERS_PER_GRID],
                "r": 6.0, "color": "#ffb45e", "label": "torch"} for x, y, w, h in rooms[:4]]
     scene = _scene(
-        name, {"generator": f"battlemap.py gen-dungeon seed={seed}"}, (cols, rows),
+        # rooms rides in the provenance (ticket 60): it is the one gen-dungeon
+        # parameter besides the seed, and without it a provenance-driven
+        # regen could not reproduce the scene's room count
+        name, {"generator": f"battlemap.py gen-dungeon seed={seed} "
+                            f"rooms={n_rooms}"}, (cols, rows),
         "#120d0b",
         [_ground_rect(cols * METERS_PER_GRID, rows * METERS_PER_GRID, "bedrock"),
          *feats, *lights],

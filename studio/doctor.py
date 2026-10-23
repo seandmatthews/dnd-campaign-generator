@@ -806,13 +806,30 @@ def settlemaker_ok(root=None):
 
 def fmg_ok(root=None):
     """Probe (b): the tree exists but node_modules/vitest/vitest.mjs is
-    missing → the headless FMG pipeline cannot run → repair."""
+    missing → the headless FMG pipeline cannot run → repair. Ticket 60
+    adds the half marker files never covered: the installed headless
+    runner must match the tracked vendor-patches copy byte-for-byte (a
+    patch committed after the tree existed used to reach no machine that
+    had already run setup), and the live checkout version is named in the
+    detail — the same resolution the world-regen gate compares against the
+    campaign's recorded version."""
     root = root or FMG_DIR
     if not root.is_dir():
         return True, "not installed"
     if not (root / "node_modules" / "vitest" / "vitest.mjs").is_file():
         return False, "node_modules/vitest/vitest.mjs missing — install broken or incomplete"
-    return True, "node_modules/vitest/vitest.mjs present"
+    tracked = (PARENT / "dnd-mapping" / "vendor-patches" / "fmg"
+               / "headless-export.test.ts")
+    installed = root / "src" / "generators" / "headless-export.test.ts"
+    if tracked.is_file() and installed.is_file() \
+            and tracked.read_bytes() != installed.read_bytes():
+        return False, ("the installed headless runner does not match the "
+                       "tracked vendor-patches copy — run python "
+                       "setup-tools.py to re-apply it")
+    import engines
+    live = engines.fmg_checkout_version(root)
+    return True, ("node_modules/vitest/vitest.mjs present"
+                  + (f", checkout at {live}" if live else ""))
 
 
 def _npm_cmd(args):
