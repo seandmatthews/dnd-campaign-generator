@@ -1,8 +1,11 @@
 """The shared engine home's cross-process lock (ticket 26): standalone
-tick.py --live / effects.py --apply / ingest.py --apply refuse while
-another process holds world/.engine-home.lock (a studio week/forecast job
-holds it for its whole run), and save_state's tmp names are per-writer
-unique so two writers can never land a half-written state.
+tick.py --live / projects.py --apply / effects.py --apply /
+ingest.py --apply refuse while another process holds
+world/.engine-home.lock (a studio week/forecast job holds it for its
+whole run), and save_state's tmp names are per-writer unique so two
+writers can never land a half-written state. Ticket 56 closed the set
+(projects.py --apply joined it) and widened effects.py's claim from the
+save alone to the whole read-modify-write.
 
 Zero dependencies — run directly:  python tests/test_home_lock.py
 """
@@ -21,6 +24,7 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import effects
 import ingest
+import projects
 import store
 import tick
 from store import HomeLockBusy, standalone_home_lock
@@ -142,6 +146,88 @@ def test_effects_apply_refuses_on_the_home_state_only():
     print("  home lock: effects --apply claims only the shared home  OK")
 
 
+def test_projects_apply_refuses_on_the_home_state():
+    """AC (ticket 56): projects.py --apply is the documented DM
+    canon-mutation path, and until now it saved the shared state.yaml
+    with no home-lock claim at all — run it while a week tick held the
+    home and the week's save overwrites the applied canon (or the
+    reverse). While a fake holder owns the lock file, --apply refuses
+    readably BEFORE reading state.yaml and nothing is written; the batch
+    is one the apply would otherwise land, so the refusal is the lock's,
+    not the content's."""
+    tmp = tempfile.mkdtemp()
+    _relocate_home_lock(tmp)
+    home_state = pathlib.Path(tmp) / "home-state.yaml"
+    changes_path = pathlib.Path(tmp) / "changes.yaml"
+    saved_state_file = projects.STATE_FILE
+    home_state.write_text(
+        "meta:\n  clock:\n    week: 4\n  city:\n    name: T\n"
+        "factions:\n  - {id: mint, name: The Mint, goal: coin, "
+        "resources: {coin: low, muscle: low, legitimacy: low}}\n"
+        "events: []\n", encoding="utf-8")
+    changes_path.write_text(
+        "operations:\n  - {id: op-1, op: create, reason: probe, "
+        "project: {faction_id: mint, title: Ferry concession, "
+        "objective: Buy the ferry concession}}\n", encoding="utf-8")
+    before = home_state.read_text(encoding="utf-8")
+    try:
+        projects.STATE_FILE = home_state
+        with standalone_home_lock():
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = projects.main(["--apply", str(changes_path),
+                                    "--state", str(home_state)])
+        assert rc == 4, f"home-state apply must refuse, got {rc}"
+        assert "refused:" in err.getvalue(), err.getvalue()
+        assert "engine home is busy" in err.getvalue(), err.getvalue()
+        assert home_state.read_text(encoding="utf-8") == before, \
+            "a refusal writes nothing"
+        # an explicit non-home target never claims the home: the apply runs
+        own_state = pathlib.Path(tmp) / "own-state.yaml"
+        own_state.write_text(before, encoding="utf-8")
+        rc = projects.main(["--apply", str(changes_path),
+                            "--state", str(own_state)])
+        assert rc == 0, "an own --state target applies without claiming"
+    finally:
+        projects.STATE_FILE = saved_state_file
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("  home lock: projects --apply claims the shared home  OK")
+
+
+def test_effects_apply_locks_the_whole_read_modify_write():
+    """AC (ticket 56): effects.py --apply used to take the home lock only
+    around the save — the load and apply ran unlocked, so two fast
+    applies interleaved last-writer-wins over state.yaml. The claim now
+    covers the whole read-modify-write (mirroring ingest): while another
+    process holds the home, --apply refuses BEFORE reading state.yaml.
+    The home state is deliberately ABSENT — the old shape's unlocked load
+    would answer an IO error (exit 1); the locked shape answers the
+    contention (exit 4)."""
+    tmp = tempfile.mkdtemp()
+    _relocate_home_lock(tmp)
+    home_state = pathlib.Path(tmp) / "home-state.yaml"
+    record_path = pathlib.Path(tmp) / "session.yaml"
+    saved_state_file = effects.STATE_FILE
+    record_path.write_text(
+        "source: session:t\nweek: 4\n"
+        "events:\n  - {week: 4, actor: world, text: a quiet night}\n",
+        encoding="utf-8")
+    try:
+        effects.STATE_FILE = home_state  # absent on purpose (see above)
+        with standalone_home_lock():
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = effects.main(["--apply", str(record_path)])
+        assert rc == 4, f"whole-RMW apply must refuse, got {rc}"
+        assert "refused:" in err.getvalue(), err.getvalue()
+        assert "engine home is busy" in err.getvalue(), err.getvalue()
+        assert not home_state.exists(), "a refusal writes nothing"
+    finally:
+        effects.STATE_FILE = saved_state_file
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("  home lock: effects --apply locks the whole read-modify-write  OK")
+
+
 def test_ingest_apply_refuses_on_the_home_state():
     tmp = tempfile.mkdtemp()
     _relocate_home_lock(tmp)
@@ -232,7 +318,9 @@ if __name__ == "__main__":
         test_standalone_lock_refuses_a_second_holder,
         test_studio_child_env_skips_the_claim,
         test_live_main_refuses_while_the_home_is_held,
+        test_projects_apply_refuses_on_the_home_state,
         test_effects_apply_refuses_on_the_home_state_only,
+        test_effects_apply_locks_the_whole_read_modify_write,
         test_ingest_apply_refuses_on_the_home_state,
         test_save_state_tmp_names_are_per_writer_unique,
         test_concurrent_save_state_writers_all_land_whole,

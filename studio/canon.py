@@ -133,6 +133,12 @@ def snapshot_result(campaign_name: str, message: str) -> dict:
                 "detail": "git is not installed or disabled — no history "
                           "snapshot was made (the files themselves are fine)"}
     try:
+        # canonicalize BEFORE anything flows to git (ticket 56): a call
+        # under a case alias or trailing dot must not `git add -A` an
+        # empty pathspec while the real directory got the write — the
+        # directory's name is the one git knows. Idempotent for an
+        # already-canonical name (the exact match returns itself).
+        campaign_name = spine.canonical_name(campaign_name)
         d = spine.campaign_dir(campaign_name)
     except spine.CampaignNotFound:
         log.warning("canon snapshot skipped (unknown campaign %s)",
