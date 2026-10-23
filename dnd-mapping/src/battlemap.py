@@ -46,6 +46,15 @@ METERS_PER_GRID = 1.524  # a 5-foot square
 PX_PER_M = PIXELS_PER_GRID / METERS_PER_GRID
 METERS_PER_UNIT = 10.759197265865302  # from the GeoJSON scale metadata
 
+# The one ambient-light value every wrapped scene ships as UVTT
+# environment.ambient_light — a LIGHTING choice (Atlas reads its Rec. 709
+# luma as lighting.ambient), deliberately not the SVG backdrop colour it
+# used to double as: the dungeon's near-black backdrop #120d0b shipped as
+# lighting.ambient 0.05 and the table saw black outside torch radius
+# (found live 2026-10-23, ticket 59). #6e6a63 reads as luma 0.42 —
+# dungeon-dim, the map still readable.
+AMBIENT_LIGHT = "#6e6a63"
+
 
 def u(m):
     """meters -> scene pixels"""
@@ -180,16 +189,20 @@ def _save_site(name, scene):
     return out
 
 
-def _scene(name, provenance, grids, ambient, features, doors, labels):
+def _scene(name, provenance, grids, backdrop, features, doors, labels):
     """The scene skeleton shared by the site generators; pixels_per_grid and
-    meters_per_grid (UVTT-critical) have exactly this one home."""
+    meters_per_grid (UVTT-critical) have exactly this one home. The backdrop
+    paints the SVG; ambient_light is the UVTT lighting value — decoupled,
+    with one shared default, because a backdrop chosen as art is not a
+    lighting level (ticket 59)."""
     return {
         "name": name,
         "provenance": provenance,
         "grids": {"x": grids[0], "y": grids[1]},
         "pixels_per_grid": PIXELS_PER_GRID,
         "meters_per_grid": METERS_PER_GRID,
-        "ambient": ambient,
+        "backdrop": backdrop,
+        "ambient_light": AMBIENT_LIGHT,
         "features": features,
         "doors": doors,
         "labels": labels,
@@ -275,11 +288,22 @@ def _floor_features(cells, cols, rows, floor_color="#6b6459", wall_color="#2e2b2
 
 def _door_cell(acy, acx, bx, by, bw, bh, bcx, bcy):
     """The cell + leaf angle for the door where the L corridor from room A
-    enters room B. Top/bottom walls are horizontal — the leaf runs along
-    them (angle 0); a same-center-row pair has no vertical leg, so the
-    corridor enters through a side wall (angle 90)."""
+    enters room B. The door belongs to the wall the corridor actually
+    crosses into B, and the leaf runs along that wall: top/bottom walls are
+    horizontal (angle 0), side walls vertical (angle 90).
+
+    Found 2026-10-23 (ticket 59): when A's center row lies inside B's row
+    span (rooms moat-separated in columns but overlapping in rows), the
+    vertical leg stays inside B and never pierces its top/bottom wall —
+    the HORIZONTAL leg enters through B's side wall at A's center row,
+    and that is the breach cell. The old code still answered with the far
+    top/bottom wall, landing doors on solid rock."""
     if bcy == acy:
         return (bx if bcx > acx else bx + bw - 1), bcy, 90
+    if by <= acy <= by + bh - 1:
+        # A's center row is inside B's row span: the horizontal leg is the
+        # one that breaches, through B's side wall, at A's center row
+        return (bx if bcx > acx else bx + bw - 1), acy, 90
     edge_x = min(max(bcx, bx), bx + bw - 1)
     edge_y = by if bcy > acy else by + bh - 1
     return edge_x, edge_y, 0
@@ -319,7 +343,12 @@ def gen_dungeon(seed="1", name="dungeon", n_rooms=7):
         edge_x, edge_y, angle = _door_cell(acy, acx, bx, by, bw, bh, bcx, bcy)
         doors.append({"at": [(edge_x + 0.5) * METERS_PER_GRID, (edge_y + 0.5) * METERS_PER_GRID],
                       "width_m": 1.8, "angle": angle,
-                      "closed": bool(rng.random() < 0.5), "kind": "door", "label": "door"})
+                      # closed:true is the honest initial state of a keyed
+                      # dungeon door — and the only thing Atlas ever places:
+                      # in the UVTT contract closed:false is a WINDOW and the
+                      # importer drops it entirely (ticket 59; this used to
+                      # be a coin flip that ate half the doors live)
+                      "closed": True, "kind": "door", "label": "door"})
     feats = _floor_features(cells, cols, rows, floor_color="#6b6459", wall_color="#241f1d")
     lights = [{"kind": "light", "at": [(x + w / 2) * METERS_PER_GRID, (y + h / 2) * METERS_PER_GRID],
                "r": 6.0, "color": "#ffb45e", "label": "torch"} for x, y, w, h in rooms[:4]]
@@ -372,7 +401,11 @@ def gen_cave(seed="1", name="cave"):
     # entrance: a floor cell on the region's northern edge
     north = min(best, key=lambda p: p[1])
     doors = [{"at": [(north[0] + 0.5) * METERS_PER_GRID, (north[1] + 0.2) * METERS_PER_GRID],
-              "width_m": 2.0, "angle": 0, "closed": False, "kind": "door", "label": "entrance"}]
+              # the entrance is a DOOR: closed:false reads as a window and
+              # Atlas places nothing for it (ticket 59) — the cave used to
+              # ship an entrance that did not exist
+              "width_m": 2.0, "angle": 0, "closed": True, "kind": "door",
+              "label": "entrance"}]
     lights = [{"kind": "light", "at": [(x + 0.5) * METERS_PER_GRID, (y + 0.5) * METERS_PER_GRID],
                "r": 5.0, "color": "#ffb45e", "label": "campfire"} for x, y in best[::len(best) // 3 + 1][:3]]
     scene = _scene(
@@ -451,7 +484,7 @@ def render():
     W = u(scene["grids"]["x"] * scene["meters_per_grid"])
     H = u(scene["grids"]["y"] * scene["meters_per_grid"])
     parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">']
-    parts.append(f'<rect width="{W}" height="{H}" fill="{scene.get("ambient", COL["ground"])}"/>')
+    parts.append(f'<rect width="{W}" height="{H}" fill="{scene.get("backdrop", COL["ground"])}"/>')
 
     def poly_pts(pts):
         return " ".join(f"{u(x)},{u(y)}" for x, y in pts)
@@ -543,11 +576,19 @@ def wrap(png_name="scene.png"):
     def pt(p):
         return {"x": cell_units(u(p[0])), "y": cell_units(u(p[1]))}
 
-    line_of_sight = [
-        [pt(p) for p in f["polygon"]]
-        for f in scene["features"]
-        if f.get("walls") and f["kind"] in ("building", "wall")
-    ]
+    line_of_sight = []
+    for f in scene["features"]:
+        if not (f.get("walls") and f["kind"] in ("building", "wall")):
+            continue
+        ring = [pt(p) for p in f["polygon"]]
+        # a wall ring is closed geometry: repeat the first point as the
+        # last, or the importer chains N points into N-1 wall segments and
+        # every open rectangle ships with a see/shoot-through gap at one
+        # corner (ticket 59; the live ember-coast file carried 58 open
+        # rings — every one of them short one edge)
+        if ring and ring[0] != ring[-1]:
+            ring.append(ring[0])
+        line_of_sight.append(ring)
     # Universal VTT (dd2vtt): a portal is a two-point "bounds" segment plus a
     # "position" center; a light is "position" + "range". The earlier flat
     # shape imported as walls but silently dropped doors/lights in
@@ -573,7 +614,8 @@ def wrap(png_name="scene.png"):
         "image": base64.b64encode(png).decode(),
         "line_of_sight": line_of_sight,
         "portals": portals,
-        "environment": {"ambient_light": scene.get("ambient", "#402828"), "sunlight_angle": 90},
+        "environment": {"ambient_light": scene.get("ambient_light", AMBIENT_LIGHT),
+                        "sunlight_angle": 90},
         "lights": [
             {"angle": 360, "brightness": 0.4, "color": f["color"], "contrast": 0,
              "enabled": True, "intensity": 1,
