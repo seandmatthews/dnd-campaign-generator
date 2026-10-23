@@ -52,3 +52,12 @@ Then the Tier-1 incantation from `docs/map-pipeline.md` works again:
 clone, copy the changed files back here in the same commit** — this README
 and `docs/map-pipeline.md` are the only other places that know Tier 1 is
 not vanilla FMG.
+
+The copy-back rule is enforced in both directions (ticket 60):
+`python setup-tools.py --check` hash-compares the tracked runner against
+the installed copy and fails on a mismatch, and plain `python setup-tools.py`
+re-copies a stale runner into an existing tree — a fix committed here used
+to reach only fresh clones. The runner stamps the dump's `info.version`
+from the checkout at run time (`git describe --tags`, package.json
+fallback), never a literal, so a drifted checkout cannot keep claiming
+the pinned tag.

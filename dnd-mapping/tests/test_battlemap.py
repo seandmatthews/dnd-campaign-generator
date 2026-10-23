@@ -199,6 +199,17 @@ def test_door_cell_matches_the_wall_the_corridor_pierces():
     print("  door cells: leaf runs along the pierced wall in all four cases  OK")
 
 
+def test_dungeon_provenance_carries_rooms():
+    """Ticket 60: gen-dungeon's provenance used to omit --rooms — the one
+    generator parameter besides the seed — so a provenance-driven regen
+    could not reproduce the scene's room count. build_site() requests 4
+    rooms; the provenance must say so."""
+    scene, _uvtt, _svg = build_site("Marsh & Fen")
+    ok("dungeon provenance carries the rooms parameter",
+       "rooms=4" in scene["provenance"].get("generator", ""),
+       str(scene["provenance"]))
+
+
 if __name__ == "__main__":
     test_ampersand_name_survives_the_pipeline()
     test_rendered_svg_parses_and_escapes_labels()
@@ -206,6 +217,7 @@ if __name__ == "__main__":
     test_uvtt_map_size_is_cells_not_pixels()
     test_walls_hug_the_floor_cells()
     test_door_cell_matches_the_wall_the_corridor_pierces()
+    test_dungeon_provenance_carries_rooms()
     if FAILED:
         print(f"FAILED: {', '.join(FAILED)}")
         sys.exit(1)

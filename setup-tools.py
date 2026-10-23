@@ -3,6 +3,8 @@
 
   python setup-tools.py           clone + patch + install + build whatever is missing
   python setup-tools.py --check   report only; exit 1 if anything is missing
+                                  (a pnpm-shaped tree, a drifted FMG tag or a
+                                  stale vendor patch counts as missing)
   python setup-tools.py --force   re-apply patches and re-run installs
 
 What it sets up (all under dnd-mapping/tools/, which is git-ignored):
@@ -30,10 +32,14 @@ Stdlib only, list-form subprocess throughout (a rule kept from when the
 parent path contained `&`),
 and .cmd/.bat shims are run through cmd /c on Windows — the same discipline
 as run-tests.py and studio/doctor.py. Idempotent: an existing, complete
-tree is left alone unless --force. Network needed for the first run only.
+tree is left alone unless --force — the one exception is a stale vendor
+runner, which setup re-copies whenever the tracked copy disagrees
+(ticket 60: a patch committed to vendor-patches/ used to change
+regeneration behavior only on fresh clones).
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -158,6 +164,68 @@ def _apply_headless_patch(d):
     _run(["git", "apply", str(PATCHES / "package-json.patch")], cwd=d)
 
 
+# ------------------------------------------------- ticket 60: the pin, verified
+#
+# Marker files (.git, dist/index.js, vitest.mjs) prove a tree EXISTS; they
+# never proved it is the tree we PINNED. Two findings could hide behind
+# every green marker: a `git pull` moving the checkout off FMG_TAG (every
+# same-seed regeneration silently becomes a different world), and a fix
+# committed to vendor-patches/ that never re-applied to an existing clone
+# (different machines, different worlds, same claimed version).
+
+def _checkout_version(d):
+    """The FMG checkout's live version: `git describe --tags` (exact at the
+    pin, tag-N-g<hash> once drifted), falling back to the clone's recorded
+    package.json version; None when neither resolves. describe runs only
+    when the tree itself holds .git — git searches parent directories for a
+    repository, and a tmp cwd inside some OUTER repo must not leak its tags
+    in as a fake answer. The studio's twin is engines.fmg_checkout_version
+    (setup-tools stays stdlib-standalone, so the two are synced by hand).
+    List-form args, never a shell."""
+    if (d / ".git").exists():
+        try:
+            proc = subprocess.run(["git", "describe", "--tags"], cwd=str(d),
+                                  capture_output=True, text=True, timeout=15)
+            if proc.returncode == 0 and proc.stdout.strip():
+                return proc.stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            pass  # no git / hung git: the package record answers
+    try:
+        doc = json.loads((d / "package.json").read_text(encoding="utf-8"))
+        v = doc.get("version")
+        return v if isinstance(v, str) and v else None
+    except (OSError, ValueError):
+        return None
+
+
+def _sha256(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def fmg_runner_stale(d):
+    """True when the installed headless runner is not byte-identical to the
+    tracked vendor-patches copy (sha256 mismatch). Before ticket 60 the
+    runner was copied only on a fresh clone: once the file existed, content
+    was never compared, so a committed fix reached no existing machine."""
+    installed = d / "src" / "generators" / "headless-export.test.ts"
+    tracked = PATCHES / "headless-export.test.ts"
+    if not installed.is_file() or not tracked.is_file():
+        return True  # absent on either side is not fresh (fmg_done names the marker)
+    return _sha256(installed) != _sha256(tracked)
+
+
+def fmg_freshness(d):
+    """(tag_drift_or_None, runner_stale) for an FMG tree whose marker files
+    all say done. --check refuses on either finding; setup mode re-copies a
+    stale runner (offline-safe, it is our own file) and prints the tag fix
+    (a re-pin may need the network — advised, never attempted)."""
+    live = _checkout_version(d)
+    drift = None if live == FMG_TAG else (
+        f"checkout is at {live or 'an unresolvable version'}, not the "
+        f"pinned tag {FMG_TAG}")
+    return drift, fmg_runner_stale(d)
+
+
 def settle_done():
     d = TOOLS / "settlemaker"
     return (d / ".git").is_dir() \
@@ -189,9 +257,9 @@ def settle_apply():
 
 STEPS = [
     ("Fantasy-Map-Generator (world gen)", "Fantasy-Map-Generator",
-     fmg_done, fmg_apply),
+     fmg_done, fmg_apply, fmg_freshness),
     ("settlemaker (cities + rasterizer)", "settlemaker",
-     settle_done, settle_apply),
+     settle_done, settle_apply, None),
 ]
 
 
@@ -221,7 +289,7 @@ def main(argv=None):
     print("prerequisites: git and node (with npm) present")
 
     incomplete = []
-    for label, dirname, done, apply_step in STEPS:
+    for label, dirname, done, apply_step, freshness in STEPS:
         tree = TOOLS / dirname
         drift = pnpm_drift(tree)
         if drift:
@@ -237,6 +305,39 @@ def main(argv=None):
                   f"({', '.join(drift)}) — removing it for a clean npm install")
             remove_pnpm_install(tree)
         if done():
+            # ticket 60: marker files say "done"; the pin and the tracked
+            # patches say "verified". A drifted tag or a stale vendor patch
+            # lets same-seed regeneration silently produce a different
+            # world while the provenance keeps claiming the pin.
+            tag_drift, stale_runner = (freshness(tree) if freshness
+                                       else (None, False))
+            if args.check:
+                if tag_drift:
+                    print(f"[stale]    {label}: {tag_drift}")
+                    print(f"           fix: git -C {tree} fetch --tags "
+                          f"&& git -C {tree} checkout {FMG_TAG}")
+                if stale_runner:
+                    print(f"[stale]    {label}: the installed headless "
+                          "runner does not match the tracked vendor-patches "
+                          "copy (sha256 mismatch)")
+                    print("           fix: python setup-tools.py  "
+                          "(re-copies the runner)")
+                if tag_drift or stale_runner:
+                    incomplete.append(label)
+                    continue
+            elif stale_runner or tag_drift:
+                if stale_runner:
+                    (tree / "src" / "generators").mkdir(parents=True,
+                                                        exist_ok=True)
+                    shutil.copy2(PATCHES / "headless-export.test.ts",
+                                 tree / "src" / "generators" /
+                                 "headless-export.test.ts")
+                    print(f"[refresh]  {label}: stale headless runner "
+                          "re-copied from vendor-patches/")
+                if tag_drift:
+                    print(f"[drift]    {label}: {tag_drift}")
+                    print(f"           fix: git -C {tree} fetch --tags "
+                          f"&& git -C {tree} checkout {FMG_TAG}")
             print(f"[done]     {label}")
             if args.force and not args.check:
                 apply_step()

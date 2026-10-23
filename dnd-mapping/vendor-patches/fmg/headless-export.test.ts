@@ -26,6 +26,7 @@
 // {info, settings, pack}.
 
 import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -63,6 +64,30 @@ vi.stubGlobal("mapName", "");
 
 const OUT_DIR = process.env.FMG_OUT
   ?? fileURLToPath(new URL("../../../../worlds/raw", import.meta.url));
+
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
+
+// The version stamp comes from the CHECKOUT at run time, never a literal
+// (ticket 60): a git pull under tools/ changes every same-seed
+// regeneration, and a constant here kept claiming the pinned tag long
+// after the tree drifted. `git describe --tags` is exact at a tag and
+// names drift (tag-N-g<hash>); the clone's recorded package.json version
+// is the fallback when git cannot answer. spawnSync takes an argv array
+// with no shell — the repo's parent-path rule. Python twins of this
+// resolution live in setup-tools.py and studio/engines.py (the studio's
+// regen gate compares this stamp against the live checkout).
+function checkoutVersion(): string {
+  try {
+    const described = spawnSync("git", ["describe", "--tags"],
+                                { cwd: REPO_ROOT, encoding: "utf8" });
+    if (described.status === 0 && described.stdout) return described.stdout.trim();
+  } catch { /* fall through to the package record */ }
+  try {
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+    if (pkg && typeof pkg.version === "string" && pkg.version) return pkg.version;
+  } catch { /* "unknown" is the honest stamp */ }
+  return "unknown";
+}
 
 describe("headless world export", () => {
   it("generates a world and dumps the pack", async () => {
@@ -110,7 +135,7 @@ describe("headless world export", () => {
 
     const dump = {
       info: {
-        version: "1.153.1-headless",
+        version: `${checkoutVersion()}-headless`,
         mapName: String(g.mapName ?? "").trim() || `world-${seed}`,
         seed,
         width,

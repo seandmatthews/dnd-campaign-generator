@@ -24,6 +24,22 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
+// settlemaker_version is read from the CHECKOUT at run time (ticket 60):
+// the pinned literal kept claiming 3.0.1 after any change under tools/.
+// The tool tree's package.json is the record; "unknown" is honest when the
+// tree cannot be read.
+const readSettlemakerVersion = async () => {
+  try {
+    const pkg = JSON.parse(
+      await readFile(join(ROOT, "tools", "settlemaker", "package.json"), "utf8"),
+    );
+    if (pkg && typeof pkg.version === "string" && pkg.version) return pkg.version;
+  } catch {
+    /* fall through */
+  }
+  return "unknown";
+};
+
 // settlemaker never imports more than 4 approaches in the worked example and
 // decays extras (RANK_DECAY 0.55/rank), so 4 is the cap. Sorted by bearing
 // first so the cut is deterministic.
@@ -284,7 +300,7 @@ function slugify(name) {
 
 const yamlStr = (v) => JSON.stringify(String(v));
 
-function paramsYaml({ world, burg, record, roadEntries, seed, result, oceanSource }) {
+function paramsYaml({ world, burg, record, roadEntries, seed, result, oceanSource, settlemakerVersion }) {
   return (
     [
       "# Provenance record — regenerate with scripts/gen-city.mjs, never hand-edit outputs.",
@@ -293,7 +309,7 @@ function paramsYaml({ world, burg, record, roadEntries, seed, result, oceanSourc
       `world_map_name: ${yamlStr(world.mapName)}`,
       `fmg_version: ${yamlStr(world.version)}`,
       `source_seed: ${yamlStr(world.seed)}`,
-      `settlemaker_version: 3.0.1`,
+      `settlemaker_version: ${yamlStr(settlemakerVersion)}`,
       `seed: ${seed}`,
       `name: ${yamlStr(burg.name)}`, // the studio Maps tab reads name|label first
       `burg_name: ${yamlStr(burg.name)}`,

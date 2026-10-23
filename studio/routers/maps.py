@@ -34,6 +34,7 @@ snapshot on success ("campaign/<name>: generate world / map city / map
 site ...").
 """
 
+import hashlib
 import json
 import os
 import re
@@ -214,6 +215,53 @@ def _fmg_options_payload(client_options):
     if mp:
         out["map"] = mp
     return out
+
+
+# ------------------------------------------------ ticket 60: the replay record
+#
+# The README's "everything regenerated from a recorded seed" had two
+# unrecorded halves: the steering options survived only inside
+# world/source.json, which a force regen overwrote in place, and the
+# snapshot message named the seed but not the options — same seed +
+# different steering = a different world, silently replacing the genesis
+# record. The options now have their own replayable record beside the
+# geography, and the old dump survives under world/genesis/.
+
+def _recorded_world_options(d: Path) -> dict:
+    """The steering record (world/options.yaml) -> the client-format dict;
+    {} when absent or unreadable (pre-ticket-60 campaigns regenerate
+    exactly as they always did)."""
+    p = d / "world" / "options.yaml"
+    if not p.is_file():
+        return {}
+    try:
+        doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+    except (yaml.YAMLError, OSError):
+        return {}
+    opts = doc.get("options") if isinstance(doc, dict) else None
+    return opts if isinstance(opts, dict) else {}
+
+
+def _options_fingerprint(fmg_options: dict) -> str:
+    """A stable short fingerprint of the RESOLVED steering payload: the
+    snapshot message carries it beside the seed so two worlds with the
+    same seed but different steering are never confused in the canon log
+    (the payload, not the raw form, is what actually steered the run)."""
+    canonical = json.dumps(fmg_options or {}, sort_keys=True,
+                           separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def _fmg_version_of_record(name: str) -> str | None:
+    """The FMG version that made the campaign's recorded world: import_fmg
+    copies the dump's info.version into geography meta (the headless
+    runner stamps it from the checkout at run time). None when no world or
+    no recorded version — the caller treats None as unknown, never as a
+    match."""
+    meta = spine.load_geography(name).get("meta") or {}
+    v = meta.get("fmg_version") if isinstance(meta, dict) else None
+    v = str(v) if v else None
+    return v.removesuffix("-headless") if v else None
 
 
 # Premise -> options. The model picks values; _clean_world_options is the
@@ -516,9 +564,30 @@ def post_world(name: str, body: WorldBody):
                    "regenerate (this replaces world/source.* and "
                    "world/geography.yaml)")
     try:
-        fmg_options = _fmg_options_payload(_clean_world_options(body.options))
+        cleaned_options = _clean_world_options(body.options)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    # ticket 60: a forced regeneration promises to reproduce the recorded
+    # world — that promise holds only when the live FMG checkout is still
+    # the version that made it (same seed + different FMG = a different
+    # world, silently). Refuse before anything runs when both sides are
+    # known and differ; either side unknown (pre-ticket-60 campaigns, no
+    # clone, no git) degrades to a pass — never a false refusal — and a
+    # missing clone fails loudly in the engine run itself.
+    if body.force and (d / "world" / "geography.yaml").is_file():
+        recorded = _fmg_version_of_record(name)
+        live = engines.fmg_checkout_version()
+        if recorded and live and live.removesuffix("-headless") != recorded:
+            raise HTTPException(
+                status_code=409,
+                detail=f"the recorded world was generated with FMG "
+                       f"{recorded} but the checkout is at {live} — the "
+                       "same seed would silently regenerate a DIFFERENT "
+                       "world. Repin the checkout (git -C dnd-mapping/"
+                       "tools/Fantasy-Map-Generator checkout "
+                       f"{recorded}, or python setup-tools.py) or move "
+                       "world/ aside to start a fresh genesis record")
 
     def job(log):
         # ticket 24 R1: the create-versus-replace gate above ran at SUBMIT
@@ -540,11 +609,36 @@ def post_world(name: str, body: WorldBody):
         tmp = Path(tempfile.mkdtemp(prefix="studio-world-"))
         try:
             fmg = engines.fmg_dir()
+            # ticket 60: replay the record. A forced regen with no explicit
+            # options reuses the steering the recorded world was generated
+            # with (the Maps tab omits options entirely when the form is
+            # empty): same seed + same options + same FMG version = the
+            # same world. Explicit options — {} included — re-steer
+            # deliberately and become the new record.
+            client_options = cleaned_options
+            if body.options is None:
+                recorded_opts = _recorded_world_options(d)
+                if recorded_opts:
+                    try:
+                        client_options = _clean_world_options(recorded_opts)
+                    except ValueError:
+                        # it validated when it was recorded; a validator
+                        # that has since tightened must not brick regen
+                        log("recorded options no longer validate — "
+                            "regenerating unsteered: "
+                            + json.dumps(recorded_opts, sort_keys=True))
+                        client_options = {}
+                    else:
+                        log("replaying recorded options: "
+                            + json.dumps(recorded_opts, sort_keys=True))
+            fmg_options = _fmg_options_payload(client_options)
             env = {"FMG_SEED": seed, "FMG_OUT": str(tmp)}
             if fmg_options:
                 env["FMG_OPTIONS"] = json.dumps(fmg_options)
                 log(f"steering: FMG_OPTIONS={env['FMG_OPTIONS']}")
-            log(f"headless FMG seed {seed} (FMG_SEED={seed} vitest run)")
+            live_version = engines.fmg_checkout_version(fmg)
+            log(f"headless FMG seed {seed} (FMG_SEED={seed} vitest run"
+                + (f", checkout at {live_version})" if live_version else ")"))
             rc, lines = engines.run_node(
                 fmg, "node_modules/vitest/vitest.mjs", "run",
                 "src/generators/headless-export.test.ts",
@@ -560,6 +654,29 @@ def post_world(name: str, body: WorldBody):
             world = d / "world"
             world.mkdir(parents=True, exist_ok=True)
             source = world / "source.json"
+            # ticket 60: the genesis record survives a force regen. The
+            # dump is the only full record of the world's resolved options
+            # and it used to be overwritten in place — the old one now
+            # lands under world/genesis/, never a source.* sibling
+            # (spine.world_source globs source.* and must keep resolving
+            # to the LIVE dump).
+            if source.is_file():
+                try:
+                    old = json.loads(source.read_text(encoding="utf-8"))
+                    old_seed = str((old.get("info") or {}).get("seed")
+                                   or "noseed")
+                except (OSError, ValueError):
+                    old_seed = "noseed"
+                genesis_dir = world / "genesis"
+                genesis_dir.mkdir(parents=True, exist_ok=True)
+                old_slug = spine.slugify(old_seed) or "noseed"
+                aside = genesis_dir / f"source-{old_slug}.json"
+                n = 2
+                while aside.exists():  # a same-seed regen keeps every record
+                    aside = genesis_dir / f"source-{old_slug}-{n}.json"
+                    n += 1
+                engines.copy_file(source, aside)
+                log(f"genesis record preserved -> world/genesis/{aside.name}")
             engines.copy_file(dump, source)
             log("genesis record copied -> world/source.json")
 
@@ -606,7 +723,21 @@ def post_world(name: str, body: WorldBody):
             except Exception as e:  # best effort — the world exists regardless
                 log(f"world/map.svg skipped: {e}")
 
-            canon.snapshot(name, f"campaign/{name}: generate world (seed {seed})")
+            # ticket 60: the replayable steering record beside the
+            # geography (source.json preserves the raw dump; options.yaml
+            # is the client-format record the next regen replays), and the
+            # fingerprint of what actually steered this run into the canon
+            # message — the seed alone never distinguished two differently
+            # steered worlds.
+            fingerprint = _options_fingerprint(fmg_options)
+            (world / "options.yaml").write_text(yaml.safe_dump(
+                {"seed": seed, "options": client_options or {}},
+                sort_keys=False, allow_unicode=True), encoding="utf-8")
+            log(f"options recorded -> world/options.yaml "
+                f"(fingerprint {fingerprint})")
+
+            canon.snapshot(name, f"campaign/{name}: generate world "
+                                 f"(seed {seed}, options {fingerprint})")
             return {"nations": int(summary.get("nations") or 0),
                     "settlements": int(summary.get("settlements") or 0),
                     "map": map_url}
