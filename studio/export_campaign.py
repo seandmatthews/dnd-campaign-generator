@@ -333,6 +333,19 @@ def main(argv=None):
         restore(pathlib.Path(args.restore), pathlib.Path(args.into))
         return 0
     if not args.campaign:
+        # the friend path (ticket 58): export.cmd is double-clicked with no
+        # arguments — answer with the names they can use, not bare usage
+        import spine
+        root = spine.campaigns_root()
+        names = sorted(d.name for d in root.iterdir()
+                       if d.is_dir() and (d / "campaign.yaml").is_file()) \
+            if root.is_dir() else []
+        if names:
+            print(f"your campaigns: {', '.join(names)}")
+            print(f"export one with:  export.cmd <name>   "
+                  f"(campaigns live under {root})")
+        else:
+            print(f"no campaigns found under {root} — nothing to export yet")
         ap.print_usage()
         return 2
     out = pathlib.Path(args.out) if args.out else None
