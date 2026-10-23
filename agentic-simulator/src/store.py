@@ -50,8 +50,7 @@ RUMOR_FIDELITY = ("eyewitness", "reliable", "hearsay", "dead")
 # by the studio's week/forecast
 # jobs — which copy a campaign state in, run this engine, and diff the
 # outputs back out — and this repo's standalone CLIs (tick.py --live,
-# projects.py --apply, effects.py --apply, ingest.py --apply). Two
-# writers interleave
+# effects.py --apply, ingest.py --apply). Two writers interleave
 # state.yaml last-writer-wins and can leak a foreign chronicle into a
 # studio proposal, so the studio takes a cross-process lock file over the
 # home for its whole engine job (studio/spine.py try_file_lock, taken in

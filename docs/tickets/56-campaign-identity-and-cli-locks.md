@@ -1,8 +1,6 @@
 # 56 — Campaign identity: aliasing splits the lock; two CLI writers skip it
 
-**Status:** in-progress (implemented 2026-10-23 — canonical identity at
-the studio boundary + the CLI lock set closed; fast tier green in the
-worktree, review pending)
+**Status:** proposed
 **Priority:** P1 — silent mutual-exclusion bypass on the campaign lock
 and silent last-writer-wins on the canon state file
 **Area:** `studio/spine.py`, `studio/canon.py`,
@@ -75,57 +73,14 @@ mergeable in either order.
 
 ## Acceptance criteria
 
-- [x] Requests under `foo.` / wrong case either 404 or take the
+- [ ] Requests under `foo.` / wrong case either 404 or take the
       canonical lock — pinned by a studio test extending
       `test_campaigns.py` (alias probe: same directory, lock file
       name asserted equal to the canonical one)
-- [x] `listed_name` never diverges from the directory, and snapshots
+- [ ] `listed_name` never diverges from the directory, and snapshots
       succeed under a hand-edited `campaign.yaml` name — same studio
       test (the git-pathspec regression)
-- [x] `projects.py --apply` holds the lock — simulator test: apply
+- [ ] `projects.py --apply` holds the lock — simulator test: apply
       while a fake holder owns the lock file → clean refusal
-- [x] `effects.py --apply` holds the lock across the whole
+- [ ] `effects.py --apply` holds the lock across the whole
       read-modify-write — simulator test mirroring ingest's
-
-## Implementation notes
-
-Landed 2026-10-23, both halves:
-
-- studio: `spine.canonical_name()` resolves a requested name against
-  the campaigns root (an exact match is itself; a case-insensitive /
-  trailing-dot-stripped-from-the-REQUEST match — mirroring Win32 path
-  rules, so a POSIX directory genuinely named `foo.` stays distinct —
-  returns the DIRECTORY's name; anything else passes through unchanged
-  for the 404 path). `campaign_dir` and `campaign_lock` canonicalize
-  through it, so files, locks, and `canon.snapshot_result`'s git
-  pathspecs all flow under the directory's real name; alias requests
-  are SERVED under the canonical identity (the proposal's allowed
-  alternative to 404). `list_campaigns` now lists `d.name` always.
-  Deviation from proposal §2's literal wording: a case-variant
-  meta.name (`Ember-Coast` for `ember-coast`) "equals the directory
-  case-insensitively" but still diverges in exactly the way that kills
-  the git pathspec (`git add` is case-sensitive), so `listed_name` is
-  pinned to `d.name` unconditionally — the criterion ("never
-  diverges") is the ruling.
-- simulator: `projects.py --apply` claims `standalone_home_lock`
-  around load+apply+save when the target is the shared home (clean
-  exit-4 refusal before any read, exit-codes docstring updated);
-  `effects.py --apply` takes the lock around the whole
-  read-modify-write instead of the save alone (ticket 26's claim
-  widened, matching ingest); `store.py`'s enumeration comment now
-  lists `projects.py --apply`.
-- tests: `studio/tests/test_campaigns.py` grows the alias probe (same
-  directory, canonical lock file name, an alias-addressed write
-  colliding with a held canonical lock then landing in the real
-  directory) and the hand-edited-name regression (listing stays the
-  directory name; an alias-addressed snapshot commits).
-  `agentic-simulator/tests/test_home_lock.py` grows projects' clean
-  refusal (with an own-target apply still claim-free) and effects'
-  whole-RMW probe (refusal BEFORE the state load — the absent-state
-  tell), and its enumeration docstring names projects.py.
-
-Fast tier green in the worktree: `python -m pytest studio/tests -q`
-(663 passed) and `python -m pytest agentic-simulator/tests -q` (252
-passed). `run-tests.py` itself cannot run in a worktree — the
-table-companion suite is a nested git repo worktrees do not carry
-(expected, not this ticket's bug).

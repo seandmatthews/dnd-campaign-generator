@@ -52,13 +52,9 @@ use):
 
 changes.yaml carries typed operations (create/edit/pause/resume/abandon);
 --apply is explicit standalone canon mutation, --preview writes the
-normalized operations, findings, and the candidate state. --apply against
-the shared engine home claims the home's cross-process lock around the
-whole read-modify-write (store.standalone_home_lock — ticket 56), like
-tick.py --live and ingest.py --apply.
+normalized operations, findings, and the candidate state.
 
-Exit codes: 0 ok, 1 validation or IO error, 2 usage, 4 the shared engine
-home is held by another process.
+Exit codes: 0 ok, 1 validation or IO error, 2 usage.
 """
 
 import argparse
@@ -73,7 +69,6 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import resolve
 import store as _store
-from store import STATE_FILE, HomeLockBusy, standalone_home_lock
 from store import load_state as _store_load
 from store import save_state as _store_save
 
@@ -1011,30 +1006,6 @@ def _cmd_changes(args):
     mode = "--check" if args.check else "--preview" if args.preview \
         else "--apply"
     changes_path = args.check or args.preview or args.apply
-    # --apply against the SHARED engine home (the default --state) claims
-    # the home's cross-process lock (ticket 56) around the WHOLE
-    # read-modify-write — load, apply, save — matching tick.py --live and
-    # ingest.py --apply: a load outside the lock reads pre-week state,
-    # applies, saves, and the week's save then overwrites it (or the
-    # reverse, leaving a chronicle for a week the state never recorded).
-    # --check/--preview write nothing (an --out target is the caller's
-    # own file); an explicit non-home --state is likewise the caller's
-    # own — neither claims, neither refuses.
-    if mode == "--apply":
-        home = args.state is None or \
-            pathlib.Path(args.state).resolve() == \
-            pathlib.Path(STATE_FILE).resolve()
-        if home:
-            try:
-                with standalone_home_lock():
-                    return _cmd_changes_locked(args, mode, changes_path)
-            except HomeLockBusy as e:
-                print(f"refused: {e}", file=sys.stderr)
-                return 4
-    return _cmd_changes_locked(args, mode, changes_path)
-
-
-def _cmd_changes_locked(args, mode, changes_path):
     state, err = _load(args.state)
     if err:
         print(f"error: {err}", file=sys.stderr)

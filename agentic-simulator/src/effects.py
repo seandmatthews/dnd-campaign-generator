@@ -68,10 +68,10 @@ The session record carries optional history bullets alongside effects:
                                     # actor's current place later
     effects: [...]
 
-Exit codes: 0 applied/valid, 1 validation or IO error, 2 usage,
-4 the shared engine home is held by another process (--apply only).
+Exit codes: 0 applied/valid, 1 validation or IO error, 2 usage.
 """
 
+import contextlib
 import pathlib
 import sys
 
@@ -518,30 +518,6 @@ def main(argv):
               "[--state <state.yaml>]", file=sys.stderr)
         return 2
     record_path = pos[0]
-    # --apply against the SHARED engine home (the default --state) claims
-    # the home's cross-process lock around the WHOLE read-modify-write —
-    # load, validate, apply, save — matching ingest.py (ticket 56): the
-    # old claim (ticket 26) covered only the save, so the load and apply
-    # ran unlocked and two fast applies interleaved last-writer-wins over
-    # state.yaml. --check writes nothing; an explicit --state target is
-    # this caller's own file (the studio's session prep applies to a temp
-    # copy), nothing shared — no claim, no refusal.
-    applies_to_home = pathlib.Path(state_path).resolve() == \
-        pathlib.Path(STATE_FILE).resolve()
-    try:
-        if mode == "--apply" and applies_to_home:
-            with standalone_home_lock():
-                return _cli_apply(record_path, state_path, mode)
-        return _cli_apply(record_path, state_path, mode)
-    except HomeLockBusy as e:
-        print(f"refused: {e}", file=sys.stderr)
-        return 4
-
-
-def _cli_apply(record_path, state_path, mode):
-    """One CLI run: load the record and state, validate + apply the whole
-    batch in memory, save when --apply. The caller holds the home lock
-    for the whole of this whenever the target is the shared home."""
     try:
         record = _store_load(record_path)
         state = _store_load(state_path)
@@ -561,7 +537,21 @@ def _cli_apply(record_path, state_path, mode):
         print(f"valid: {events} history event(s), {applied} effect(s) "
               "would apply — nothing written")
         return 0
-    _store_save(state, state_path)
+    # --apply against the SHARED engine home (the default --state) claims
+    # the home's cross-process lock (ticket 26): a studio week/forecast job
+    # — or another standalone run — holding world/ means two writers
+    # interleaving state.yaml last-writer-wins. An explicit --state target
+    # is this caller's own file (the studio's session prep applies to a
+    # temp copy), nothing shared — no claim, no refusal.
+    applies_to_home = pathlib.Path(state_path).resolve() == \
+        pathlib.Path(STATE_FILE).resolve()
+    try:
+        with standalone_home_lock() if applies_to_home \
+                else contextlib.nullcontext():
+            _store_save(state, state_path)
+    except HomeLockBusy as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 4
     print(f"applied {events} history event(s), {applied} effect(s)")
     return 0
 
