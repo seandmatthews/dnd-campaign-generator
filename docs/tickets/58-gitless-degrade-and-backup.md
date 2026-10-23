@@ -1,6 +1,7 @@
 # 58 — Git-less installs: designed degrade for the undo spine + a friend backup story
 
-**Status:** proposed
+**Status:** in-progress (implemented + verified 2026-10-23, 529617b;
+awaiting review)
 **Priority:** P1 — the core safety promise ("history is your undo") is
 dead on 100% of friend installs and presented as a permanent error;
 the data itself has no backup story at all
