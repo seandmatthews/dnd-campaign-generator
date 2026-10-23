@@ -273,7 +273,11 @@ def campaign_lock(name: str) -> CampaignLock:
     more; the fast 409s belong to the short interactive writers
     (campaign_lock_nowait / spine.lock_nowait). The lock is honored
     across processes (server vs CLI) through the lock file; NEVER nest
-    acquisitions of the same campaign's lock."""
+    acquisitions of the same campaign's lock. The name is canonicalized
+    (canonical_name, ticket 56) so a request under a case or trailing-dot
+    alias shares the real campaign's lock instead of minting a second
+    one beside it."""
+    name = canonical_name(name)
     with _CAMPAIGN_LOCKS_GUARD:
         return _CAMPAIGN_LOCKS.setdefault(name, CampaignLock(name))
 
@@ -480,10 +484,46 @@ def valid_name(name: str) -> bool:
     return bool(name) and bool(_NAME_RE.match(name))
 
 
+def canonical_name(name: str) -> str:
+    """The directory's REAL name for a requested campaign name (ticket 56).
+
+    _NAME_RE admits mixed case and trailing dots for EXISTING campaigns,
+    and on NTFS 'foo.' / 'Ember-Coast' address the same directory as
+    'foo' / 'ember-coast' — but the lock file name, git pathspecs, and
+    error messages all keyed on the REQUESTED spelling, so a request
+    under 'foo.' held foo..lock while every writer on 'foo' held
+    foo.lock: same canon, different locks, mutual exclusion silently
+    bypassed (and `git add -A -- <alias>` staged nothing, so alias
+    writes went un-snapshotted). Resolve the request against the
+    campaigns root: an exact match is itself; a case-insensitive or
+    trailing-dot match (the dots strip from the REQUEST only, mirroring
+    Win32 path rules — a POSIX directory genuinely named 'foo.' stays a
+    distinct campaign) returns the DIRECTORY's name, so one campaign has
+    one lock file and one git pathspec; anything else returns the
+    request unchanged for the caller's not-found path to refuse."""
+    if not valid_name(name):
+        return name
+    root = campaigns_root()
+    try:
+        dirs = sorted((d for d in root.iterdir() if d.is_dir()),
+                      key=lambda d: d.name)
+    except OSError:
+        return name
+    if any(d.name == name for d in dirs):
+        return name
+    want = name.rstrip(".").lower()
+    for d in dirs:
+        if d.name.lower() == want:
+            return d.name
+    return name
+
+
 def campaign_dir(name: str) -> Path:
     if not valid_name(name):
         raise CampaignNotFound(f"invalid campaign name: {name!r}")
-    return campaigns_root() / name
+    # identity canonicalized at the boundary (ticket 56): the directory's
+    # real name is what flows to every lock, write, and pathspec
+    return campaigns_root() / canonical_name(name)
 
 
 def require_campaign(name: str) -> Path:
@@ -565,12 +605,15 @@ def list_campaigns() -> list:
             # degrade to folder-name identity; the file routes still 422
             # with the file name when that campaign is opened
             meta = {}
-        # identity must stay addressable even if campaign.yaml was hand-edited
-        listed_name = str(meta.get("name") or "")
-        if not valid_name(listed_name):
-            listed_name = d.name
+        # the DIRECTORY name is the app's address, always (ticket 56): a
+        # hand-edited campaign.yaml `name:` that is merely VALID used to
+        # become the listed address (Ember-Coast for folder ember-coast) —
+        # files and lock coincide on NTFS, but `git add -A -- <alias>`
+        # silently stages nothing and the campaign's undo trail died,
+        # reported only as snapshot 'failed'. The title still reads the
+        # file; identity never diverges from the folder.
         out.append({
-            "name": listed_name,
+            "name": d.name,
             "title": meta.get("title") or d.name,
             "created": str(meta.get("created") or ""),
             "has": _has_sections(d),
