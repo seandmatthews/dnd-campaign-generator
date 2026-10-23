@@ -247,6 +247,21 @@ between calls when it runs out: a WEEK aborts with nothing written (no all-holds
 guard, not a billing estimate; the token tally in the logs is approximate
 and never presented as the provider's exact charges.
 
+## Time contract
+
+The watchdog that kills a wedged week run (and each forecast tick)
+derives from the same numbers, never a hardcoded guess: the per-run POST
+ceiling above × `complete()`'s 300 s per-POST timeout, plus engine-work
+margin (ticket 55) — 2 h 10 m on a default five-faction roster. The
+goal-review watchdog sits at one `complete()` call's worst case
+(3 attempts × 300 s × 3 length passes + backoff, rounded up = 2800 s),
+and the queued-job dead-man cap is 3× the week watchdog. `STUDIO_WEEK_TIMEOUT_S`
+(positive int) overrides the week cap at boot; `LLM_MAX_CALLS` raises it
+automatically, because the engine subprocess inherits that env and a
+bigger legal spend is a longer legal run. The UI reads the same numbers
+from `GET /simulation` (`run_contract`) to size its poll give-up, and its
+give-up copy says whether the job was queued or running.
+
 ## Export and restore
 
 `python studio/export_campaign.py <campaign>` packs ONE campaign into a

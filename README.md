@@ -20,7 +20,7 @@ the kind of table the tool prepares for, nothing more.
   [`docs/for-new-gms/`](docs/for-new-gms/). Start with
   [`the tutorial`](docs/for-new-gms/TUTORIAL.md)** — from zero to a
   living campaign (world, maps, lore, a simulated week): days or weeks of
-  world history, compressed into a couple of hours at the keyboard, with
+  world history, compressed into a few hours at the keyboard, with
   a "you should see" checkpoint at every step and each long step's
   expected duration stated before it runs.
 - **Running the table? [`ATLAS.md`](docs/for-new-gms/ATLAS.md)** — the

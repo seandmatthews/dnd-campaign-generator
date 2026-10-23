@@ -403,7 +403,94 @@ def run_check(path, timeout: int = 180) -> list:
 # router drives as jobs. The week flow's contract (output becomes a pending
 # proposal bundle, never a direct canon write) lives here with it.
 
-WEEK_TIMEOUT = 1800  # a live week is minutes of LLM calls
+# ------------------------------------------- one week-run time contract
+# (ticket 55): every cap that describes a run derives from the SAME
+# numbers the engine's own LLM path makes legal, so no two contradict:
+#   llm.complete() bounds one POST by its socket timeout (300 s) and
+#   itself by _post_json's 3 attempts per pass (sleeping 1 s + 2 s
+#   between them) and the length-extension loop's 3 passes
+#   (6144 -> 12288 -> 24576 completion tokens) — one call's honest
+#   worst case is 3 x 300 x 3 + 9 ~= 2700 s, the number the goal-review
+#   watchdog has always been sized from.
+LLM_HTTP_ATTEMPTS = 3      # agentic-simulator/src/llm.py _post_json
+LLM_POST_TIMEOUT_S = 300   # complete(timeout=300)
+LLM_LENGTH_PASSES = 3      # base pass + two max_tokens doublings
+LLM_RETRY_BACKOFF_S = 9    # (1 s + 2 s) x one retry cycle per pass
+
+
+def llm_call_worst_case_s() -> int:
+    """One complete() call's legal worst case (~2700 s): attempts x
+    per-POST timeout x length passes, plus the retry backoff."""
+    return (LLM_HTTP_ATTEMPTS * LLM_POST_TIMEOUT_S * LLM_LENGTH_PASSES
+            + LLM_RETRY_BACKOFF_S)
+
+
+def llm_call_watchdog_s() -> int:
+    """The watchdog for a job built around ONE complete() call (goal
+    review): the worst case rounded up to the next full 100 s — 2709 s
+    -> 2800 s, the sizing rule the old hardcoded literal carried."""
+    return -(-(llm_call_worst_case_s() + 1) // 100) * 100
+
+
+# A live week is NOT one call: one propose() per faction (each with one
+# validation retry) plus narration — every POST metered against the
+# engine's OWN per-run ceiling (tick.py run_live:
+# llm.begin_run(max(24, 3N + 6)), or LLM_MAX_CALLS when the environment
+# sets it — the engine subprocess inherits this process's env). That
+# ceiling is the spend bound: a week that would spend past it aborts
+# cleanly by budget (BudgetExceeded -> WeekAborted, rc != 0), so the wall
+# time of any week that can FINISH is bounded by the ceiling x the
+# per-POST timeout. Five factions is the studio's own design ceiling
+# ("Five factions is plenty", sim.js), so the default budget covers a
+# full roster.
+WEEK_FACTIONS_DEFAULT = 5
+
+
+def week_post_budget(factions: int = WEEK_FACTIONS_DEFAULT) -> int:
+    """The engine's per-run POST ceiling for a week on a `factions`
+    roster — tick.py run_live's max(24, 3N + 6), or LLM_MAX_CALLS when
+    the environment sets a positive value (same env the engine reads)."""
+    raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
+    try:
+        env = int(raw)
+        if env > 0:
+            return env
+    except ValueError:
+        pass
+    return max(24, 3 * factions + 6)
+
+
+WEEK_ENGINE_MARGIN_S = 600  # scheduler/resolution/chronicle + process spawn
+
+
+def week_timeout_s() -> int:
+    """The per-tick watchdog for a live week (and each forecast tick):
+    STUDIO_WEEK_TIMEOUT_S when set to a positive int — the one knob —
+    else derived from the engine's own POST ceiling, never a hardcoded
+    guess. A slow-but-working provider must not get the tree killed
+    mid-spend: rc=124 discards a whole week of API spend and the retry
+    re-spends and re-kills."""
+    raw = (os.environ.get("STUDIO_WEEK_TIMEOUT_S") or "").strip()
+    try:
+        env = int(raw)
+        if env > 0:
+            return env
+    except ValueError:
+        pass
+    return week_post_budget() * LLM_POST_TIMEOUT_S + WEEK_ENGINE_MARGIN_S
+
+
+WEEK_TIMEOUT = week_timeout_s()  # the import-time default the flows run under
+
+
+def run_contract() -> dict:
+    """The honest week-run numbers for the UI, from the same derivation
+    the watchdogs use (ticket 55): the per-tick watchdog and the queue
+    dead-man cap. The frontend sizes its poll give-up from these instead
+    of hardcoding a third number that drifts from both."""
+    return {"week_timeout_s": WEEK_TIMEOUT,
+            "queue_deadline_s": engine_lock_deadline_s()}
+
 
 _HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
 

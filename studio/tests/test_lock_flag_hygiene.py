@@ -106,7 +106,14 @@ def test_engine_lock_deadline_mid_queue_leaves_no_dangling_flag(
         r = client.post("/api/campaign/testvale/simulation/week",
                         json={"confirm": True})
         assert r.status_code == 202, r.text
-        assert r.json()["queued"] is True, "it queues behind its own week"
+        # the holder is immediate-lane (engine lock only — the queued run
+        # must reach the engine-home dead-man through a free campaign
+        # lock, so this test cannot give it one), which the FIFO cannot
+        # see: queued is False deterministically since the submit-probe
+        # race fix (a first-in-line job no longer reads its own drainer
+        # as "the current holder"). The chaining this exercises — waiting
+        # for the engine home — is the dead-man error proven below.
+        assert r.json()["queued"] is False, r.json()
         job = wait_for_job(client, r.json()["job_id"], timeout=30.0)
     finally:
         release.set()
@@ -135,27 +142,43 @@ def test_queued_week_waits_without_touching_the_running_flag(
     release = threading.Event()
 
     def first_week(log):
-        with engines.engine_lock_logged(log, "a week run or forecast",
-                                        holder="testvale"):
-            engines.write_week_flag("testvale")
-            entered.set()
-            assert release.wait(timeout=15), "test never released the week"
+        # hold the locks in the order a REAL queued week job does — the
+        # campaign lock outside (the queue's before_run takes it), the
+        # engine lock inside — because the route's queued-answer probe
+        # reads the campaign lock at submit time. An immediate-lane holder
+        # without the campaign lock made `queued is True` below pass only
+        # by racing the submitted job's own drainer for the lock (the
+        # ticket 55 lane lost that race: queued came back False, the
+        # assert fired before release.set(), and the still-held engine
+        # home leaked into the NEXT test's queue)
+        with spine.campaign_lock("testvale"):
+            with engines.engine_lock_logged(
+                    log, "a week run or forecast", holder="testvale"):
+                engines.write_week_flag("testvale")
+                entered.set()
+                assert release.wait(timeout=15), \
+                    "test never released the week"
 
     jobs.submit("sim-week", first_week, campaign="testvale")
     assert entered.wait(timeout=5)
     first_started = json.loads(
         engines.week_flag_path().read_text(encoding="utf-8"))["started"]
 
-    # same-campaign holder: the second week QUEUEs behind it (ticket 24)
-    r = client.post("/api/campaign/testvale/simulation/week",
-                    json={"confirm": True})
-    assert r.status_code == 202 and r.json()["queued"] is True, r.text
-    time.sleep(0.3)  # let the queued job actually reach its wait
-    doc = json.loads(engines.week_flag_path().read_text(encoding="utf-8"))
-    assert doc == {"campaign": "testvale", "started": first_started}, \
-        "the queued run must not rewrite the running job's flag"
-
-    release.set()
+    # same-campaign holder: the second week QUEUEs behind it (ticket 24).
+    # release.set() sits in a finally: a failed assert must never leave
+    # first_week holding both locks for its full 15 s wait — that leak is
+    # what cascaded into the next test's queue in the ticket 55 lane
+    try:
+        r = client.post("/api/campaign/testvale/simulation/week",
+                        json={"confirm": True})
+        assert r.status_code == 202 and r.json()["queued"] is True, r.text
+        time.sleep(0.3)  # let the queued job actually reach its wait
+        doc = json.loads(
+            engines.week_flag_path().read_text(encoding="utf-8"))
+        assert doc == {"campaign": "testvale", "started": first_started}, \
+            "the queued run must not rewrite the running job's flag"
+    finally:
+        release.set()
     job = wait_for_job(client, r.json()["job_id"], timeout=30.0)
     assert job["status"] == "done", job["error"]
     jobs.wait_all(timeout=30.0)  # the first week job settles too

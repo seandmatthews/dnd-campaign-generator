@@ -188,11 +188,23 @@
     return data;
   }
 
+  // "12 minutes" / "about 8.8 hours" — one formatter for the poll's
+  // give-up copy, so an hour-scale wait never reads "525 minutes"
+  function humanWait(ms) {
+    const mins = Math.round(ms / 60000);
+    if (mins < 90) return mins + ' minutes';
+    const hours = mins / 60;
+    return 'about ' + (Number.isInteger(hours) ? String(hours)
+      : hours.toFixed(1)) + ' hours';
+  }
+
   function pollJob(id, onLog, timeoutMs, onJob) {
     // A wedged job (engine killed, LLM hanging) must not tick forever: after
-    // timeoutMs (default 31 min = the week job's 1800 s engine cap + slack)
-    // polling gives up with a readable error. The job itself keeps running
-    // server-side; reopen this tab after it finishes to see the result.
+    // timeoutMs (default 31 min — a floor for callers that do not size
+    // their own watch; the week and forecast runs pass a run-kind-sized
+    // ceiling derived from the server's contract, ticket 55) polling gives
+    // up with a readable error. The job itself keeps running server-side;
+    // reopen this tab after it finishes to see the result.
     const giveUpAfter = timeoutMs || (31 * 60 * 1000);
     return new Promise((resolve, reject) => {
       // rotating window — see logtail.js for why anchoring, not indexing
@@ -200,6 +212,7 @@
       let failures = 0;           // one hiccup must not kill a 30-minute watch
       let inFlight = false;       // slow polls must not overlap and double-log
       let settled = false;        // resolve/reject exactly once
+      let lastStatus = null;      // the give-up copy names the state it last saw
       const startedAt = Date.now();
       const finish = (fn, arg) => {
         if (settled) return;
@@ -207,14 +220,29 @@
         clearInterval(timer);
         fn(arg);
       };
+      const giveUp = () => {
+        // queued and running are different stories (ticket 55): a queued
+        // job has spent nothing and is not the GM's run wedging — the old
+        // copy claimed a run was in flight either way
+        const waited = humanWait(giveUpAfter);
+        finish(reject, lastStatus === 'queued' ? {
+          status: 504,
+          error: 'Gave up waiting for the job after ' + waited +
+            ' — it was last seen QUEUED (waiting for another run to ' +
+            'finish; nothing of yours has started or been spent). It ' +
+            'runs when the queue frees; reopen this tab later to see ' +
+            'the result.'
+        } : {
+          status: 504,
+          error: 'Gave up waiting for the job after ' + waited +
+            ' (it was last seen RUNNING — the studio watchdog will kill ' +
+            'it if it is wedged; reopen this tab later to see the ' +
+            'outcome before spending anything on a retry)'
+        });
+      };
       const tick = async () => {
         if (!settled && Date.now() - startedAt > giveUpAfter) {
-          finish(reject, {
-            status: 504,
-            error: 'Gave up waiting for the job after ' + Math.round(giveUpAfter / 60000)
-              + ' minutes (the job keeps running server-side — reopen this '
-              + 'tab in a few minutes to see the result)'
-          });
+          giveUp();
           return;
         }
         if (inFlight || settled) return;
@@ -238,6 +266,7 @@
           }
           const merged = StudioLogTail.mergeLogTail(job.log_tail, logCursor);
           logCursor = merged.cursor;
+          if (job && job.status) lastStatus = job.status;
           if (typeof onLog === 'function') merged.lines.forEach((line) => onLog(line));
           if (typeof onJob === 'function') onJob(job);
           if (job.status === 'done') {
@@ -765,7 +794,7 @@
             'the canon clock</p>' +
           '<p class="modal-body">The first campaign is an evening, not a ' +
             'quick setup: days or weeks of world history, compressed into a ' +
-            'couple of hours at the keyboard &mdash; each long step says its ' +
+            'few hours at the keyboard &mdash; each long step says its ' +
             'expected duration before it starts. Full walkthrough with ' +
             'troubleshooting: ' +
             '<a href="/tutorial" target="_blank" rel="noopener">the tutorial</a> ' +
@@ -1044,19 +1073,26 @@
 
   /* ---------- exports ---------- */
   // Honest durations, single-sourced (ticket 01 wrote the copy; ticket 16
-  // gave it one home): every NUMBER the UI shows about how long something
-  // takes reads from here, so a re-measured estimate is updated once.
-  // 'a few minutes' stays prose in place — it carries no number that can
-  // contradict another string. docs/for-new-gms/TUTORIAL.md mirrors these in prose.
+  // gave it one home; ticket 55 re-measured it): every NUMBER the UI
+  // shows about how long something takes reads from here, so a
+  // re-measured estimate is updated once. 'a few minutes' stays prose in
+  // place — it carries no number that can contradict another string.
+  // docs/for-new-gms/TUTORIAL.md mirrors these in prose.
   Studio.DURATIONS = {
-    minutesPerWeek: 10,   // the honest midpoint; the band is half-to-full
+    // re-measured 2026-10-23 (ticket 55): a full-roster week runs
+    // 60-90 minutes wall-clock — ticket 01's 10-20 was the 2026-10-01
+    // number, before the consistency and rewrite passes landed
+    minutesPerWeekLow: 60,
+    minutesPerWeekHigh: 90,
+    minutesPerWeek: 75,   // the honest midpoint; the band is low-to-high
     band: function (weeks) {
-      return Math.round(weeks * 5) + '\u2013' + (weeks * 10) + ' minutes';
+      return Math.round(weeks * this.minutesPerWeekLow) + '\u2013' +
+        (weeks * this.minutesPerWeekHigh) + ' minutes';
     },
     approx: function (weeks) {
-      return (weeks * 10) + ' minutes';
+      return (weeks * this.minutesPerWeek) + ' minutes';
     },
-    weekRun: '10\u201320 minutes'  // one live week, roster-dependent
+    weekRun: '60\u201390 minutes'  // one live week, roster-dependent
   };
   Studio.esc = esc;
   Studio.el = el;
