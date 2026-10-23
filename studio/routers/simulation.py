@@ -431,10 +431,6 @@ def get_simulation(name: str):
             "proposal_id"),
         "active_forecast": (forecasts.find_active(name) or {}).get(
             "forecast_id"),
-        # the honest run numbers (ticket 55), from the same derivation the
-        # watchdogs use — the UI sizes its poll give-up from these rather
-        # than hardcoding a third guess
-        "run_contract": engines.run_contract(),
     }
 
 
@@ -924,13 +920,11 @@ class GoalReviewBody(BaseModel):
     auto_accept: bool = False
 
 
-# one bounded LLM pass + the effects CLI runs. The watchdog is the SAME
-# worst-case derivation every run cap shares (engines.llm_call_watchdog_s:
-# complete()'s 3 attempts x 300 s x 3 length passes + backoff, rounded
-# up — 2800 s): a slow-but-working provider must not get the tree killed
-# and every retry re-spent, and the goal-review cap must never contradict
-# the week cap beside it.
-_GOAL_REVIEW_TIMEOUT = engines.llm_call_watchdog_s()
+# one bounded LLM pass + the effects CLI runs. complete()'s honest worst
+# case is 3 attempts x 300s x 3 passes (base + two length extensions) plus
+# backoff ~= 2700s: a slow-but-working provider must not get the tree
+# killed and every retry re-spent, so the watchdog sits just above it.
+_GOAL_REVIEW_TIMEOUT = 2800
 
 
 @router.post("/api/campaign/{name}/simulation/goal-review", status_code=202)

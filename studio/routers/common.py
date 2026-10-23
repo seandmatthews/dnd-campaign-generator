@@ -185,21 +185,15 @@ def submit_campaign_job(kind: str, name: str, job, take_lock: bool = True):
             except Exception:  # noqa: BLE001 — best-effort by contract
                 pass
 
+    job_id, position = jobs.submit_queued(
+        name, kind, wrapped, before_run=before_run if take_lock else None)
     # "queued" must be honest even when this submission is the only one in
     # the queue: a held lock (another campaign's writer, a CLI process)
     # means the job waits for its turn even with nothing studio-side ahead
     # of it — report that as position 1 (behind the current holder). The
     # no-lock lane does not wait on the lock, so only real queue-mates
-    # count for it. The probe runs BEFORE the submit, on purpose: after
-    # it, this job's OWN drainer may already hold the lock through
-    # before_run, and the probe would report the job as queued behind
-    # itself — first-in-line submissions answered "position 1" on thread
-    # scheduling alone (reproduced 6/6 in the ticket 55 lane), and the
-    # same race could answer False with a genuinely-held lock mid-handoff.
-    held_before = take_lock and lock.locked()
-    job_id, position = jobs.submit_queued(
-        name, kind, wrapped, before_run=before_run if take_lock else None)
-    if position == 0 and held_before:
+    # count for it.
+    if position == 0 and take_lock and lock.locked():
         position = 1
     return JSONResponse({"job_id": job_id, "queued": position > 0,
                          "queue_position": position},
@@ -250,9 +244,8 @@ def pending_proposal_409(name: str, pending: dict, what: str) -> HTTPException:
 def campaign_lock_nowait(name: str, action: str):
     """The campaign lock for a SHORT interactive writer, or 409 — never a
     blocking acquire. A week job holds this lock for its whole run (up to
-    the derived week watchdog — ~2 h 10 m by default, env-tunable via
-    STUDIO_WEEK_TIMEOUT_S); a blocking acquire used to pin the HTTP
-    request that long, and a browser or proxy timeout on the way turns the would-be success
+    30 minutes); a blocking acquire used to pin the HTTP request that long,
+    and a browser or proxy timeout on the way turns the would-be success
     into an error the DM must guess about. Fast-fail exactly like
     submit_campaign_job, with a message that says when to retry and what
     the wait looks like. Delegates to spine.lock_nowait — the one

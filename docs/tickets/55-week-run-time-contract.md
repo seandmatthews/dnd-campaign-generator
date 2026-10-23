@@ -1,15 +1,6 @@
 # 55 — One honest week-run time contract (watchdog, poll, docs)
 
-**Status:** in-progress (implemented 2026-10-23 — the watchdog/queue
-cap/goal-review sizing now derive from one shared formula in engines.py
-(`week_post_budget() × 300 s + margin` = 7800 s default; `STUDIO_WEEK_TIMEOUT_S`
-overrides, `LLM_MAX_CALLS` raises it with the spend), the week/forecast
-polls size from the server-served run contract, the give-up copy names
-queued vs running, and the duration claims are re-measured to the
-review's logged 60–90 min observation — no fresh provider run was spent
-in this change; the campaign's own job-duration history
-(`.studio-jobs/history.json`, the queue strip's "typically" band) is the
-live check once a real week has run)
+**Status:** proposed
 **Priority:** P1 — the core loop can be killed mid-spend while every
 doc claims it fits
 **Area:** `studio/engines.py`, `studio/routers/simulation.py`,
@@ -73,33 +64,13 @@ Make the three numbers one honestly derived number:
 
 ## Acceptance criteria
 
-- [x] Watchdog ≥ derived worst case (goal-review formula) — pinned by
+- [ ] Watchdog ≥ derived worst case (goal-review formula) — pinned by
       a studio test asserting the relationship (new
       `studio/tests/test_run_timeouts.py`, beside the goal-review
-      sizing test) — WEEK_TIMEOUT is now DERIVED (engine POST ceiling ×
-      per-POST timeout + margin = 7800 s ≥ the goal-review formula's
-      2800 s, itself derived via the shared `llm_call_watchdog_s()`),
-      pinned by `test_week_watchdog_covers_one_llm_call_worst_case`,
-      `test_goal_review_watchdog_is_the_shared_formula` and the
-      derivation/env-knob tests in the same file
-- [x] `runWeek` polls with a run-kind-sized timeout, not the default
-      — pinned by a js harness asserting the poll call shape —
-      `timeoutMs: S.weekPollTimeoutMs(sim.run_contract, 1)` (queue
-      dead-man cap + watchdog + slack, served by
-      `GET /simulation` `run_contract`); pinned by
-      `studio/tests/js/test_run_timeouts.cjs` (sizing math, clearing
-      the 31-min default, and the source call shape); the forecast's
-      poll re-sources the same helper
-- [x] Give-up copy distinguishes queued from running — js harness on
-      the `pollJob` give-up branch — `pollJob` tracks the last-seen
-      job status; queued says "nothing of yours has started or been
-      spent", running names the server watchdog; both branches driven
-      by the harness against the real `S.pollJob`
-- [x] TUTORIAL.md and the duration table carry re-measured numbers —
-      directly checkable against a logged real run's duration — both
-      carry 60–90 min/week (the review's 2026-10-23 logged
-      observation; ticket 01's 10–20 was the 2026-10-01 measurement),
-      the mirror between them pinned by `test_durations.cjs`, and a
-      real campaign's own durations land in
-      `.studio-jobs/history.json` (the queue strip's "typically" band)
-      to check against
+      sizing test)
+- [ ] `runWeek` polls with a run-kind-sized timeout, not the default
+      — pinned by a js harness asserting the poll call shape
+- [ ] Give-up copy distinguishes queued from running — js harness on
+      the `pollJob` give-up branch
+- [ ] TUTORIAL.md and the duration table carry re-measured numbers —
+      directly checkable against a logged real run's duration

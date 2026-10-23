@@ -5,9 +5,8 @@ battle maps, lore you approved, and a faction simulation that writes a
 chronicle week by week.
 
 **Time:** a first campaign is an evening, not a coffee break — days or
-weeks of world history, compressed into a few hours at the keyboard
-(installs included; one simulated week alone runs 60–90 minutes with a
-full roster). The machine works in minutes-long spans while you read
+weeks of world history, compressed into a couple of hours at the keyboard
+(installs included). The machine works in minutes-long spans while you read
 what came back; every long step below states its expected duration before
 it starts. **Cost:** everything except two features is
 free and offline. Story generation and week simulation call an LLM and
@@ -180,10 +179,9 @@ On **Agent Simulation**, a fresh campaign shows *Create a simulation*:
    it's your setup, no LLM involved.
 
 Then click **Propose week 1** (under *Generate week 1*). After a credits
-confirmation, the week runs faction-by-faction — expect 60–90 minutes
-with a full roster (re-measured 2026-10-23; the button panel's number
-and this line share one source), streaming its log as it goes. Factions
-act on what they
+confirmation, the week runs faction-by-faction — expect 10–20 minutes
+with a full roster, streaming its log as it goes. Factions act on what
+they can
 *see* (their fog of war, inspectable in the Views panel), dice decide
 contested moves, and rumors spread. What comes back is a **proposal** —
 the proposed week with its chronicle and a diff, shown right on the tab.

@@ -52,9 +52,6 @@ if _node:
         ("studio-js-durations", [_node,
                                  "studio/tests/js/test_durations.cjs"]))
     FAST_SUITES.append(
-        ("studio-js-run-timeouts", [_node,
-                                    "studio/tests/js/test_run_timeouts.cjs"]))
-    FAST_SUITES.append(
         ("studio-js-world", [_node,
                              "studio/tests/js/test_world_tab.cjs"]))
     FAST_SUITES.append(
@@ -116,8 +113,7 @@ if _node:
               "&& npx playwright install chromium)")
 else:
     print("note: node not found — skipping the studio-js (esc/logtail/"
-          "handoff/sessions/staging/durations/run-timeouts/world/"
-          "sessions-tab/banners/"
+          "handoff/sessions/staging/durations/world/sessions-tab/banners/"
           "toast/design/design-restore/maps-seed/maps-burg-form/prep/"
           "api-timeout/"
           "log-clean/copy-claims/campaign-select-order) and the "

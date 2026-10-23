@@ -267,26 +267,6 @@
   // the result — the job keeps running server-side and the record
   // restores it on the next render.
   S.DESIGN_TIMEOUT_MS = 35 * 60 * 1000;
-
-  /* Pure — the poll give-up ceiling for a week-kind run (ticket 55):
-     the SERVER's run contract (GET /simulation: run_contract, from the
-     same derivation as the engine watchdogs) sizes the watch — the
-     per-tick watchdog per projected week, plus the queue dead-man cap,
-     plus a minute of slack per week — never pollJob's 31-minute default,
-     which counted queue time against a cap sized for one run and
-     reported a false failure while the job sat queued. weeks = 1 for a
-     week run, n for an n-week forecast. Pinned by
-     studio/tests/js/test_run_timeouts.cjs. */
-  S.weekPollTimeoutMs = function (contract, weeks) {
-    weeks = weeks || 1;
-    const c = contract || {};
-    const weekS = (typeof c.week_timeout_s === 'number' &&
-                   c.week_timeout_s > 0) ? c.week_timeout_s : 31 * 60;
-    const queueS = (typeof c.queue_deadline_s === 'number' &&
-                    c.queue_deadline_s > 0) ? c.queue_deadline_s : 5 * 60;
-    return (queueS + weeks * (weekS + 60) + 60) * 1000;
-  };
-
   // how long a finished design stays believable as an auto-restore (a
   // self-filling form from YESTERDAY's sitting surprises more than it
   // helps; the record still holds it — only the auto-fill ages out)
@@ -1154,7 +1134,7 @@
 
   /* ----- forecast (run the real engine forward on scratch) ----- */
 
-  function forecastCard(root, contract) {
+  function forecastCard(root) {
     const card = S.el(
       '<section class="panel forecast-card-panel">' +
         '<h3 class="panel-title">Forecast the next weeks</h3>' +
@@ -1196,12 +1176,10 @@
         path: S.campUrl('/simulation/forecast'),
         body: { confirm: true, weeks: n },
         btn: btn, errBox: errBox, log: S.makeLogBox(logBox),
-        // the give-up scales with the run (ticket 55 kept the shape,
-        // changed the source): the per-tick watchdog times n weeks plus
-        // the queue dead-man cap, all from the server's run contract —
-        // the hardcoded n x 31 min + 5 mirrored the old 1800 s watchdog
-        // and would have gone stale the day it was re-derived
-        timeoutMs: S.weekPollTimeoutMs(contract, n),
+        // the give-up must scale with the run: the per-week engine cap is
+        // 30 min, so a 3-week forecast legally runs 90+ — the week-sized
+        // 31-minute default reported a false failure mid-run
+        timeoutMs: n * 31 * 60 * 1000 + 5 * 60 * 1000,
         failLabel: 'Forecast failed'
       }).then(() => {
         S.toast('Forecast staged — read it above, then discard it.', 'ok');
@@ -2183,12 +2161,6 @@
         path: S.campUrl('/simulation/week'),
         body: { confirm: true, auto_accept: !!auto },
         btn: runBtn, errBox: runErr, log: S.makeLogBox(runLog),
-        // run-kind-sized (ticket 55): the server's per-tick watchdog plus
-        // the queue dead-man cap, from the same run contract the server
-        // derives its kill from — not pollJob's 31-minute default, which
-        // counted queue time against a one-run cap and gave up while the
-        // week was still legally queued
-        timeoutMs: S.weekPollTimeoutMs(sim.run_contract, 1),
         failLabel: 'Week run failed'
       }).then((result) => {
         const r = result || {};
@@ -2217,7 +2189,7 @@
     if (factions.length) goalsCard(root);
 
     /* forecast: the real engine projected forward on scratch */
-    if (factions.length) forecastCard(root, sim.run_contract);
+    if (factions.length) forecastCard(root);
 
     /* record-a-session: history + reviewed structured effects (Phase 3) */
     if (factions.length) sessionPanel(root, factions, sim.projects);
