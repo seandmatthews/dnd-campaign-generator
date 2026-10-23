@@ -69,7 +69,7 @@ LZMA_SDK_VERSIONS = ["2603", "2501", "2409"]
 APP_VERSION = re.search(
     r'^version\s*=\s*"([^"]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"), re.M
 ).group(1)
-PORT_STAGE, PORT_SFX = 8791, 8793
+PORT_STAGE, PORT_SFX, PORT_UPDATE = 8791, 8793, 8795
 # Second granularity on purpose: install.cmd's fast path compares VERSION
 # byte-for-byte, and two rebuilds within one minute at %H%M granularity
 # produced identical bytes — the second exe then skipped mirroring a
@@ -361,6 +361,36 @@ def smoke(port):
                 copy_tree(camp, dst)
 
 
+def kill_sfx_tree(proc, exe_name, port):
+    """/T tree-kill on the stub takes the whole chain down — install.cmd,
+    the `start`ed launch.cmd, the python server. Killing only the stub
+    leaves launch.cmd parked at its final `pause` with its cwd inside
+    the test install, which then can't be deleted (winerror 183 on the
+    next verify run)."""
+    if proc is not None and proc.poll() is None:
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                       capture_output=True)
+    kill_port(port)
+    subprocess.run(["taskkill", "/F", "/T", "/IM", exe_name],
+                   capture_output=True)
+
+
+def bundle_version():
+    """The payload's full VERSION string (build_stage wrote it into the
+    stage). Names the artifact (ticket 57): pyproject's 0.1.0 has not
+    moved, so naming the exe after APP_VERSION alone shipped every
+    build under the same filename and an old download was silently,
+    invisibly old. With the full stamp (seconds included) each build is
+    a distinct, legible file — the friend reporting a bug can quote the
+    exe name."""
+    try:
+        return (STAGE / "VERSION").read_text(encoding="ascii").strip()
+    except OSError:
+        raise SystemExit(f"FAILED: {STAGE / 'VERSION'} is missing — the "
+                         "exe is named from it (build the stage first, or "
+                         "--sfx-only on a kept release/work)")
+
+
 def pack(sevenzr):
     step("pack: payload.7z (LZMA)")
     payload = WORK / "payload.7z"
@@ -425,8 +455,10 @@ def make_sfx(payload, sfx_module):
     )
     DIST.mkdir(exist_ok=True)
     # "setup" in the filename triggers UAC's Installer Detection heuristic
-    # (32-bit exe without a manifest) — keep every such word out of the name.
-    exe = DIST / f"CampaignStudio-{APP_VERSION}.exe"
+    # (32-bit exe without a manifest) — keep every such word out of the
+    # name. The FULL VERSION stamp (not just APP_VERSION — ticket 57) so
+    # every build ships under its own, self-describing filename.
+    exe = DIST / f"CampaignStudio-{bundle_version()}.exe"
     exe.write_bytes(sfx_module.read_bytes()
                     + config.encode("utf-8-sig") + payload.read_bytes())
     print(f"  {exe.name}: {exe.stat().st_size // (1024 * 1024)} MB")
@@ -450,16 +482,7 @@ def verify_sfx(exe, port):
            "CAMPAIGN_STUDIO_HOME": str(dest)}
 
     def kill_all(sfx_proc):
-        # /T tree-kill on the stub takes the whole chain down — install.cmd,
-        # the `start`ed launch.cmd, the python server. Killing only the stub
-        # leaves launch.cmd parked at its final `pause` with its cwd inside
-        # the test install, which then can't be deleted (winerror 183 on the
-        # next verify run).
-        if sfx_proc.poll() is None:
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(sfx_proc.pid)],
-                           capture_output=True)
-        kill_port(port)
-        subprocess.run(["taskkill", "/F", "/T", "/IM", exe.name], capture_output=True)
+        kill_sfx_tree(sfx_proc, exe.name, port)
 
     proc = subprocess.Popen([str(exe2)], env=env, cwd=tdir)
     try:
@@ -497,6 +520,188 @@ def verify_sfx(exe, port):
         shutil.rmtree(tdir, ignore_errors=True)
 
 
+def verify_update(exe, sevenzr, port):
+    """Cross-version update leg (ticket 57). The exe a friend already
+    owns, run again over an OLDER install, is the update path — and it
+    used to break its own promises: llm.env clobbered, a half-dead
+    mirror fast-pathed over forever, a running studio mirrored anyway.
+    Three legs, all inside the release smoke:
+
+    1. The real exe over a synthesized older install (old VERSION stamp,
+       a rotated llm.env, a campaign marker): the key file must survive
+       byte-for-byte, the campaign data intact, VERSION advanced.
+    2. With that install's studio RUNNING: install.cmd must refuse
+       (exit 1) before mirroring anything.
+    3. A forced robocopy failure (a share-none handle on a deep file the
+       mirror must overwrite): no completion stamp is written, and the
+       next run re-mirrors even though VERSION already matches — no
+       stamp, no fast path.
+
+    Legs 2 and 3 run install.cmd directly from the extracted payload —
+    the exact script the exe runs, without paying another temp
+    extraction."""
+    step(f"verify: cross-version update over an older install (port {port})")
+    tdir = WORK / "update-test"
+    shutil.rmtree(tdir, ignore_errors=True)
+    tdir.mkdir(parents=True)
+    dest = Path(os.environ.get("CS_TEST_HOME") or str(tdir / "installed"))
+    new_version = bundle_version()
+    old_version = re.sub(r"\+\d{14}\+", "+00000000000000+", new_version)
+    if old_version == new_version:
+        raise SystemExit("FAILED: could not synthesize an older VERSION "
+                         f"from {new_version!r}")
+
+    def dest_version():
+        try:
+            return (dest / "VERSION").read_text(encoding="ascii").strip()
+        except OSError:
+            return ""
+
+    def install_log():
+        log = dest / "install-log.txt"
+        return log.read_text(encoding="utf-8", errors="replace") \
+            if log.exists() else ""
+
+    # A synthesized previous install: completed (old stamp present), with
+    # a key the friend rotated and a campaign that must survive.
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / "VERSION").write_text(old_version, encoding="ascii")
+    (dest / ".install-complete").write_text(old_version, encoding="ascii")
+    rotated = ("LLM_BASE_URL=http://127.0.0.1:1/v1\r\n"
+               "LLM_API_KEY=rotated-by-the-friend-ticket-57\r\n"
+               "LLM_MODEL=rotated-model\r\n").encode("utf-8")
+    # bytes on both ends: text-mode write/read would translate the \r\n
+    # and the comparison would lie about byte-for-byte survival
+    (dest / "llm.env").write_bytes(rotated)
+    campaign = dest / "campaign-data" / "campaigns" / "kept-campaign"
+    campaign.mkdir(parents=True)
+    (campaign / "campaign.yaml").write_text("name: kept-campaign\n",
+                                            encoding="utf-8")
+    env = {**os.environ, "STUDIO_PORT": str(port), "STUDIO_NO_BROWSER": "1",
+           "CAMPAIGN_STUDIO_HOME": str(dest)}
+
+    # leg 1: the real exe updates the older install in place.
+    exe2 = tdir / exe.name
+    shutil.copy2(exe, exe2)
+    proc = subprocess.Popen([str(exe2)], env=env, cwd=tdir)
+    try:
+        deadline = time.monotonic() + 1200
+        while dest_version() != new_version:
+            if time.monotonic() > deadline or proc.poll() is not None:
+                raise SystemExit(f"FAILED: the exe never updated the older "
+                                 f"install (VERSION is {dest_version()!r})")
+            time.sleep(2)
+        wait_http(f"http://127.0.0.1:{port}/", 600)
+        wait_http(f"http://127.0.0.1:{port}/tutorial", 30)
+        wait_http(f"http://127.0.0.1:{port}/atlas", 30)
+        if (dest / "llm.env").read_bytes() != rotated:
+            raise SystemExit("FAILED: the update clobbered the installed "
+                             "llm.env (the friend's rotated key is gone)")
+        if not (campaign / "campaign.yaml").is_file():
+            raise SystemExit("FAILED: the update destroyed campaign data")
+        if dest_version() != new_version or (dest / ".install-complete") \
+                .read_text(encoding="ascii").strip() != new_version:
+            raise SystemExit("FAILED: the update did not complete "
+                             "(VERSION/stamp not advanced)")
+        print("  update pass: llm.env + campaigns preserved, VERSION advanced")
+    finally:
+        kill_sfx_tree(proc, exe.name, port)
+
+    # legs 2 and 3 run install.cmd straight from the payload — the same
+    # script the SFX extracted and ran in leg 1.
+    payload_dir = tdir / "payload"
+    payload_dir.mkdir()
+    run([sevenzr, "x", f"-o{payload_dir}", "-y", WORK / "payload.7z"],
+        stdout=subprocess.DEVNULL)
+    # install.cmd's stdout goes to a FILE, never a pipe: the launch.cmd
+    # chain it `start`s inherits the handle, and a pipe would make this
+    # run() wait for that (parked or server-running) chain forever.
+    install_out = (WORK / "update-install.out").open("w")
+
+    def run_install_cmd():
+        return subprocess.run(["cmd", "/c", "install.cmd"], env=env,
+                              cwd=payload_dir, stdout=install_out,
+                              stderr=subprocess.STDOUT, check=False,
+                              timeout=900).returncode
+
+    # leg 2: a running studio must stop the update BEFORE any mirroring.
+    boot_log = (WORK / "update-boot.log").open("w")
+    boot = subprocess.Popen(["cmd", "/c", "launch.cmd"], env=env, cwd=dest,
+                            stdout=boot_log, stderr=subprocess.STDOUT)
+    try:
+        wait_http(f"http://127.0.0.1:{port}/", 600)
+        sentinel = dest / "refusal-sentinel.txt"
+        sentinel.write_text("a running studio must stop the mirror",
+                            encoding="ascii")
+        rc = run_install_cmd()
+        if rc != 1:
+            raise SystemExit(f"FAILED: install.cmd over a running studio "
+                             f"exited {rc}, expected refusal (1)")
+        if not sentinel.exists() or dest_version() != new_version:
+            raise SystemExit("FAILED: the refused run still mirrored")
+        if "refused" not in install_log():
+            raise SystemExit("FAILED: the refusal was not logged")
+        print("  refusal pass: exit 1 before mirroring, install untouched")
+    finally:
+        kill_sfx_tree(boot, exe.name, port)
+        boot_log.close()
+
+    # leg 3: a forced robocopy failure must leave no completion stamp, so
+    # the NEXT run re-mirrors instead of fast-pathing over the wreckage.
+    # Start from the state a dead mirror leaves (no stamp — the in-flight
+    # /MIR had already deleted it as an extra file); the share-none handle
+    # is the same "file in use" robocopy dies on when a studio was running
+    # mid-mirror, and the aged bytes force the copy.
+    import ctypes
+    (dest / ".install-complete").unlink(missing_ok=True)
+    aged = dest / "studio" / "server.py"
+    aged.write_text("# aged by the verify to force the copy\n"
+                    + aged.read_text(encoding="utf-8"), encoding="utf-8")
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = k32.CreateFileW(str(aged), 0xC0000000, 0, None, 3, 0, None)
+    try:
+        run_install_cmd()  # "Trying to start anyway" + a booting server
+    finally:
+        k32.CloseHandle(handle)
+    wait_http(f"http://127.0.0.1:{port}/", 300)   # it half-started anyway
+    kill_sfx_tree(None, exe.name, port)
+    exits = [int(m) for m in re.findall(r"robocopy exit (\d+)", install_log())]
+    if not exits or exits[-1] < 8:
+        raise SystemExit(f"FAILED: the forced lock did not fail the mirror "
+                         f"(last robocopy exits {exits[-3:]})")
+    stamp = dest / ".install-complete"
+    if stamp.exists() and stamp.read_text(encoding="ascii").strip() \
+            == new_version:
+        raise SystemExit("FAILED: a failed mirror wrote the completion stamp")
+    # The frankeninstall trap: VERSION may already say the new payload (the
+    # real partial mirrors copied it early), but the stamp does not — the
+    # next run must MIRROR anyway, not fast-path.
+    shutil.copy2(payload_dir / "VERSION", dest / "VERSION")
+    sentinel = dest / "re-mirror-sentinel.txt"
+    sentinel.write_text("no stamp means the mirror must run again",
+                        encoding="ascii")
+    run_install_cmd()
+    wait_http(f"http://127.0.0.1:{port}/", 300)
+    kill_sfx_tree(None, exe.name, port)
+    if sentinel.exists():
+        raise SystemExit("FAILED: no completion stamp still took the fast "
+                         "path (the sentinel survived)")
+    if stamp.read_text(encoding="ascii").strip() != new_version:
+        raise SystemExit("FAILED: the recovery mirror did not write its "
+                         "completion stamp")
+    if aged.read_text(encoding="utf-8") != \
+            (payload_dir / "studio" / "server.py").read_text(encoding="utf-8"):
+        raise SystemExit("FAILED: the recovery mirror did not restore the "
+                         "aged file")
+    print("  failed-mirror pass: no stamp -> re-mirror, not the fast path")
+    install_out.close()
+
+    if ARGS.keep_work:
+        print(f"  updated copy kept at {dest}")
+    else:
+        shutil.rmtree(tdir, ignore_errors=True)
+
+
 def main():
     global ARGS
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -530,6 +735,7 @@ def main():
     exe = make_sfx(payload, sfx_module)
     if not ARGS.no_smoke:
         verify_sfx(exe, PORT_SFX)
+        verify_update(exe, sevenzr, PORT_UPDATE)
 
     step("done")
     h = hashlib.sha256(exe.read_bytes()).hexdigest()
