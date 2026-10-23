@@ -339,6 +339,11 @@
   // publication met an external edit and 409-blocks every publication
   // write until you decide". Both are the recovery paths that must never
   // require curl (ticket 30 / P3-34).
+  //
+  // `unavailable` is neither (ticket 58): git is ABSENT — a designed
+  // state on release-bundle installs — so there is no undo trail to
+  // recover and no retry that could ever succeed. It renders as a one-time
+  // notice per campaign, never a failure banner, never a dead Retry.
   Studio.snapshotBanner = async function () {
     let txs = [];
     try {
@@ -350,15 +355,23 @@
       return null; // advisory: a missing summary never blocks the tab
     }
     const conflicts = txs.filter((t) => t && t.status === 'conflict');
-    const broken = txs.some((t) => t && t.snapshot &&
-      (t.snapshot.state === 'failed' || t.snapshot.state === 'unavailable'));
-    if (!conflicts.length && !broken) return null;
-
+    const failed = txs.some((t) => t && t.snapshot &&
+      t.snapshot.state === 'failed');
+    const gitless = txs.some((t) => t && t.snapshot &&
+      t.snapshot.state === 'unavailable');
+    // gather the renderable pieces first: a gitless state whose one-time
+    // notice was already shown renders NOTHING (null, like a clean
+    // campaign) — never an empty container
+    const parts = [];
+    conflicts.forEach((t) => parts.push(conflictBanner(t)));
+    if (failed) parts.push(snapshotRetryBanner());
+    if (gitless) {
+      const notice = gitlessNotice();
+      if (notice) parts.push(notice);
+    }
+    if (!parts.length) return null;
     const host = el('<div class="recovery-banners"></div>');
-    conflicts.forEach((t) => {
-      host.appendChild(conflictBanner(t));
-    });
-    if (broken) host.appendChild(snapshotRetryBanner());
+    parts.forEach((p) => host.appendChild(p));
     return host;
   };
 
@@ -375,6 +388,33 @@
       await Studio.retrySnapshot();
     });
     return banner;
+  }
+
+  // The git-less degrade notice (ticket 58): informational copy, shown
+  // ONCE per campaign (the flag is set at first render — it is a notice,
+  // not a persistent banner), naming the real situation: changes publish
+  // fine, but nothing on this machine can roll them back, so backups are
+  // the safety net. No Retry button — it could only ever fail again.
+  function gitlessNotice() {
+    const key = 'campaign-studio.gitless-notice.' +
+      (Studio.state.campaign || '');
+    try {
+      if (localStorage.getItem(key)) return null; // already noticed
+      localStorage.setItem(key, '1');
+    } catch (_) { /* storage unavailable: show it (better than silence) */ }
+    const notice = el(
+      '<div class="snapshot-banner gitless-notice" role="status">' +
+        '<span>This install has no git, so changes have no <strong>undo ' +
+          'history</strong> &mdash; they publish fine, but nothing can roll ' +
+          'them back. <strong>Back up your campaign</strong>: copy the ' +
+          'campaign-data folder, or run export.cmd beside launch.cmd ' +
+          '(see README.txt).</span>' +
+        '<button type="button" class="btn gitless-dismiss">Got it</button>' +
+      '</div>');
+    notice.querySelector('.gitless-dismiss').addEventListener('click', () => {
+      notice.remove();
+    });
+    return notice;
   }
 
   // One conflict-parked transaction and its two DM decisions, wired to
@@ -429,9 +469,15 @@
     try {
       const r = await api(campUrl('/snapshot'), { method: 'POST' });
       const snap = r && r.snapshot;
-      if (snap && (snap.state === 'failed' || snap.state === 'unavailable')) {
-        toast('Snapshot still ' + snap.state +
-          ' — see the studio log for the reason.', 'error');
+      if (snap && snap.state === 'failed') {
+        toast('Snapshot still failed — see the studio log for the reason.',
+              'error');
+      } else if (snap && snap.state === 'unavailable') {
+        // distinct copy (ticket 58): unavailable is "no git here", not a
+        // failure to retry — the change itself published fine
+        toast('No undo trail on this install: git is not available, so ' +
+              'history snapshots are off. The change itself published fine.',
+              'info');
       } else {
         toast('History snapshot committed — the undo trail is whole again.', 'ok');
       }

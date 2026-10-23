@@ -1497,6 +1497,14 @@ li.quest-row.quest-overdue .quest-name { color: var(--oxblood-dark); }
   border-color: var(--amber); border-left-color: var(--amber);
 }
 
+/* the git-less degrade notice (ticket 58): `unavailable` is a DESIGNED
+   state on bundle installs, so the look is informational (the muted line,
+   not the failure red) — it appears once per campaign, never as a
+   standing error banner */
+.gitless-notice {
+  border-color: var(--line-strong); border-left-color: var(--line-strong);
+}
+
 .held-banner {
   border: 1px solid var(--line-strong); border-left: 4px solid var(--amber);
   background: var(--paper-bright); border-radius: var(--radius-sm);

@@ -1,6 +1,7 @@
 # 58 — Git-less installs: designed degrade for the undo spine + a friend backup story
 
-**Status:** proposed
+**Status:** in-progress (implemented + verified 2026-10-23, 529617b;
+awaiting review)
 **Priority:** P1 — the core safety promise ("history is your undo") is
 dead on 100% of friend installs and presented as a permanent error;
 the data itself has no backup story at all
@@ -69,15 +70,15 @@ an `export.cmd` beside `launch.cmd` driving the bundled python
 
 ## Acceptance criteria
 
-- [ ] `unavailable` renders as designed degrade (one-time notice, no
+- [x] `unavailable` renders as designed degrade (one-time notice, no
       permanent banner, no dead Retry) — pinned by a js harness on
       the snapshot-state branches plus a studio test on the snapshot
       report shape
-- [ ] Non-OK-state transactions pruned under a cap — extends
+- [x] Non-OK-state transactions pruned under a cap — extends
       `studio/tests/test_publication.py`
-- [ ] Doctor reports the git/undo state — studio test on the doctor
+- [x] Doctor reports the git/undo state — studio test on the doctor
       report keys
-- [ ] README names the real data path + backup line — directly
+- [x] README names the real data path + backup line — directly
       checkable
-- [ ] Friend backup path runs without a system python — pinned by
+- [x] Friend backup path runs without a system python — pinned by
       the release smoke or a studio test once the ruling lands

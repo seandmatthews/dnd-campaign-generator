@@ -418,6 +418,114 @@ def test_campaign_summary_reports_publication_conflict(client, tmp_spine_root):
     assert pub and pub["transactions"][0]["status"] == "conflict"
 
 
+# --------------------------------------------- retention cap (ticket 58)
+
+
+def _retained_tx(root, tx_id, status="complete", snap_state="unavailable"):
+    """A crafted transaction directory: the manifest shape publication
+    writes, with a payload marker — enough for the cap's manifest reads."""
+    tx_dir = root / "testvale" / publication.TX_DIR_NAME / tx_id
+    tx_dir.mkdir(parents=True)
+    (tx_dir / "manifest.json").write_text(json.dumps({
+        "schema_version": publication.MANIFEST_SCHEMA,
+        "transaction": tx_id, "operation": "cap test", "campaign": "testvale",
+        "status": status, "staged": True,
+        "targets": [{"path": "lore/x.yaml", "delete": False,
+                     "before": publication.ABSENT, "after": "0" * 64}],
+        "conflicts": [],
+        "snapshot": None if snap_state is None else
+        {"state": snap_state, "commit": None, "detail": "crafted"},
+    }), encoding="utf-8")
+    payload = tx_dir / "after" / "lore" / "x.yaml"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_text("payload\n", encoding="utf-8")
+    return tx_dir
+
+
+def test_cap_prunes_oldest_non_ok_transactions_and_spares_live_state(
+        tmp_spine_root):
+    """Ticket 58: retained payloads (complete + failed/unavailable snapshot)
+    are bounded to the newest TX_PAYLOAD_CAP, oldest first — while open and
+    conflict-parked transactions are live recovery state and never pruned,
+    and a legacy snapshot-less manifest is not the cap's business either."""
+    d = tmp_spine_root / "testvale"
+    n = publication.TX_PAYLOAD_CAP + 3
+    ids = [f"20260101T0000{i:02d}-{i:04x}" for i in range(n)]
+    kept = [_retained_tx(tmp_spine_root, tx) for tx in ids]
+    open_tx = _retained_tx(tmp_spine_root, "20260101T000999-open",
+                           status="open")
+    conflict_tx = _retained_tx(tmp_spine_root, "20260101T000998-conf",
+                               status="conflict")
+    legacy_tx = _retained_tx(tmp_spine_root, "20260101T000001-legacy",
+                             snap_state=None)
+
+    pruned = publication.cap_retained_transactions(d)
+    assert sorted(pruned) == sorted(ids[:3]), "the OLDEST are pruned first"
+    assert all(p.exists() for p in kept[3:]), "the newest cap survive"
+    assert not any(p.exists() for p in kept[:3])
+    assert open_tx.exists() and conflict_tx.exists() and legacy_tx.exists(), \
+        "open/conflict/legacy transactions are never the cap's to prune"
+
+
+def test_gitless_publications_are_bounded_boot_caps_the_backlog(
+        tmp_spine_root, monkeypatch):
+    """The wiring, at the scale that made it a problem: a git-less install
+    (canon.AVAILABLE off — the release bundle's state) retains EVERY
+    publication's payload because the snapshot retry never comes. Each
+    after_snapshot caps the retained set, and boot recovery caps the
+    backlog again — the growth is bounded, and a conflict still survives."""
+    monkeypatch.setattr(canon, "AVAILABLE", False)
+    n = publication.TX_PAYLOAD_CAP + 3
+    for i in range(n):
+        pub = publication.publish(
+            "testvale", [{"path": f"lore/cap-{i}.yaml", "text": f"entry {i}\n"}],
+            operation=f"cap wiring {i}")
+        assert pub["state"] == "published"
+        publication.after_snapshot(
+            "testvale", pub["transaction"],
+            canon.snapshot_result("testvale", f"campaign/testvale: cap {i}"))
+    d = tmp_spine_root / "testvale"
+    retained = [p for p in (d / publication.TX_DIR_NAME).iterdir()
+                if p.is_dir() and p.name != "receipts"]
+    assert len(retained) == publication.TX_PAYLOAD_CAP, \
+        "an install with no undo trail must not accumulate forever"
+
+    # a pre-ticket-58 backlog (an install upgraded from before the cap):
+    # retained payloads nobody capped, older than everything above
+    _retained_tx(tmp_spine_root, "20250101T000001-old1")
+    _retained_tx(tmp_spine_root, "20250101T000002-old2")
+
+    # a crashed publication that parks as a conflict: live state
+    with _crash_immediately():
+        try:
+            publication.publish("testvale",
+                                [{"path": "lore/cap-x.yaml", "text": "staged\n"}],
+                                operation="cap conflict")
+        except RuntimeError:
+            pass
+    (d / "lore" / "cap-x.yaml").write_text("external\n", encoding="utf-8")
+    out = publication.recover_campaign("testvale")  # what boot does
+    assert out["conflicts"], out
+    assert sorted(out["capped"]) == ["20250101T000001-old1",
+                                     "20250101T000002-old2"], \
+        "boot re-asserts the cap over the whole backlog"
+    conflict = publication.unresolved_conflicts("testvale")[0]
+    surviving = [p for p in (d / publication.TX_DIR_NAME).iterdir()
+                 if p.is_dir() and p.name != "receipts"]
+    assert conflict["transaction"] in [p.name for p in surviving], \
+        "the conflict-parked transaction outlives the cap"
+    complete = [p for p in surviving if _load_status(p) == "complete"]
+    assert len(complete) == publication.TX_PAYLOAD_CAP
+
+
+def _load_status(tx_dir):
+    try:
+        return json.loads((tx_dir / "manifest.json").read_text(
+            encoding="utf-8")).get("status")
+    except (OSError, ValueError):
+        return "?"
+
+
 # ------------------------------------------------------ snapshot reporting
 
 
@@ -469,6 +577,27 @@ def test_git_failure_distinguishable_from_no_change(
     # the retry finished the bookkeeping: payload pruned
     assert not (tmp_spine_root / "testvale" / publication.TX_DIR_NAME / tx
                 ).exists()
+
+
+def test_snapshot_report_shape_partitions_the_four_states(
+        tmp_spine_root, monkeypatch):
+    """The report the UI's degrade branch keys on (ticket 58): exactly four
+    states, OK vs non-OK fully partitioned, and `unavailable` — the DESIGNED
+    git-less state, rendered as a notice instead of a failure — carries its
+    own copy naming git absence, distinct from a failed command's detail."""
+    monkeypatch.setattr(canon, "AVAILABLE", False)
+    snap = canon.snapshot_result("testvale", "campaign/testvale: shape probe")
+    assert snap["state"] == "unavailable"
+    assert snap["commit"] is None
+    assert "git" in snap["detail"].lower()
+    assert "no history snapshot" in snap["detail"]
+    assert "files themselves are fine" in snap["detail"], \
+        "the degrade copy must say the mutation stands"
+    states = sorted(publication.SNAPSHOT_OK_STATES
+                    + publication.NO_SNAPSHOT_STATES)
+    assert states == ["committed", "failed", "no_change", "unavailable"]
+    assert not (set(publication.SNAPSHOT_OK_STATES)
+                & set(publication.NO_SNAPSHOT_STATES))
 
 
 def test_no_change_state_distinguishable(client, tmp_spine_root):
