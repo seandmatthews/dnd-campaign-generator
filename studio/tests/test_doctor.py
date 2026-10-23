@@ -340,47 +340,6 @@ def test_workspace_ignore_check_missing_lines_names_the_untrack_fix(
         "an ignore does not untrack: the fix must name the command"
 
 
-# --------------------------------------------- git / undo trail (ticket 58)
-
-
-def test_check_git_absent_names_the_missing_undo_trail(monkeypatch):
-    """Git absent is the release bundle's DESIGNED state: informational,
-    never a failure (required=False) — but never silent either: the detail
-    must name the missing undo trail and the backup story."""
-    import canon
-    monkeypatch.setattr(canon, "GIT", None)
-    c = doctor.check_git()
-    assert c["name"] == "git (undo trail)"
-    assert c["required"] is False, "absent git must never fail the doctor"
-    assert c["ok"] is False  # an info finding line, like the llm key's
-    assert "git is not installed" in c["detail"]
-    assert "undo/history trail is OFF" in c["detail"]
-    assert "back them up" in c["detail"]
-    assert c["fix"], "the check names the way out (install git, or not)"
-
-
-def test_check_git_present_reports_the_trail(monkeypatch):
-    import canon
-    monkeypatch.setattr(canon, "GIT", "C:/Program Files/Git/cmd/git.exe")
-    c = doctor.check_git()
-    assert c["ok"] is True
-    assert c["required"] is False  # informational either way
-    assert "undo history" in c["detail"]
-
-
-def test_git_check_is_wired_into_the_report(monkeypatch, tmp_path):
-    _isolate_llm(monkeypatch, tmp_path)
-    monkeypatch.setenv("ZAI_API_KEY", "k")
-    import canon
-    monkeypatch.setattr(canon, "GIT", None)
-    checks = doctor.run_all_checks(probe=_ok_probe)
-    git = [c for c in checks if c["name"] == "git (undo trail)"]
-    assert git and git[0]["required"] is False, \
-        "the undo-spine check is part of the doctor report"
-    # required=False is what keeps it out of the overall verdict — an
-    # absent git (every bundle install) can never fail the doctor
-
-
 # ------------------------------------------------ campaign system field (48)
 
 

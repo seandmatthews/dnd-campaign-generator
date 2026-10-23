@@ -28,20 +28,8 @@ library are bundled. Do NOT move this folder into "Program Files"
 
 Your data
 ---------
-Everything you create lives in the "campaign-data" folder next to this
-file; your campaigns are inside it, in "campaign-data\campaigns".
+Everything you create lives in the "campaigns" folder next to this file.
 Your API key (see below) is in the "llm.env" file.
-
-Backing up
-----------
-This machine holds the only copy of your campaign. Every month or so,
-close the Studio and copy the whole "campaign-data" folder somewhere
-else - a USB stick, a cloud folder, another drive. To save a single
-campaign as one zip file, double-click "export.cmd" (next to
-launch.cmd), follow its message, and copy the zip it writes somewhere
-safe too. A dead laptop loses only what was never copied anywhere else.
-(Note: the app itself has no undo history on this kind of install, so a
-backup copy is the only way back.)
 
 Disk space
 ----------

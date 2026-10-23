@@ -263,9 +263,6 @@ def build_stage(node_zip):
 
     shutil.copy2(TEMPLATES / "launch.cmd", STAGE / "launch.cmd")
     shutil.copy2(TEMPLATES / "install.cmd", STAGE / "install.cmd")
-    # the friend backup path (ticket 58): export.cmd beside launch.cmd,
-    # driving the bundled python — README.txt's "Backing up" names it
-    shutil.copy2(TEMPLATES / "export.cmd", STAGE / "export.cmd")
     shutil.copy2(TEMPLATES / "README.txt", STAGE / "README.txt")
     # Build stamp included: install.cmd's fast path compares this file
     # byte-for-byte, so every rebuild is an update — no version bump to
@@ -343,17 +340,6 @@ def smoke(port):
         log.close()
     if kill_port(port):
         raise SystemExit(f"FAILED: port {port} still busy after kill")
-    step("smoke: the friend backup path (export.cmd, no system python)")
-    # relative name + stage cwd, the launch.cmd rule: no absolute path ever
-    # crosses cmd's parser (paths with "&" break its quoting)
-    r = subprocess.run(["cmd", "/c", "export.cmd", "--help"], cwd=STAGE,
-                       env={**os.environ, "STUDIO_NO_BROWSER": "1"},
-                       capture_output=True, text=True)
-    if r.returncode != 0 or "export_campaign.py" not in (r.stdout + r.stderr):
-        raise SystemExit(f"FAILED: export.cmd did not run on the bundled "
-                         f"python (rc={r.returncode}): "
-                         f"{(r.stdout + r.stderr)[-400:]}")
-    print("  export.cmd ran on the bundled python (ticket 58)")
     step("smoke: the avtt companion rides the bundle (ticket 53)")
     if not (STAGE / "avtt-integration" / "LICENSE").is_file():
         raise SystemExit("FAILED: the avtt companion's LICENSE did not land "

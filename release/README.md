@@ -52,10 +52,8 @@ in `release/cache/` (git-ignored, ~52 MB); staging and payload live in
 
 ## Self-verification (every build, unless `--no-smoke`)
 
-1. Stage smoke: bundled python imports the deps, bundled node runs,
-   `launch.cmd` boots the studio (`/` and `/tutorial` → 200, port 8791),
-   and `export.cmd` (the friend backup path, ticket 58) runs on the
-   bundled python with no system python involved.
+1. Stage smoke: bundled python imports the deps, bundled node runs, and
+   `launch.cmd` boots the studio (`/` and `/tutorial` → 200), on port 8791.
 2. Installer pass: the built exe is actually executed headlessly; the
    build waits for install, then `/` and `/tutorial` → 200 (port 8793).
 3. Fast-path pass: a sentinel file at the install root must survive the

@@ -437,17 +437,3 @@ def test_export_refuses_a_destination_inside_the_campaign(
                                  f"campaign: {bad}")
     assert "inside the campaign directory" in capsys.readouterr().err
     assert not (camp / "backup.zip").exists()
-
-
-def test_export_with_no_arguments_lists_the_campaigns(client, tmp_spine_root,
-                                                      monkeypatch, capsys):
-    """The friend path (ticket 58): export.cmd is double-clicked with no
-    arguments — the answer is the names they can use (and where the
-    campaigns live), not bare argparse usage."""
-    root = _make_campaigns(tmp_spine_root, monkeypatch)
-    rc = export_campaign.main([])
-    assert rc == 2  # still a usage exit — nothing was exported
-    out = capsys.readouterr().out
-    assert "testvale" in out, "the fixture campaign is named"
-    assert "export one with:  export.cmd <name>" in out
-    assert str(root) in out, "the campaigns' location is said"

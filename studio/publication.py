@@ -43,10 +43,6 @@ Storage rules:
     every lore/entity/pending glob, so no reader ever mistakes recovery data
     for canon. A .gitignore inside keeps the payloads out of the campaigns
     repo's snapshots (git add -A -- <campaign> must not commit them).
-  - Retention is bounded (TX_PAYLOAD_CAP, ticket 58): a payload kept for the
-    snapshot retry is pruned once history catches up, and the oldest
-    retained ones are pruned past the cap — on a git-less install the
-    retry never comes and unbounded growth would be the only alternative.
   - All target paths are validated into the campaign (no traversal, no
     symlink escape) and never inside .studio-transactions itself.
   - Temp files are unique per target (tempfile.mkstemp in the target's own
@@ -87,15 +83,6 @@ log = logging.getLogger("studio.publication")
 TX_DIR_NAME = ".studio-transactions"
 MANIFEST_SCHEMA = 1
 RECEIPT_CAP = 200
-
-# Ticket 58: retained payloads are BOUNDED. A transaction kept for the
-# snapshot retry holds full before/after images, and on a git-less install
-# (the release bundle ships no git) the state never leaves
-# NO_SNAPSHOT_STATES — the retry can never come, so without a cap every
-# accept, quest flip and knowledge record accumulates forever. The
-# before-image's undo value is already gone the moment any later snapshot
-# succeeds (the retry prunes it), so the oldest payloads are pure growth.
-TX_PAYLOAD_CAP = 20
 
 # Sentinel for "file does not exist" — deliberately not hex, so it can never
 # collide with a sha256 digest.
@@ -549,8 +536,7 @@ def recover_campaign(name: str) -> dict:
     bounded (RECOVERY_LOCK_WAIT_S): a campaign still locked after it is
     left untouched, its transactions stay open, and the next boot
     recovers them (reported as {"skipped": true})."""
-    out = {"recovered": [], "conflicts": [], "pruned": [], "dropped": [],
-           "capped": []}
+    out = {"recovered": [], "conflicts": [], "pruned": [], "dropped": []}
     root = spine.campaign_dir(name) / TX_DIR_NAME
     if not root.is_dir():
         return out
@@ -633,10 +619,6 @@ def _recover_campaign_locked(name: str, root: Path, out: dict) -> dict:
                      tx_id, name)
             out["recovered"].append(tx_id)
             _retry_snapshot(name, tx_dir, m, out)
-    # ticket 58: boot is also where a git-less install's backlog gets
-    # bounded — every complete transaction's snapshot retry just came back
-    # unavailable, and nothing else prunes them
-    out["capped"].extend(cap_retained_transactions(root.parent))
     return out
 
 
@@ -723,42 +705,6 @@ def _prune(tx_dir: Path) -> None:
     shutil.rmtree(tx_dir, ignore_errors=True)
 
 
-def cap_retained_transactions(campaign_dir: Path) -> list:
-    """Prune retained-payload transactions beyond TX_PAYLOAD_CAP, oldest
-    first (tx ids are timestamp-prefixed, so name order IS time order).
-    Only COMPLETE transactions whose snapshot state is failed/unavailable
-    are candidates — exactly the class after_snapshot retains for the
-    snapshot retry. Open and conflict-parked transactions are live
-    recovery state and are never touched. Returns the pruned ids.
-
-    A pruned transaction may still be referenced by a receipt (receipts
-    are capped separately): receipt_with_snapshot then simply cannot
-    backfill the snapshot field, and repeat-accept idempotency falls back
-    to the routes' duplicate guards — both documented degradations."""
-    root = campaign_dir / TX_DIR_NAME
-    if not root.is_dir():
-        return []
-    candidates = []
-    for tx_dir in root.iterdir():
-        if not tx_dir.is_dir() or tx_dir.name == "receipts":
-            continue
-        m = _load_manifest(tx_dir)
-        snap = m.get("snapshot")
-        if (m.get("status") == "complete" and isinstance(snap, dict)
-                and snap.get("state") in NO_SNAPSHOT_STATES):
-            candidates.append(tx_dir)
-    candidates.sort(key=lambda p: p.name, reverse=True)
-    pruned = []
-    for tx_dir in candidates[TX_PAYLOAD_CAP:]:
-        _prune(tx_dir)
-        pruned.append(tx_dir.name)
-    if pruned:
-        log.info("pruned %d retained transaction payload(s) beyond the cap "
-                 "of %d, oldest first: %s", len(pruned), TX_PAYLOAD_CAP,
-                 ", ".join(pruned))
-    return pruned
-
-
 # ----------------------------------------------------------------- receipts
 
 
@@ -842,9 +788,7 @@ def transaction_snapshot(name: str, tx_id: str | None) -> dict | None:
 def after_snapshot(name: str, tx_id: str | None, snap: dict) -> None:
     """The route's snapshot bookkeeping after a published transaction:
     committed/no_change prunes the staging; failed/unavailable retains it
-    (recovery material for the snapshot retry), records why, and caps the
-    retained set (ticket 58) — on a git-less install the retry never
-    comes, and unbounded retention is pure growth."""
+    (recovery material for the snapshot retry) and records why."""
     if not tx_id:
         return
     d = spine.campaign_dir(name)
@@ -861,4 +805,3 @@ def after_snapshot(name: str, tx_id: str | None, snap: dict) -> None:
     else:
         log.warning("publication %s: history snapshot %s — payload retained "
                     "for the snapshot retry", tx_id, snap.get("state"))
-    cap_retained_transactions(d)
