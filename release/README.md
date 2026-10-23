@@ -6,23 +6,16 @@ One command produces one shareable file:
 python release/build_release.py
 ```
 
-→ `release/dist/CampaignStudio-<version-stamp>.exe` (~155 MB — the full
-`VERSION` stamp is the filename, so every build ships under its own
-self-describing name and an old download is legible as old). Send that
-single file however you like (Google Drive, etc.); the friend
-double-clicks it.
+→ `release/dist/CampaignStudio-<version>.exe` (~233 MB). Send that single
+file however you like (Google Drive, etc.); the friend double-clicks it.
 
 ## What the exe does on the friend's machine
 
 1. Extracts its payload to a temp dir (7-Zip's `7zSD` installer stub; an
    embedded `asInvoker` manifest keeps UAC quiet — no admin needed).
-2. Runs `install.cmd` from the temp dir, which refuses to run over a
-   studio that is still open (it probes the port first), then
-   `robocopy /MIR`s the app into `%LOCALAPPDATA%\Campaign Studio` —
-   **never touching `campaign-data/` or an installed `llm.env`** — so
-   version updates refresh code and keep data and the friend's key.
-   A mirror that fails writes no completion stamp, so the next run
-   recopies instead of fast-pathing over a half-installed mix.
+2. Runs `install.cmd` from the temp dir, which `robocopy /MIR`s the app
+   into `%LOCALAPPDATA%\Campaign Studio` — **never touching `campaign-data/`**,
+   so version updates refresh code and keep data.
 3. Starts `launch.cmd` there: bundled Python boots the studio, browser
    opens at `http://127.0.0.1:8765`. A "Campaign Studio" desktop shortcut
    is created on first start; closing the console window stops the server.
@@ -65,37 +58,27 @@ in `release/cache/` (git-ignored, ~52 MB); staging and payload live in
    build waits for install, then `/` and `/tutorial` → 200 (port 8793).
 3. Fast-path pass: a sentinel file at the install root must survive the
    second run — proving `robocopy /MIR` did not run again.
-4. Cross-version update pass (ticket 57): the same exe run over a
-   synthesized older install must preserve a rotated `llm.env` and a
-   campaign marker while advancing `VERSION`; over a running studio it
-   must refuse before mirroring; and a forced robocopy failure must
-   leave no completion stamp, so the next run re-mirrors instead of
-   fast-pathing (port 8795).
 
 ## Updating the release
 
 Change code → rerun the build → send the new exe. No version bump needed:
 the staged `VERSION` file carries a build stamp, so any rebuild differs
 from the friend's install and the installer recopies (a few minutes,
-campaigns untouched — close the friend's Studio first; the installer
-refuses until they do). Rerunning a byte-identical exe stays on the fast
-path. The exe's filename carries the same stamp, so "which build are you
-running?" is answered by the file name itself.
+campaigns untouched). Rerunning a byte-identical exe stays on the fast
+path.
 
 ## Known caveats
 
 - **SmartScreen**: the exe is unsigned; first double-click shows
   "Windows protected your PC" → More info → Run anyway. A code-signing
   cert removes this.
-- **Disk**: ~1.7 GB free during an install — the ~155 MB exe plus
-  ~750 MB temp extraction plus ~750 MB installed (the temp copy goes
-  away when it finishes).
+- **Disk**: ~1.6 GB installed, plus the same again transiently during
+  install (temp extraction + robocopy).
 - **`&` in the Windows user name** breaks cmd's batch quoting for the
   installed path (`%LOCALAPPDATA%` would contain `&`) — exotic, but the
   whole build pipeline is haunted by it because the dev repo lived in
   `Documents\D&D` until the 2026-10-04 rename; every path that crosses a
   cmd command line here is quoted by hand (see comments in
   `build_release.py` / `install.cmd`).
-- Test ports: 8791 (stage smoke), 8793 (installer verify), 8795
-  (cross-version update verify) — the launcher honors `STUDIO_PORT` and
-  `STUDIO_NO_BROWSER` for headless runs.
+- Test ports: 8791 (stage smoke), 8793 (installer verify) — the launcher
+  honors `STUDIO_PORT` and `STUDIO_NO_BROWSER` for headless runs.

@@ -1,6 +1,6 @@
 # 57 — Update contract: llm.env clobber, frankeninstall, same-name downgrade
 
-**Status:** in-progress (implemented + verified 2026-10-23; awaiting review)
+**Status:** proposed
 **Priority:** P1 — the friend's ordinary update silently reverts their
 key file; a failed update can cement a broken install; an old
 download silently downgrades
@@ -71,68 +71,13 @@ its own promises:
 
 ## Acceptance criteria
 
-- [x] Update preserves an installed `llm.env` — pinned by the new
+- [ ] Update preserves an installed `llm.env` — pinned by the new
       builder verify leg (`verify_update`, runs inside the release
       smoke)
-- [x] A failed mirror re-mirrors instead of fast-pathing (no stamp →
+- [ ] A failed mirror re-mirrors instead of fast-pathing (no stamp →
       no fast path) — same leg, forced-robocopy-failure variant
-- [x] Running-studio refusal before mirroring — same leg
-- [x] Artifact filename carries VERSION — directly checkable on the
+- [ ] Running-studio refusal before mirroring — same leg
+- [ ] Artifact filename carries VERSION — directly checkable on the
       built exe
-- [x] README disk-space and size copy match measured reality —
+- [ ] README disk-space and size copy match measured reality —
       directly checkable
-
-## Implementation notes (2026-10-23)
-
-Landed on `ticket/57-update-install-contract`. The full release build
-was run to the end (`python release/build_release.py`, then
-`--sfx-only` after a verify-assertion fix): all three `verify_update`
-legs pass inside the release smoke — "update pass: llm.env + campaigns
-preserved, VERSION advanced", "refusal pass: exit 1 before mirroring,
-install untouched", "failed-mirror pass: no stamp -> re-mirror, not
-the fast path" — and the artifact landed as
-`CampaignStudio-0.1.0+20261023144403+v0.2.0+atlas-0.7.1.exe`
-(155,524,501 bytes). Fast tier green (`run-tests.py`, all suites; the
-new pins live in `studio/tests/test_release_seams.py`: three
-install.cmd text-shape tests, a `make_sfx` naming test, two
-real-robocopy `/XF` tests, and one end-to-end install.cmd update-
-contract test driving the real script over a mini payload).
-
-Deviations from the proposal, all measured:
-
-- (a) `/XF "%DEST%llm.env"` — the proposed form — does not work:
-      robocopy IGNORES a full dest path for `/XF` (tested: the
-      payload's copy still overwrote the file), and a full SOURCE
-      path stops the copy but not the `/MIR` extra-DELETION when a
-      `--no-key` payload ships without an `llm.env`. The landed form
-      is the conditional BARE name (`if exist "%DEST%\llm.env" set
-      "KEEP_KEY=/XF llm.env"`), which excludes `llm.env` at any depth
-      — fine, the payload carries exactly one, at its root. Both
-      rejected forms are documented in the install.cmd comment and
-      pinned by the robocopy tests.
-- (b) The fast-path gate is a `.install-complete` stamp (a copy of
-      the payload's VERSION written only on robocopy exit < 8), and
-      the running-studio probe (netstat for `STUDIO_PORT`, default
-      8765) runs BEFORE the fast path, so a same-version rerun over a
-      live studio also refuses instead of launching a second
-      instance.
-- (c) The forced-failure variant uses a share-none file handle on a
-      deep file the mirror must overwrite (robocopy exits 8/10 — the
-      real "file in use" failure); a file-where-source-has-a-dir
-      obstruction was tried first and only exits 3, not ≥ 8.
-- (d) `verify_update` legs 2-3 run `install.cmd` directly from the
-      extracted payload rather than paying second/third SFX
-      extractions — the same script the exe runs (leg 1 uses the real
-      exe).
-- (e) Disk-space copy is MEASURED, and the old numbers were wrong on
-      the high side: the payload extracts to 722,281,131 bytes
-      (~750 MB), not ~1.6 GB, so the friend-facing need is ~1.7 GB
-      free during install (155 MB exe + ~750 MB temp + ~750 MB
-      installed), ~750 MB after. `release/README.md`'s stale ~233 MB
-      became the measured ~155 MB.
-
-Observed, not fixed (pre-existing): the verify legs park one
-`cmd /K ...launch.cmd` wrapper each (`start`ed consoles outlive the
-killed server; `verify_sfx` has always done this — the end-of-build
-`rmtree(ignore_errors)` hides it). They were killed by hand after
-this build; the work dir cleans up once they are gone.
