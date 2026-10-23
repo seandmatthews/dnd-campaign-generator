@@ -300,17 +300,6 @@ def test_battlemap_chain_seam(tmp_path):
         assert png.stat().st_size > 50_000
         uvtt = list(engine_dir.glob("*.uvtt"))
         assert uvtt, sorted(p.name for p in engine_dir.iterdir())
-        # ticket 59: content, not existence — every scene door must ride in
-        # the file as a CLOSED portal: Atlas places nothing for closed:false
-        # ("window"), and the cave entrance used to be one (live: 6 portals
-        # in the drowned-crypt .uvtt, 1 door in the published scene)
-        scene = json.loads((engine_dir / "scene.json").read_text(encoding="utf-8"))
-        doc = json.loads(uvtt[0].read_text(encoding="utf-8"))
-        assert len(doc["portals"]) == len(scene["doors"]) >= 1, \
-            (len(doc["portals"]), len(scene["doors"]))
-        assert all(p["closed"] is True for p in doc["portals"]), \
-            [p.get("closed") for p in doc["portals"]]
-        assert doc["resolution"]["map_size"]["x"] < 100, doc["resolution"]  # cells, not px
 
         artifacts = tmp_path / site
         shutil.copytree(engine_dir, artifacts)  # the copy-out half of D4

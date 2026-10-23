@@ -1,6 +1,6 @@
 # 59 — Atlas scene fidelity: doors that survive import, and a consumer-contract test
 
-**Status:** in-progress (implemented + verified 2026-10-23; awaiting review)
+**Status:** proposed
 **Priority:** P1 — published scenes are missing most doors (live
 evidence in ember-coast), and the exporter bug class that shipped
 twice has no structural guard
@@ -78,79 +78,14 @@ let the last two through:
 
 ## Acceptance criteria
 
-- [x] All generated portals survive the importer round-trip — new
+- [ ] All generated portals survive the importer round-trip — new
       `dnd-mapping/tests/test_uvtt_contract.py` (fast tier)
-- [x] Walls within grid, rings closed, cell px sane — same test
-- [x] Vertical-overlap door placement on the breach cell — unit in
+- [ ] Walls within grid, rings closed, cell px sane — same test
+- [ ] Vertical-overlap door placement on the breach cell — unit in
       `dnd-mapping/tests/test_battlemap.py`
-- [x] Ambient luma within sane bounds — contract test
-- [x] Integration chain asserts portal count, not existence —
+- [ ] Ambient luma within sane bounds — contract test
+- [ ] Integration chain asserts portal count, not existence —
       `studio/tests/test_integration.py::test_battlemap_chain_seam`
 - [ ] Drowned Crypt regenerated and republished; Atlas shows 6 doors
       (was 1) — manual check on ember-coast, shares the campaign
       sitting with tickets 46/49/54
-
-## Implementation notes (2026-10-23)
-
-Landed on `ticket/59-scene-fidelity-and-uvtt-contract-test`. In
-`battlemap.py`: dungeon doors are `closed: true` (was a coin flip),
-the cave ENTRANCE is `closed: true` (was `false` — a window Atlas
-drops); `_door_cell` answers B's SIDE wall at A's center row when A's
-center row lies inside B's row span (the breach the horizontal leg
-actually carves); the ambient is decoupled from the backdrop —
-`scene["backdrop"]` paints the SVG, `scene["ambient_light"]` is the
-UVTT lighting value with ONE shared default `AMBIENT_LIGHT #6e6a63`
-(Rec. 709 luma 0.42; the dungeon's backdrop `#120d0b` used to ship as
-lighting.ambient 0.05); and `wrap()` closes every wall ring by
-repeating its first point — found while writing the contract test:
-the exporter's wall rectangles were OPEN chains (N points → N-1 wall
-segments, every ring short one edge — the live ember-coast file
-carried 58 open rings, which is exactly why the published scene had
-174 walls: 58×3; closed rings import as 232: 58×4). The proposal's
-"rings closed" assertion could not pass without it.
-
-The consumer contract: `dnd-mapping/tests/test_uvtt_contract.py` +
-`dnd-mapping/tests/atlas_import_port.py`, a vendored stdlib port of
-the companion v0.2.0 importer (parse + convert; light-emission math
-and the .atlasmap envelope omitted — documented in its docstring —
-the port runs everywhere the fast tier does, where the companion's
-nested git repo cannot). The test gen→render→wraps a 7-room dungeon
-and a cave, imports the .uvtt, and asserts the DERIVED semantics:
-importer accepts; cell size = imageWidth/map cells, within 10–200 px;
-nothing clipped or dropped (`skipped` all zero); every wall segment on
-the image; every ring a closed loop; every scene door present in the
-file AND placed as a door (zero dropped as windows); ambient luma
-0.2–0.9. A third test doctors a good file with each 2026-10-20 bug —
-pixel-dialect map_size is refused "too small for its grid",
-transposed walls land in skipped/outside — so the guard provably has
-teeth.
-
-Verified, exact commands run in the worktree: `python run-tests.py`
-(all suites green, including the new `dnd-mapping-uvtt-contract`
-suite this ticket adds to the fast tier; no table-companion crash —
-this branch's run-tests.py carries no companion suite);
-`python -m pytest studio/tests -q` (661 passed, 12 integration
-deselected); `python -m pytest agentic-simulator/tests -q` (250
-passed); and the seam test itself,
-`python -m pytest studio/tests/test_integration.py::test_battlemap_chain_seam -m integration -q`
-— 1 passed in 8.5s against the REAL engines: the worktree lacks the
-gitignored `dnd-mapping/tools`, so it was junctioned read-only from
-the main checkout for the run, and the module's ruravaqan NEEDS gate
-was satisfied with a stub `state.yaml` the seam test never reads
-(only the real battlemap CLI and real sharp ran); junctions and stub
-removed afterward.
-
-Drowned Crypt (criterion 6, unticked — the live sitting owns it):
-regenerating its exact provenance (`gen-dungeon seed=2060015`) under
-the fixed code, in a temp dir, then importing through the port gives
-6 scene doors → 6 importer doors, 0 windows dropped, ambient 0.42,
-232 walls in 58 closed rings. The republish on ember-coast and the
-manual Atlas check belong to the shared campaign sitting
-(tickets 46/49/54).
-
-Ride-along: `worlds/ruravaqan/scenes/harbour-quay/harbour-quay.uvtt`
-regenerated — the tracked record was a pre-2026-10-20 museum piece
-(pixel map_size, flat portals, the dialect Atlas refuses) no later
-ticket had re-run; it now carries the current wrap's output with the
-ticket's fixes (its rings were already closed; image bytes identical,
-no rasterizer involved).

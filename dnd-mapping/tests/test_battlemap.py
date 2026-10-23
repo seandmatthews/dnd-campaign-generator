@@ -199,29 +199,6 @@ def test_door_cell_matches_the_wall_the_corridor_pierces():
     print("  door cells: leaf runs along the pierced wall in all four cases  OK")
 
 
-def test_door_cell_vertical_overlap_lands_on_the_breach_cell():
-    """Found 2026-10-23 (ticket 59): when A's center row lies INSIDE B's
-    row span (rooms moat-separated in columns, overlapping in rows) the
-    corridor's horizontal leg pierces B's SIDE wall at A's center row —
-    the vertical leg stays inside B and never reaches B's top/bottom
-    wall. The door must sit on that breach cell, not on the far
-    horizontal wall the old code answered with (a solid wall, at the
-    wrong row: no carved gap, no door where the table walks through).
-    Room B at (10, 5, w=6, h=4): rows 5..8, columns 10..15, center (13, 7)."""
-    dc = battlemap._door_cell
-    # A's center row 6 inside B's rows, corridor approaches from the left:
-    # breach is B's LEFT wall (x=10) at row 6, leaf vertical
-    assert dc(acy=6, acx=3, bx=10, by=5, bw=6, bh=4, bcx=13, bcy=7) == (10, 6, 90)
-    # from the right: B's RIGHT wall (x=15) at row 6
-    assert dc(acy=6, acx=20, bx=10, by=5, bw=6, bh=4, bcx=13, bcy=7) == (15, 6, 90)
-    # B's center row itself, from inside the span: same breach, row 7
-    assert dc(acy=7, acx=3, bx=10, by=5, bw=6, bh=4, bcx=13, bcy=8) == (10, 7, 90)
-    # and the non-overlap rows still answer with the horizontal walls
-    assert dc(acy=2, acx=13, bx=10, by=5, bw=6, bh=4, bcx=13, bcy=7) == (13, 5, 0)
-    assert dc(acy=9, acx=13, bx=10, by=5, bw=6, bh=4, bcx=13, bcy=7) == (13, 8, 0)
-    print("  door cells: overlap rows breach the SIDE wall at A's center row  OK")
-
-
 if __name__ == "__main__":
     test_ampersand_name_survives_the_pipeline()
     test_rendered_svg_parses_and_escapes_labels()
@@ -229,7 +206,6 @@ if __name__ == "__main__":
     test_uvtt_map_size_is_cells_not_pixels()
     test_walls_hug_the_floor_cells()
     test_door_cell_matches_the_wall_the_corridor_pierces()
-    test_door_cell_vertical_overlap_lands_on_the_breach_cell()
     if FAILED:
         print(f"FAILED: {', '.join(FAILED)}")
         sys.exit(1)
