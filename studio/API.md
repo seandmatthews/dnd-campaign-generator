@@ -153,6 +153,12 @@ shapes in this document true.
   "lore":{"timeline_entries":n,"entities":n,"style_files":[str]},
   "simulation":{"clock":{"week","season"},"factions":[{"id","name","kind","resources"}],
   "rumors":n,"pending":n},"maps":{"cities":[str],"sites":[str]}}`
+- Campaign identity is the DIRECTORY name (ticket 56): a request under a
+  case or trailing-dot alias of an existing directory (`TestVale`,
+  `testvale.`) resolves to the canonical campaign — files, the campaign
+  lock, and git snapshots all flow under the directory's real name — and
+  `name` in listings is always the directory name, whatever a hand-edited
+  `campaign.yaml` `name:` says. A name no directory answers is 404.
 - `GET /api/campaign/{name}/geography` → full `world/geography.yaml` as JSON
   (World tab logistics grounding; burg pickers read this).
 
