@@ -1,10 +1,11 @@
 """Dependency doctor (M5) — the honest answer to "why won't it boot".
 
-Checks, in order: python version, the studio's imports, node, uv (optional),
-the three engine roots with their key CLIs runnable, vale (optional),
-the campaigns tree, the vault links, and the LLM key situation — no key vs
-wrong endpoint vs endpoint fine, classified by ONE tiny live probe against
-whatever llm.env / the legacy Z.ai discovery resolves.
+Checks, in order: python version, the studio's imports, node, git (the
+undo trail), uv (optional), the three engine roots with their key CLIs
+runnable, vale (optional), the campaigns tree, the vault links, and the
+LLM key situation — no key vs wrong endpoint vs endpoint fine, classified
+by ONE tiny live probe against whatever llm.env / the legacy Z.ai
+discovery resolves.
 
 Stdlib only at module level: the doctor must run when fastapi/uvicorn/yaml
 are exactly the things missing. Output is {"ok": overall, "checks":[...]}
@@ -152,6 +153,31 @@ def check_node():
     note = "" if where.lower().endswith(".exe") else         " (a non-.exe shim — jobs may not be able to launch it)"
     return _mk("node", ran, f"launching {where}" + (f" ({line})" if ran else f" ({line})") + note,
                fix=None if ran else "node exists but would not run")
+
+
+def check_git():
+    """The undo spine (ticket 58): git present means every canon change is
+    snapshotted as undo history (canon.snapshot_result). Git ABSENT is a
+    DESIGNED state on release-bundle installs — the bundle ships no git —
+    so it is informational, never a failure; but it must be NAMED, not
+    silent: without git there is no undo trail at all, and a backup copy
+    of the campaign data is the only safety net. Tests patch canon.GIT to
+    exercise both branches."""
+    import canon
+    if not canon.GIT:
+        return _mk("git (undo trail)", False,
+                   "git is not installed — the undo/history trail is OFF on "
+                   "this machine (a designed state on bundle installs; "
+                   "changes still publish fine). Your campaign files are "
+                   "safe — back them up (README.txt: copy the campaign-data "
+                   "folder, or run export.cmd)",
+                   fix="optional: install git (git-scm.com) and history "
+                       "snapshots turn on by themselves — or keep running "
+                       "without git and rely on backups",
+                   required=False)
+    return _mk("git (undo trail)", True,
+               f"installed at {canon.GIT} — canon changes are recorded as "
+               "undo history", required=False)
 
 
 def check_uv():
@@ -744,7 +770,8 @@ def check_llm_key():
 
 
 def run_all_checks(probe=None, modules=None, live_llm=True):
-    checks = [check_python(), check_imports(modules), check_node(), check_uv()]
+    checks = [check_python(), check_imports(modules), check_node(),
+              check_git(), check_uv()]
     checks.extend(check_engines())
     checks.extend(check_tool_trees())
     checks.append(check_week_run())
