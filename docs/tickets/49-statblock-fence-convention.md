@@ -1,8 +1,10 @@
 # 49 — Statblock fence convention (P1's core half)
 
 **Status:** in-progress (implemented 2026-10-10; the manual
-once-with-Atlas verify is pending — no campaign exists on this machine
-since the 2026-10-05 data wipe)
+once-with-Atlas verify is pending — ember-coast is the live campaign
+for it since the 2026-10-20 sitting; its entity pages are the
+statblock path's exercise material whenever the Atlas half of the
+shared sitting runs)
 **Priority:** P2 — unblocks the companion repo's ICRPG fence templates
 **Area:** `studio/spine.py`, `studio/routers/review.py`,
 `studio/static/js/review.js`, `verification/check.py`,

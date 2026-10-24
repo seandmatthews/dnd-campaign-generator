@@ -1,9 +1,11 @@
 # 46 — ATLAS.md: the at-the-table tutorial
 
-**Status:** in-progress (implemented 2026-10-10; the live start-to-finish
-walkthrough is pending — no campaign exists on this machine since the
-2026-10-05 data wipe, and building one with a site + simulation is an
-evening of LLM runs)
+**Status:** in-progress (implemented 2026-10-10; the walkthrough's
+app-side prerequisites are all satisfied as of 2026-10-24 — ember-coast
+exists with a site + simulation, and the Drowned Crypt is republished
+as `the-drowned-crypt-v2` under the ticket-59 exporter (232 walls,
+6 doors, 4 lights, ambient 0.42); only the human's Atlas-side clicks
+of ATLAS.md remain — shared sitting with 49/53/54/59)
 **Priority:** P2 — one of the two seam items the table needs this week
 **Area:** `docs/for-new-gms/`, `README.md`, `docs/design/atlas-seam.md`,
 `release/build_release.py`

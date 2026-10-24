@@ -3,9 +3,14 @@
 **Status:** in-progress (implemented + reviewed 2026-10-23 by the
 ticket-sweep lane, 0b0a9e6, round 1; the sweep's merge was
 auto-reverted by its flaking gate and re-landed as fbe97d6 with the
-fast tier green; ONE box left: the manual Drowned Crypt republish +
-Atlas door count on ember-coast, shared with tickets 46/49/54's
-sitting)
+fast tier green. The republish half of the last box is DONE
+2026-10-24: the Drowned Crypt regenerated from seed 2060015 (6
+portals, all closed:true — doors, not windows) and republished via
+the pinned v0.2.0 companion as `the-drowned-crypt-v2` — 232 walls,
+6 doors, 4 lights, ambient 0.42, contract-rule-3 refusal → --force
+sibling exactly as designed (campaign snapshot d182adb). ONE box
+left: the human's look at the v2 scene in Atlas, shared with
+46/49/53/54's sitting)
 **Priority:** P1 — published scenes are missing most doors (live
 evidence in ember-coast), and the exporter bug class that shipped
 twice has no structural guard

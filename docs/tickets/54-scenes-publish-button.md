@@ -1,8 +1,9 @@
 # 54 — Scenes publish button on the table-setup card
 
-**Status:** in-progress (started 2026-10-20 — endpoint + card section +
-tests; the manual check joins the shared campaign sitting with
-46/49/53)
+**Status:** in-progress (endpoint + card section + tests live since
+2026-10-20; the publish half re-proven 2026-10-24 —
+the-drowned-crypt-v2, 6 doors; the manual check's Atlas half joins
+the shared sitting with 46/49/53/59)
 **Priority:** P2 — the second half of ticket 53's card; unblocked since
 companion ticket 05 (the scenes publisher) landed 2026-10-12
 **Area:** `studio/routers/table.py`, `studio/static/js/world.js`

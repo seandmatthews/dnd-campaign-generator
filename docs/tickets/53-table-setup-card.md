@@ -2,8 +2,10 @@
 
 **Status:** in-progress (implemented 2026-10-17 — builder staging + stamp
 + smoke, the spawn endpoint, the card, 8 studio tests; the live verify
-pends the shared campaign rebuild with 46/49; the scenes button spun out
-as ticket 54)
+pends only the human's Atlas-side clicks — the publish paths were
+exercised live 2026-10-20 (preset + scene) and again 2026-10-24
+(the-drowned-crypt-v2 republish via the v0.2.0 companion); the scenes
+button spun out as ticket 54)
 **Priority:** P1 — the friend's path to the seam's "cool stuff" (needs
 companion ticket 07; independent of core 51/52)
 **Area:** `release/build_release.py` (bundle + stamp), `studio/routers/`
