@@ -32,6 +32,8 @@ FAST_SUITES = [
     ("dnd-mapping", [sys.executable, "dnd-mapping/tests/test_import_fmg.py"]),
     ("dnd-mapping-battlemap", [sys.executable, "dnd-mapping/tests/test_battlemap.py"]),
     ("dnd-mapping-provenance", [sys.executable, "dnd-mapping/tests/test_provenance.py"]),
+    ("dnd-mapping-uvtt-contract",
+     [sys.executable, "dnd-mapping/tests/test_uvtt_contract.py"]),
     ("studio", [sys.executable, "-m", "pytest", "studio/tests", "-q"]),
 ]
 
