@@ -141,6 +141,14 @@ def ensure_cache():
     return sevenzr, sfx, CACHE / f"node-{node_ver}-win-x64.zip"
 
 
+def _clear_readonly_and_retry(func, path, exc_info):
+    """rmtree onerror for git-owned trees: pack files carry the read-only
+    attribute, and os.unlink refuses them until it is cleared."""
+    import stat
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def copy_tree(src, dst, extra_ignores=()):
     shutil.copytree(src, dst,
                     ignore=shutil.ignore_patterns(*IGNORE_BASE, *extra_ignores))
@@ -167,7 +175,9 @@ def ensure_companion():
         if head.returncode != 0:
             raise SystemExit(f"FAILED: {COMPANION_CACHE} exists but is not a "
                              "git clone — move it aside first")
-        shutil.rmtree(COMPANION_CACHE)
+        # git marks pack files read-only; a plain rmtree dies on them
+        # with WinError 5 (seen for real on the v0.1.0→v0.2.0 re-clone).
+        shutil.rmtree(COMPANION_CACHE, onerror=_clear_readonly_and_retry)
     run(["git", "clone", "--depth", "1", "--branch", COMPANION_TAG,
          COMPANION_REPO, str(COMPANION_CACHE)])
 
