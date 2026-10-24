@@ -55,7 +55,7 @@ jobs:
           npm ci --no-audit --no-fund
           npx playwright install chromium
 
-      - name: Lint (runtime-crash class: syntax errors, undefined names)
+      - name: "Lint (runtime-crash class: syntax errors, undefined names)"
         run: |
           pip install ruff
           ruff check agentic-simulator/src agentic-simulator/tests studio dnd-mapping/src run-tests.py
