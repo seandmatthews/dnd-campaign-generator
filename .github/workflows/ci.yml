@@ -57,7 +57,7 @@ jobs:
 
       - name: "Lint (runtime-crash class: syntax errors, undefined names)"
         run: |
-          pip install ruff
+          pip install ruff==0.16.9
           ruff check agentic-simulator/src agentic-simulator/tests studio dnd-mapping/src run-tests.py
 
       - name: Fast tier

@@ -6,12 +6,9 @@ resolved by spine.data_root() on the studio side and by the same rule in
 the engine/battlemap CLIs (their side is pinned by the real-subprocess
 tests in test_integration.py)."""
 
-import os
 import subprocess
-import sys
 from pathlib import Path
 
-import pytest
 
 import doctor
 import engines

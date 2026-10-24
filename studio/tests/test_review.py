@@ -274,7 +274,6 @@ def test_partial_approve_keeps_the_rest_approvable(client, tmp_spine_root):
     entry 409'd, even after a refresh, against a base revision this very
     approval had moved. The remaining entries' provenance must carry
     forward across the approval's own writes."""
-    import publication
     d = tmp_spine_root / "testvale"
     doc = {
         "entries": [
@@ -431,7 +430,6 @@ def test_approve_retry_after_crash_between_publish_and_receipt(
     — the answer must be reconstructed from the transaction recorded under
     the same idempotency key (mirroring the accept route), never a 404 with
     the work landed but unacknowledged."""
-    import publication
     _write_pending(tmp_spine_root, "lore/pending-entries-4.yaml",
                    LORE_PENDING)
     rel = "lore/pending-entries-4.yaml"
@@ -468,7 +466,6 @@ def _stale_fingerprint_draft(tmp_spine_root, rel):
     """A generated draft whose pinned lore/entities fingerprint went stale:
     a page landed in the directory AFTER the draft was generated (the map
     companion-note case). Returns the pending file path."""
-    import publication
     d = tmp_spine_root / "testvale"
     doc = {
         "entries": [dict(LORE_PENDING["entries"][0], id="st1")],
@@ -509,7 +506,6 @@ def test_stale_viewed_draft_delete_advises_refresh(client, tmp_spine_root):
     stale 409 means the pending FILE changed since the DM viewed it — so
     there the refresh-and-retry advice is the honest one (the approve
     path's regenerate advice would be wrong here)."""
-    import publication
     doc = dict(LORE_PENDING, entries=[
         dict(LORE_PENDING["entries"][0], id="st1")])
     path = _write_pending(tmp_spine_root, "lore/pending-entries-8.yaml", doc)

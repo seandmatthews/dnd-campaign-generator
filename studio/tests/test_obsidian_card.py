@@ -13,7 +13,7 @@ No engine calls, no LLM, no writes: the endpoint is read-only by design
 """
 
 from pathlib import Path
-from urllib.parse import quote, unquote
+from urllib.parse import unquote
 
 import pytest
 

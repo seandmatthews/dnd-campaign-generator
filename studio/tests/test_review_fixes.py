@@ -30,7 +30,6 @@ import proposals
 import sessions as session_store
 import spine
 import yaml
-from conftest import client  # noqa: F401
 
 C = "/api/campaign/testvale"
 

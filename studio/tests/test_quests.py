@@ -753,7 +753,7 @@ def test_page_breaking_to_bad_bytes_between_load_and_reread_is_a_422(
     def bad_bytes(page):
         page.write_bytes(page.read_bytes() + b"\xff\xfe not utf-8")
 
-    page = _break_page_between_load_and_reread(camp, monkeypatch, bad_bytes)
+    _break_page_between_load_and_reread(camp, monkeypatch, bad_bytes)
     r = client.patch(f"/api/campaign/{camp}/quests/The%20Trolls%20Tithe",
                      json={"status": "resolved"})
     assert r.status_code == 422, r.text
@@ -770,8 +770,7 @@ def test_page_breaking_to_bad_frontmatter_between_load_and_reread_is_a_422(
         page.write_text("---\nstatus: [unclosed\n---\n\nbody\n",
                         encoding="utf-8")
 
-    page = _break_page_between_load_and_reread(camp, monkeypatch,
-                                               bad_frontmatter)
+    _break_page_between_load_and_reread(camp, monkeypatch, bad_frontmatter)
     r = client.patch(f"/api/campaign/{camp}/quests/The%20Trolls%20Tithe",
                      json={"status": "resolved"})
     assert r.status_code == 422, r.text

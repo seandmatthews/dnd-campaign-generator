@@ -234,7 +234,6 @@ def test_session_refuses_to_stage_when_canon_moves_during_prep(
     the publish silently overwrote the accepted week. The base state and
     its revision are now captured together under the lock, and staging
     re-checks that the canon did not move while the engine ran."""
-    import routers.simulation as sim
 
     camp = tmp_spine_root / "testvale"
     state_path = camp / "simulation" / "state.yaml"

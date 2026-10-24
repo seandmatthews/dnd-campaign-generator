@@ -19,15 +19,12 @@ no campaign data outside the temp tree is touched.
 11. export + restore the campaign into a fresh directory and verify it
 """
 
-import json
 import shutil
 import unittest.mock as mock
-import zipfile
 
 import engines
 import publication
 import proposals
-import spine
 import yaml
 from conftest import wait_for_job
 from export_campaign import main as export_main

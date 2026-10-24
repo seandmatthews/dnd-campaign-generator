@@ -16,7 +16,7 @@ import knowledge
 import proposals
 import sessions as session_store
 import yaml
-from conftest import client, wait_for_job  # noqa: F401
+from conftest import wait_for_job
 
 C = "/api/campaign/testvale"
 

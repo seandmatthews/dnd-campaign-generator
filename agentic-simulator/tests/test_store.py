@@ -8,7 +8,6 @@ import pathlib
 import sys
 import tempfile
 
-import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from store import load_state, save_state, validate_state

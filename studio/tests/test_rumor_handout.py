@@ -12,7 +12,6 @@ rumor-fact's behavior (chronicle source_file, staleness, reconcile) is
 covered in test_knowledge.py.
 """
 
-from conftest import client  # noqa: F401
 
 
 def _js(client, name):

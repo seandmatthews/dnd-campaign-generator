@@ -16,9 +16,6 @@ import shutil
 import yaml
 
 import engines
-import proposals
-import spine
-from conftest import client, wait_for_job  # noqa: F401
 
 
 def _state(tmp_spine_root):

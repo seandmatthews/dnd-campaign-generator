@@ -513,6 +513,7 @@ def test_resolve_config_precedence_and_custom_base_error():
         assert cfg["model"] == "llama3.1" and cfg["key"] == "env-key", \
             "environment beats the file"
     finally:
+        pathlib.Path.home = saved_home
         for k, v in saved.items():
             if v is None:
                 os.environ.pop(k, None)

@@ -11,7 +11,6 @@ import engines
 import forecasts
 import proposals
 from conftest import wait_for_job
-from engines import write_week_flag
 
 
 def _fake_tick_series(engine_root, start_week=3):

@@ -13,13 +13,10 @@ on every roll, defenses AND its own non-attack proposal — which now also
 resolves as a normal uncontested action instead of being swallowed.
 """
 
-import copy
 import random
 import sys
 import pathlib
-import tempfile
 
-import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import resolve

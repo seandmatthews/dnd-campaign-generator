@@ -22,8 +22,9 @@ import yaml
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import projects
 import rumors
-from store import STATE_FILE, faction_map, faction_place, places_of, \
+from store import faction_map, faction_place, places_of, \
     load_state, split_argv
+from store import STATE_FILE  # noqa: F401 — re-export, pinned by test_views.py
 
 # What an outsider can roughly estimate by watching, not by reading ledgers.
 _OUTSIDER_STRENGTH = {

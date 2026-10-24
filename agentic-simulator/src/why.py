@@ -32,7 +32,7 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import events
-from store import STATE_FILE, faction_map, load_state, split_argv
+from store import faction_map, load_state, split_argv
 
 _BAR = 2        # content tokens two events must share to count as a build-on
 _MAX_LINKS = 3  # build-on links rendered at most, walking back from the anchor

@@ -18,7 +18,6 @@ import yaml
 import engines
 import proposals
 import publication
-import spine
 from conftest import wait_for_job
 from timeline import build_week_entries, propose_title
 
@@ -631,7 +630,6 @@ def test_week_job_rechecks_the_pending_invariant_under_the_lock(
     """The pre-route pending check runs on the request thread — a second
     request could slip past it. The job re-checks under the campaign lock
     and refuses before writing the flag or spending anything."""
-    import unittest.mock as mock
     fake_pending = {"proposal_id": "fake-1", "proposed_week": 4}
     responses = iter([None, fake_pending])
     monkeypatch.setattr(engines, "run_py", _fake_tick(None))

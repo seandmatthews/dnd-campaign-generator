@@ -24,3 +24,13 @@ dependencies = [
 
 [dependency-groups]
 dev = ["pytest>=8"]
+
+[tool.ruff.lint]
+# The CI lint gate is the runtime-crash class (its step name says so):
+# pyflakes F — undefined/unused/redefined names, the class that caught a
+# leaked Path.home monkeypatch in test_llm — plus E9 for syntax-level
+# runtime errors. Selected EXPLICITLY so a ruff upgrade can never widen
+# or drift the gate's contract (CI pins the ruff version; this pins the
+# rules). Style rules are deliberately not part of the gate; a finding
+# here is a real defect or dead code, fixed rather than suppressed.
+select = ["E9", "F"]

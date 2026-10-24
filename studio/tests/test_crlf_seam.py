@@ -24,7 +24,7 @@ import yaml
 import engines
 import spine
 import sessions as session_store
-from conftest import client, wait_for_job  # noqa: F401
+from conftest import wait_for_job
 
 C = "/api/campaign/testvale"
 

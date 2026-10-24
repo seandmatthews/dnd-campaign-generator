@@ -8,9 +8,6 @@ a secret that is DM-visible must be absent from the export entirely.
 """
 
 import briefing
-import knowledge
-import spine
-from conftest import client  # noqa: F401
 
 
 def _add_fact(client, **body):

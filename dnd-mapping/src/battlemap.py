@@ -79,8 +79,6 @@ def extract():
     meta = g["metadata"]
     assert abs(meta["scale"]["meters_per_unit"] - METERS_PER_UNIT) < 1e-6
 
-    wards = [f for f in g["features"]
-             if f["properties"].get("layer") == "ward" and f["properties"].get("wardType") == "harbour"]
     buildings = [f for f in g["features"]
                  if f["properties"].get("layer") == "building"
                  and f["properties"].get("wardType") == "harbour"]
@@ -130,7 +128,6 @@ def extract():
     for f in picked:
         ring_m = to_m(f["geometry"]["coordinates"][0])
         cx = sum(p[0] for p in ring_m) / len(ring_m)
-        south = min(max(p[1] for p in ring_m), quay_y_m - 2)
         for _ in range(6):
             props.append({"shape": "rect", "at": [round(cx - 16 + rng.uniform(0, 32), 2),
                                                   round(rng.uniform(quay_top_m + 1.5, quay_y_m - 1.5), 2)],

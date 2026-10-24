@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import subprocess
-import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path

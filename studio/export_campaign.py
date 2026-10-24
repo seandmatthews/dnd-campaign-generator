@@ -54,7 +54,6 @@ import pathlib
 import sys
 import zipfile
 
-import yaml
 
 STUDIO_DIR = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(STUDIO_DIR))

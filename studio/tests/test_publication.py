@@ -22,7 +22,6 @@ would also undo the tmp_spine_root fixture's CAMPAIGNS_ROOT patch).
 """
 
 import json
-import pathlib
 import unittest.mock as mock
 
 import canon

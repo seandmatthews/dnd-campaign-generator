@@ -15,7 +15,6 @@ import zipfile
 
 import export_campaign
 import spine
-from conftest import client  # noqa: F401
 
 
 def _make_campaigns(tmp_spine_root, monkeypatch):

@@ -21,7 +21,6 @@ import prep
 import pytest
 import spine
 import yaml
-from conftest import client  # noqa: F401
 
 # markdown link forms prep writes: relative targets (optionally in angle
 # brackets) and wiki-links with an optional |label

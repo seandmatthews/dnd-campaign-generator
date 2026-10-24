@@ -20,7 +20,6 @@ import engines
 import knowledge
 import publication
 import spine
-from conftest import client  # noqa: F401
 
 
 def _add(client, **body):

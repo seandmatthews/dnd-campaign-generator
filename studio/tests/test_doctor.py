@@ -287,7 +287,6 @@ def test_check_engines_skips_simulator_probe_while_week_busy(monkeypatch, tmp_pa
 
 
 def test_doctor_route_caches_the_full_run(client, monkeypatch):
-    from routers import system
     calls = {"n": 0}
 
     def counting_report(*args, **kwargs):

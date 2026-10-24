@@ -70,7 +70,7 @@ def test_world_job_fake_fmg_copies_dump_and_geography(client, tmp_spine_root,
             f"  map_name: {dump['info']['mapName']}\n",
             encoding="utf-8")
         if on_line:
-            on_line(f"headless-42.json -> testland-0042.yaml: 'Testland' "
+            on_line("headless-42.json -> testland-0042.yaml: 'Testland' "
                     "(seed 42): 1 nations, 1 settlements, 1 cultures")
         return 0, ["headless-42.json -> testland-0042.yaml: 'Testland' "
                    "(seed 42): 1 nations, 1 settlements, 1 cultures"]
