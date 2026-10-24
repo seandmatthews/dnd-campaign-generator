@@ -1,6 +1,10 @@
 # 57 — Update contract: llm.env clobber, frankeninstall, same-name downgrade
 
-**Status:** in-progress (implemented + verified 2026-10-23; awaiting review)
+**Status:** completed (implemented 2026-10-23 by the ticket-sweep lane,
+754e57c, reviewed round 1; the sweep's merge was auto-reverted by its
+flaking gate and re-landed as 21df06e with the fast tier green; the
+llm.env robocopy test was hardened in 3f6c9e7 after flaking on
+timestamp comparison)
 **Priority:** P1 — the friend's ordinary update silently reverts their
 key file; a failed update can cement a broken install; an old
 download silently downgrades

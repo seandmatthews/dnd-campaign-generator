@@ -1,8 +1,8 @@
 # 56 — Campaign identity: aliasing splits the lock; two CLI writers skip it
 
-**Status:** in-progress (implemented 2026-10-23 — canonical identity at
-the studio boundary + the CLI lock set closed; fast tier green in the
-worktree, review pending)
+**Status:** completed (implemented 2026-10-23 by the ticket-sweep lane,
+da8fa51, reviewed round 1; the sweep's merge was auto-reverted by its
+flaking gate and re-landed as f3ab91f with the fast tier green)
 **Priority:** P1 — silent mutual-exclusion bypass on the campaign lock
 and silent last-writer-wins on the canon state file
 **Area:** `studio/spine.py`, `studio/canon.py`,

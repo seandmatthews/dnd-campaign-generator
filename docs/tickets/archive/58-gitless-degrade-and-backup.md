@@ -1,7 +1,12 @@
 # 58 — Git-less installs: designed degrade for the undo spine + a friend backup story
 
-**Status:** in-progress (implemented + verified 2026-10-23, 529617b;
-awaiting review)
+**Status:** completed (implemented 2026-10-23 by the ticket-sweep lane,
+529617b + 9a3770d, reviewed round 2, taking the ticket's recommended
+rulings — designed degrade over bundled git, export.cmd over a UI
+button; the sweep's merge was auto-reverted by its flaking gate and
+re-landed as bf010d0 with the fast tier green; the export.cmd
+release-build smoke is wired but unrun — no bundled runtime was built
+this sitting)
 **Priority:** P1 — the core safety promise ("history is your undo") is
 dead on 100% of friend installs and presented as a permanent error;
 the data itself has no backup story at all

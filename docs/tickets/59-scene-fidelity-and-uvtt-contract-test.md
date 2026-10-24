@@ -1,6 +1,11 @@
 # 59 — Atlas scene fidelity: doors that survive import, and a consumer-contract test
 
-**Status:** in-progress (implemented + verified 2026-10-23; awaiting review)
+**Status:** in-progress (implemented + reviewed 2026-10-23 by the
+ticket-sweep lane, 0b0a9e6, round 1; the sweep's merge was
+auto-reverted by its flaking gate and re-landed as fbe97d6 with the
+fast tier green; ONE box left: the manual Drowned Crypt republish +
+Atlas door count on ember-coast, shared with tickets 46/49/54's
+sitting)
 **Priority:** P1 — published scenes are missing most doors (live
 evidence in ember-coast), and the exporter bug class that shipped
 twice has no structural guard

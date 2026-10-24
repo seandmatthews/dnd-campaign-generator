@@ -1,7 +1,8 @@
 # 60 — Regeneration determinism: verify the pins, record the options
 
-**Status:** in-progress (implemented + verified 2026-10-23, fast tier green
-— awaiting review/merge)
+**Status:** completed (implemented 2026-10-23 by the ticket-sweep lane,
+e3c637b, reviewed round 1; merged by the sweep itself as 025462f with
+green main gates)
 **Priority:** P1 — "everything regenerated from a recorded seed" is
 unenforced in both of its halves (tool version and parameters)
 **Area:** `dnd-mapping/vendor-patches/fmg/`,

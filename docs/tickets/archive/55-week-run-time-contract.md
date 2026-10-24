@@ -1,15 +1,9 @@
 # 55 — One honest week-run time contract (watchdog, poll, docs)
 
-**Status:** in-progress (implemented 2026-10-23 — the watchdog/queue
-cap/goal-review sizing now derive from one shared formula in engines.py
-(`week_post_budget() × 300 s + margin` = 7800 s default; `STUDIO_WEEK_TIMEOUT_S`
-overrides, `LLM_MAX_CALLS` raises it with the spend), the week/forecast
-polls size from the server-served run contract, the give-up copy names
-queued vs running, and the duration claims are re-measured to the
-review's logged 60–90 min observation — no fresh provider run was spent
-in this change; the campaign's own job-duration history
-(`.studio-jobs/history.json`, the queue strip's "typically" band) is the
-live check once a real week has run)
+**Status:** completed (implemented 2026-10-23 by the ticket-sweep lane,
+ca182cf, reviewed round 2; the sweep's merge was auto-reverted by its
+flaking gate and re-landed as 6362c88 with the fast tier green — the
+live duration re-measure rides on the campaign's next real week run)
 **Priority:** P1 — the core loop can be killed mid-spend while every
 doc claims it fits
 **Area:** `studio/engines.py`, `studio/routers/simulation.py`,
