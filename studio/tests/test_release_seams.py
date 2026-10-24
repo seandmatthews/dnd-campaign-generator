@@ -330,7 +330,11 @@ def test_robocopy_xf_llm_env_keeps_the_rotated_key_and_seeds_first_install(
     src.mkdir()
     (src / "llm.env").write_text("LLM_API_KEY=payload-key\n",
                                  encoding="ascii")
-    (src / "VERSION").write_text("0.1.0+new\n", encoding="ascii")
+    # the sizes must DIFFER: robocopy skips a same-size file whose dest
+    # timestamp compares equal-or-newer, and these two writes are
+    # microseconds apart — an equal-size pair makes the VERSION-copied
+    # assert a timestamp lottery (seen red once on this machine)
+    (src / "VERSION").write_text("0.1.0+new-payload\n", encoding="ascii")
 
     def mirror(extra=()):
         return subprocess.run(
@@ -347,7 +351,8 @@ def test_robocopy_xf_llm_env_keeps_the_rotated_key_and_seeds_first_install(
     assert r.returncode < 8, r.stdout + r.stderr
     assert (dest / "llm.env").read_text(encoding="ascii") \
         == "LLM_API_KEY=rotated-by-friend\n"
-    assert (dest / "VERSION").read_text(encoding="ascii") == "0.1.0+new\n"
+    assert (dest / "VERSION").read_text(encoding="ascii") \
+        == "0.1.0+new-payload\n"
 
     # first install: no /XF, the payload seeds the key file
     build()
