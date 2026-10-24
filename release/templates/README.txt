@@ -33,9 +33,10 @@ Your API key (see below) is in the "llm.env" file.
 
 Disk space
 ----------
-The app needs about 2 GB: ~1.6 GB installed here, plus the same again
-transiently when a new version installs. Map generation also writes
-scratch files.
+The installer needs about 1.7 GB of free disk space to run: the ~155 MB
+exe, ~750 MB it unpacks to a temp folder, and ~750 MB it installs here.
+The temp copy goes away when it finishes, leaving ~750 MB installed
+plus the exe. Map generation also writes scratch files.
 
 Updating
 --------
