@@ -53,7 +53,12 @@ def _fake_tick_series(engine_root, start_week=3):
         (chron / name).write_text(
             f"# Week {week} — The Projection\n\nProjected prose.\n",
             encoding="utf-8")
-        return 0, [f"projected week {week} written"]
+        # a canned per-run tally (ticket 66): each tick subprocess meters
+        # its own run — values vary with the week so the SUM is assertable
+        return 0, [f"projected week {week} written",
+                   f"  [llm] tokens (run meter ~{2 + week} calls / "
+                   f"~{1000 * week} tokens — estimates, not the provider's "
+                   "bill): prompt=? completion=?"]
 
     return run, calls
 
@@ -120,6 +125,22 @@ def test_forecast_runs_n_weeks_stages_projection_and_touches_nothing(
     assert r.status_code == 202, r.text
     week_job = wait_for_job(client, r.json()["job_id"])
     assert week_job["status"] == "done", week_job["error"]
+
+
+def test_forecast_run_record_carries_the_summed_tally(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 66: the forecast bundle's run_record carries the engine's LLM
+    tally, summed over the N tick subprocesses (each tick process begins
+    its own run, so its meter line is that tick's total) — a forecast is
+    N x a week's spend and used to record none of it durably."""
+    job = _run_forecast(client, monkeypatch, tmp_spine_root, weeks=2)
+    assert job["status"] == "done", job["error"]
+    bundle = forecasts.load("testvale", job["result"]["forecast_id"])
+    rec = bundle["manifest"]["run_record"]
+    # the fake ticks meter (2 + week) calls / (1000 x week) tokens each:
+    # weeks 4 and 5 -> 6 + 7 calls, 4000 + 5000 tokens
+    assert rec["llm_calls"] == 13
+    assert rec["llm_tokens"] == 9000
 
 
 def test_forecast_survives_restart_and_discards(

@@ -245,6 +245,25 @@ def test_zai_hint_only_for_zai_urls(monkeypatch, tmp_path):
 
 # ------------------------------------------------------------ run metering
 
+def test_env_limit_reads_llm_env_after_the_environment(monkeypatch, tmp_path):
+    """LLM_MAX_CALLS has two homes (ticket 66): the environment wins,
+    llm.env is the second, and garbage in whichever home is consulted
+    leaves the decision to the caller (the roster-scaled default) — the
+    same semantics the engine subprocess resolves by."""
+    monkeypatch.delenv("LLM_MAX_CALLS", raising=False)
+    monkeypatch.setattr(llm_client, "ENV_FILE", tmp_path / "absent-llm.env")
+    assert llm_client.env_limit() is None
+    f = tmp_path / "llm.env"
+    f.write_text("LLM_MAX_CALLS=40\n", encoding="utf-8")
+    monkeypatch.setattr(llm_client, "ENV_FILE", f)
+    assert llm_client.env_limit() == 40
+    monkeypatch.setenv("LLM_MAX_CALLS", "48")
+    assert llm_client.env_limit() == 48, "the environment beats llm.env"
+    monkeypatch.delenv("LLM_MAX_CALLS", raising=False)
+    f.write_text("LLM_MAX_CALLS=not-a-number\n", encoding="utf-8")
+    assert llm_client.env_limit() is None, "garbage yields to the caller"
+
+
 def _spendable(monkeypatch, tmp_path):
     """A working provider over a patched urlopen — NOT a stubbed
     _post_json: the run meter lives inside _post_json, so a stub would

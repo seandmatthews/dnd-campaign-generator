@@ -249,7 +249,8 @@ def run_live(state):
                 f"per-run LLM ceiling reached ({usage['calls']} calls, "
                 f"~{usage['tokens']} tokens metered) while proposing for "
                 f"{faction['id']} — the week was NOT written: no state, no "
-                "chronicle, no replay; raise LLM_MAX_CALLS and re-run"
+                "chronicle, no replay; raise LLM_MAX_CALLS (llm.env or the "
+                "environment) and re-run"
             ) from None
         except (KeyError, AttributeError, TypeError, NameError, IndexError,
                 StopIteration):

@@ -478,17 +478,12 @@ WEEK_FACTIONS_DEFAULT = 5
 
 
 def week_post_budget(factions: int = WEEK_FACTIONS_DEFAULT) -> int:
-    """The engine's per-run POST ceiling for a week on a `factions`
-    roster — tick.py run_live's max(24, 3N + 6), or LLM_MAX_CALLS when
-    the environment sets a positive value (same env the engine reads)."""
-    raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
-    try:
-        env = int(raw)
-        if env > 0:
-            return env
-    except ValueError:
-        pass
-    return max(24, 3 * factions + 6)
+    """The engine's per-run POST ceiling for a week on a `factions` roster —
+    tick.py run_live's max(24, 3N + 6), or LLM_MAX_CALLS when the
+    environment or llm.env sets a positive value (llm_client.env_limit is
+    the same resolution the engine subprocess makes: the environment beats
+    llm.env, and either beats the roster default)."""
+    return llm_client.env_limit() or max(24, 3 * factions + 6)
 
 
 WEEK_ENGINE_MARGIN_S = 600  # scheduler/resolution/chronicle + process spawn
@@ -529,6 +524,29 @@ def run_contract() -> dict:
 # [a-z_] pattern dropped every digit-bearing faction out of the held
 # reporting entirely (ticket 65).
 _HOLDS_RE = re.compile(r"^\s*([a-z0-9_]+)\s+HOLDS\b")
+
+# llm.py prints one cumulative meter line per completed POST (stderr, so it
+# lands in the run transcript): "  [llm] tokens (run meter ~N calls / ~M
+# tokens — estimates, not the provider's bill): ...". The LAST line of a
+# tick's transcript is that run's total — the number the run record carries
+# (ticket 66), so a week or forecast finally reports what it spent.
+_LLM_METER_RE = re.compile(
+    r"\[llm\] tokens \(run meter ~(\d+) calls / ~(\d+) tokens")
+
+
+def usage_from_lines(lines: list) -> dict:
+    """The engine's per-run LLM tally parsed from one tick's transcript:
+    the last cumulative run-meter line wins. {"calls": 0, "tokens": 0} when
+    the engine printed no meter line (zero metered calls — a
+    scheduler-held week spends nothing). The engine's own estimates, never
+    the provider's bill; a forecast sums one tally per tick subprocess
+    (each tick process begins its own run)."""
+    calls = tokens = 0
+    for ln in lines:
+        m = _LLM_METER_RE.search(ln)
+        if m:
+            calls, tokens = int(m.group(1)), int(m.group(2))
+    return {"calls": calls, "tokens": tokens}
 
 
 def run_record_identity(engine: str) -> dict:
@@ -852,12 +870,17 @@ def run_week_proposal(name: str, d: Path, log) -> dict:
 
         # the engine's RNG seed for the proposed week (replay identity; the
         # LLM responses themselves are nondeterministic and are NOT replayed)
+        usage = usage_from_lines(lines)
         run_record = {
             **run_record_identity("agentic-simulator/src/tick.py --live"),
             "seed": ((after_doc.get("meta") or {}).get("rng_seeds") or {})
             .get(str(proposed_week)),
             "rule_version": replay_doc.get("rule_version")
             if isinstance(replay_doc, dict) else None,
+            # what the week actually spent (the engine's own meter, ticket
+            # 66) — identity alone used to make the priciest flow the least
+            # metered one
+            "llm_calls": usage["calls"], "llm_tokens": usage["tokens"],
         }
 
         chronicles = {fn: (chronicle_dir / fn).read_text(encoding="utf-8")
@@ -915,6 +938,7 @@ def run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
         chronicle_dir = engine_chronicle_dir()
         prev_doc = base_doc
         weeks_out = []
+        usage = {"calls": 0, "tokens": 0}  # summed over the tick subprocesses
         for i in range(1, n_weeks + 1):
             before = {p.name for p in chronicle_dir.glob("*.md")} \
                 if chronicle_dir.is_dir() else set()
@@ -930,6 +954,9 @@ def run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
                 raise RuntimeError(
                     "forecast week %d failed rc=%s: %s"
                     % (base_week + i, rc, tail_detail(lines, 10)))
+            tick_usage = usage_from_lines(lines)  # each tick metered its own
+            usage["calls"] += tick_usage["calls"]
+            usage["tokens"] += tick_usage["tokens"]
             try:
                 after_text = engine_state_path().read_text(
                     encoding="utf-8")
@@ -981,7 +1008,10 @@ def run_forecast(name: str, d: Path, n_weeks: int, log) -> dict:
                 f"agentic-simulator/src/tick.py --live x{n_weeks} "
                 "(scratch forecast)"),
             # no seed/rule_version (week bundles carry them): a projection
-            # is not replayable by design — each tick re-asks the model
+            # is not replayable by design — each tick re-asks the model.
+            # The LLM tally IS recorded (ticket 66): a forecast is N x a
+            # week's spend, summed over the tick subprocesses.
+            "llm_calls": usage["calls"], "llm_tokens": usage["tokens"],
         }
         fid = forecasts.create(name, base_week=base_week, weeks=weeks_out,
                                run_record=run_record)

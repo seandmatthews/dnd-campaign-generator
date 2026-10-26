@@ -139,7 +139,8 @@ def _post_json(cfg, body, timeout, attempts=3):
             raise BudgetExceeded(
                 f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
                 f"~{_BUDGET['tokens']} tokens metered) — run stopped "
-                "incomplete; raise LLM_MAX_CALLS to allow a longer run")
+                "incomplete; raise LLM_MAX_CALLS in llm.env or the "
+                "environment to allow a longer run")
         _BUDGET["calls"] += 1
         if attempt:
             time.sleep(min(2 ** (attempt - 1), 4))
@@ -177,16 +178,21 @@ class BudgetExceeded(RuntimeError):
     with a clear incomplete status instead of spending without a bound."""
 
 
-# Per-run metering: an explicit ceiling on provider CALLS (env
-# LLM_MAX_CALLS, default 24 — a week is ~2 calls per faction plus
-# narration) and an approximate token tally. Estimates, never the
-# provider's exact charges; the ceiling is the budget, the tally is the log.
-def env_limit():
-    """LLM_MAX_CALLS as a positive int, or None when unset or not a number —
-    the caller decides the fallback (tick scales the default with the
+# Per-run metering: an explicit ceiling on provider CALLS (LLM_MAX_CALLS —
+# the environment or llm.env; unset, tick scales a default with the roster,
+# and a week is ~2 calls per faction plus narration) and an approximate
+# token tally. Estimates, never the provider's exact charges; the ceiling
+# is the budget, the tally is the log.
+def env_limit(env_file=None):
+    """LLM_MAX_CALLS as a positive int, or None when neither home sets a
+    valid one — the environment first, then llm.env (see llm.env.example),
+    the caller deciding the fallback (tick scales the default with the
     roster size, so a 20-faction week does not exhaust a 5-faction ceiling
-    mid-run)."""
+    mid-run). The environment beats the file, like every knob in
+    llm.env.example."""
     raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
+    if not raw:
+        raw = str(read_env_file(env_file).get("LLM_MAX_CALLS") or "").strip()
     try:
         return max(1, int(raw))
     except ValueError:

@@ -134,7 +134,8 @@ def _post_json(cfg, body, timeout, attempts=3):
             raise BudgetExceeded(
                 f"per-run LLM ceiling reached ({b['limit']} calls, "
                 f"~{b['tokens']} tokens metered) — run stopped "
-                "incomplete; raise LLM_MAX_CALLS or split the work")
+                "incomplete; raise LLM_MAX_CALLS in llm.env or the "
+                "environment, or split the work")
         b["calls"] += 1
         if attempt:
             time.sleep(min(2 ** (attempt - 1), 4))
@@ -180,12 +181,15 @@ class BudgetExceeded(RuntimeError):
 # B's begin_run() reset campaign A's ceiling mid-run — A's spend went
 # unchecked while A's remaining calls flipped B into a spurious
 # BudgetExceeded. Each thread meters its own run.
-def _env_limit():
-    """LLM_MAX_CALLS as a positive int; None when unset OR invalid, so the
-    caller applies its own fallback — same semantics as the engine's
+def env_limit(env_file=None):
+    """LLM_MAX_CALLS as a positive int — the environment first, then
+    llm.env (see llm.env.example); None when neither home sets a valid one,
+    so the caller applies its own fallback — same semantics as the engine's
     llm.env_limit() (the twins drifted here once: an invalid value gave the
     engine a scaled ceiling and the studio a flat 24)."""
     raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
+    if not raw:
+        raw = str(read_env_file(env_file).get("LLM_MAX_CALLS") or "").strip()
     try:
         return max(1, int(raw))
     except ValueError:
@@ -196,7 +200,7 @@ _local = threading.local()
 def _budget():
     b = getattr(_local, "budget", None)
     if b is None:
-        b = {"calls": 0, "tokens": 0, "limit": _env_limit() or 24}
+        b = {"calls": 0, "tokens": 0, "limit": env_limit() or 24}
         _local.budget = b
     return b
 

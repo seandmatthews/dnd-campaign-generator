@@ -445,21 +445,62 @@ def test_propose_budget_exceeded_is_neither_retried_nor_laundered():
 
 def test_env_limit_unset_or_garbage_yields_to_the_caller():
     saved = os.environ.get("LLM_MAX_CALLS")
+    # a pinned llm.env: no test depends on the machine's real one (the file
+    # is the knob's second home — ticket 66)
+    env_file = pathlib.Path(tempfile.mkdtemp(prefix="llm-limit-")) / "llm.env"
     try:
         os.environ.pop("LLM_MAX_CALLS", None)
-        assert llm.env_limit() is None, "unset means 'caller decides'"
-        os.environ["LLM_MAX_CALLS"] = "not-a-number"
-        assert llm.env_limit() is None, "garbage means 'caller decides'"
+        assert llm.env_limit(env_file) is None, \
+            "no file, unset means 'caller decides'"
+        env_file.write_text("LLM_MAX_CALLS=40\n", encoding="utf-8")
+        assert llm.env_limit(env_file) == 40, \
+            "llm.env is LLM_MAX_CALLS's second home"
         os.environ["LLM_MAX_CALLS"] = "7"
-        assert llm.env_limit() == 7
+        assert llm.env_limit(env_file) == 7, "the environment beats llm.env"
+        os.environ["LLM_MAX_CALLS"] = "not-a-number"
+        assert llm.env_limit(env_file) is None, "garbage means 'caller decides'"
+        os.environ.pop("LLM_MAX_CALLS", None)
+        env_file.write_text("LLM_MAX_CALLS=not-a-number\n", encoding="utf-8")
+        assert llm.env_limit(env_file) is None, "garbage in the file yields too"
         os.environ["LLM_MAX_CALLS"] = "0"
-        assert llm.env_limit() == 1, "clamped positive, as before"
+        assert llm.env_limit(env_file) == 1, "clamped positive, as before"
     finally:
         if saved is None:
             os.environ.pop("LLM_MAX_CALLS", None)
         else:
             os.environ["LLM_MAX_CALLS"] = saved
-    print("  budget: env_limit parses LLM_MAX_CALLS or yields  OK")
+    print("  budget: env_limit parses LLM_MAX_CALLS (env, then llm.env) or "
+          "yields  OK")
+
+
+def test_budget_exceeded_names_where_to_raise_the_ceiling():
+    """Ticket 66: 'raise LLM_MAX_CALLS' without saying WHERE sent the reader
+    hunting — the message must name both valid homes (llm.env, the
+    environment)."""
+    saved_urlopen = llm.urllib.request.urlopen
+    saved_budget = dict(llm._BUDGET)
+    saved_resolve = llm.resolve_config
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
+    llm.urllib.request.urlopen = _fake_urlopen_factory(
+        lambda attempt: response("ok"))
+    try:
+        llm.begin_run(limit=1)
+        assert llm.complete("first") == "ok"
+        try:
+            llm.complete("second")
+        except llm.BudgetExceeded as e:
+            message = str(e)
+        else:
+            raise AssertionError("the second call must hit the ceiling")
+        assert "LLM_MAX_CALLS" in message and "llm.env" in message, \
+            f"the error names where the knob lives: {message}"
+    finally:
+        llm.urllib.request.urlopen = saved_urlopen
+        llm.resolve_config = saved_resolve
+        llm._BUDGET.clear()
+        llm._BUDGET.update(saved_budget)
+    print("  budget: the ceiling error names llm.env and the env var  OK")
 
 
 def test_render_prompt_fills_placeholders():
@@ -641,6 +682,7 @@ if __name__ == "__main__":
         test_propose_fails_loudly_twice,
         test_propose_budget_exceeded_is_neither_retried_nor_laundered,
         test_env_limit_unset_or_garbage_yields_to_the_caller,
+        test_budget_exceeded_names_where_to_raise_the_ceiling,
         test_render_prompt_fills_placeholders,
         test_post_json_retries_transient_http_errors,
         test_post_json_hard_errors_become_readable_runtimeerrors,

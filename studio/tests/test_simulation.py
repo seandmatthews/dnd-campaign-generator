@@ -133,6 +133,51 @@ def test_week_job_happy_path_proposal_not_copy_out(
     assert not (tmp_spine_root / "testvale" / "simulation" / "chronicle" /
                 "0004-the-gate.md").exists()
 
+    # ticket 66: the run record carries the LLM tally even when this fake
+    # engine printed no meter line (zero metered calls) — the field is part
+    # of the record's shape, not a sometimes-thing
+    rec = client.get(
+        "/api/campaign/testvale/simulation/proposal"
+    ).json()["proposal"]["run_record"]
+    assert rec["llm_calls"] == 0 and rec["llm_tokens"] == 0
+
+
+def test_week_run_record_carries_the_engine_tally(client, tmp_spine_root,
+                                                  monkeypatch):
+    """Ticket 66: the week's run record carries the engine's per-run LLM
+    tally — llm.py prints one cumulative `run meter` line per POST into the
+    transcript, and the LAST one is the run's total. Identity without usage
+    made the priciest flow the least metered one."""
+    def fake_tick(engine_root, script, *args, timeout=600, on_line=None,
+                  env=None):
+        world = engines.ENGINE_HOME
+        world.mkdir(parents=True, exist_ok=True)
+        (world / "state.yaml").write_text(
+            "meta:\n  clock:\n    week: 4\n", encoding="utf-8")
+        engines.engine_chronicle_dir().mkdir(exist_ok=True)
+        (engines.engine_chronicle_dir() / "0004-the-gate.md").write_text(
+            "# Week 4 — The Gate\n\nProse.\n", encoding="utf-8")
+        return 0, [
+            "  [llm] tokens (run meter ~3 calls / ~12000 tokens — estimates,"
+            " not the provider's bill): prompt=3100 completion=900",
+            "  [llm] tokens (run meter ~9 calls / ~54321 tokens — estimates,"
+            " not the provider's bill): prompt=4000 completion=800",
+        ]
+
+    monkeypatch.setattr(engines, "run_py", fake_tick)
+    monkeypatch.setattr(engines, "ENGINE_HOME", tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME", tmp_spine_root / "chronicle")
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    rec = client.get(
+        "/api/campaign/testvale/simulation/proposal"
+    ).json()["proposal"]["run_record"]
+    assert rec["llm_calls"] == 9 and rec["llm_tokens"] == 54321, \
+        "the last cumulative meter line is the run's tally"
+
 
 def test_views_unknown_faction_404_and_stub_paths(client, spine_root, monkeypatch,
                                                   tmp_path):
