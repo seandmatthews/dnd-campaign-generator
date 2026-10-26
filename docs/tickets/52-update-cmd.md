@@ -53,3 +53,14 @@ Per the design doc §3:
 ## Implementation notes (YYYY-MM-DD)
 
 _lands here when the status flips._
+
+## Supersession review (2026-10-26)
+
+Checked per user ruling — **not superseded**; stays parked-proposed
+(needs 51). 57 did not replace this ticket — it corrected the premise
+the Problem section leaned on: install.cmd's preserve logic is now real
+(`/XF llm.env` whenever an installed copy exists), so "reuse
+install.cmd's preserve logic" is sound as written. When revived, absorb
+the 2026-10-13 debate's settled point: the installer and update.cmd
+share one fetch-manifest mechanism. Still gated on the key-custody
+ruling via 51's public-repo gate.

@@ -1,6 +1,6 @@
 # 59 — Atlas scene fidelity: doors that survive import, and a consumer-contract test
 
-**Status:** in-progress (implemented + reviewed 2026-10-23 by the
+**Status:** completed (implemented + reviewed 2026-10-23 by the
 ticket-sweep lane, 0b0a9e6, round 1; the sweep's merge was
 auto-reverted by its flaking gate and re-landed as fbe97d6 with the
 fast tier green. The republish half of the last box is DONE
@@ -8,9 +8,9 @@ fast tier green. The republish half of the last box is DONE
 portals, all closed:true — doors, not windows) and republished via
 the pinned v0.2.0 companion as `the-drowned-crypt-v2` — 232 walls,
 6 doors, 4 lights, ambient 0.42, contract-rule-3 refusal → --force
-sibling exactly as designed (campaign snapshot d182adb). ONE box
-left: the human's look at the v2 scene in Atlas, shared with
-46/49/53/54's sitting)
+sibling exactly as designed (campaign snapshot d182adb). Closed
+2026-10-26 per user ruling: the human's look at the v2 scene in Atlas
+is retired, not satisfied; see the close-out below)
 **Priority:** P1 — published scenes are missing most doors (live
 evidence in ember-coast), and the exporter bug class that shipped
 twice has no structural guard
@@ -164,3 +164,14 @@ regenerated — the tracked record was a pre-2026-10-20 museum piece
 ticket had re-run; it now carries the current wrap's output with the
 ticket's fixes (its rings were already closed; image bytes identical,
 no rasterizer involved).
+
+## Close-out (2026-10-26)
+
+Closed by user ruling with the final Atlas box retired, not satisfied:
+the exporter fixes are pinned by the consumer-contract test, and the
+v2 scene republished clean through the pinned companion (above); what
+is retired is only the human look at the v2 scene in Atlas. Real use
+at the table is now the verify — an issue found there mints a NEW
+ticket, not a back-reference here. Shared ruling across
+46/49/53/54/59; the table-surface verify formally lives in
+dcg-avtt-integration (its AGENTS.md §"Atlas-side e2e", 6dcd5ea).

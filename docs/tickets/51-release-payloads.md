@@ -61,3 +61,18 @@ Per the design doc §2:
 ## Implementation notes (YYYY-MM-DD)
 
 _lands here when the status flips._
+
+## Supersession review (2026-10-26)
+
+Checked per user ruling — **not superseded**; stays parked-proposed.
+Nothing has taken the work over: the builder is still single-artifact
+(`build_release.py` has no payload staging — only `--sfx-only`,
+`--no-key`, `--no-smoke`, `--campaigns`) and `.github/workflows/`
+carries no release job. 57 hardened the exe-update contract (llm.env
+preservation, frankeninstall guard, versioned filename) and is
+compatible, not displacing — this ticket keeps the full exe as the
+fallback exactly as the 2026-10-13 deployment ruling requires. The
+real blocker is the built-in GATE: the public-repo flip (and 52's
+unauthenticated `releases/latest`) waits on the key-custody ruling —
+prompted key ⇒ public repo; bundled key ⇒ Discord-only artifacts.
+Implementing this ticket starts with that ruling.

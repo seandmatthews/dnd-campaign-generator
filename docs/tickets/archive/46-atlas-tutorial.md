@@ -1,11 +1,11 @@
 # 46 — ATLAS.md: the at-the-table tutorial
 
-**Status:** in-progress (implemented 2026-10-10; the walkthrough's
-app-side prerequisites are all satisfied as of 2026-10-24 — ember-coast
-exists with a site + simulation, and the Drowned Crypt is republished
-as `the-drowned-crypt-v2` under the ticket-59 exporter (232 walls,
-6 doors, 4 lights, ambient 0.42); only the human's Atlas-side clicks
-of ATLAS.md remain — shared sitting with 49/53/54/59)
+**Status:** completed (implemented 2026-10-10; the walkthrough's
+app-side prerequisites were all satisfied by 2026-10-24 — ember-coast
+with a site + simulation, the Drowned Crypt republished as
+`the-drowned-crypt-v2` under the ticket-59 exporter. Closed 2026-10-26
+per user ruling: the one unchecked box — the Atlas-side clicks of
+ATLAS.md — is retired, not satisfied; see the close-out below)
 **Priority:** P2 — one of the two seam items the table needs this week
 **Area:** `docs/for-new-gms/`, `README.md`, `docs/design/atlas-seam.md`,
 `release/build_release.py`
@@ -170,3 +170,12 @@ hand-drag stays as the always-true manual twin.
   (Obsidian's trust prompt appeared and was accepted) - same end state;
   0.7.1 is newer than the 0.6.0 floor the page mentions, which the page's
   "0.6.0 or newer" wording already covers.
+
+## Close-out (2026-10-26)
+
+Closed by user ruling with the last box retired, not satisfied: every
+step short of the final Atlas clicks was verified live (above), and the
+loop's app side is done. Real use at the table is now the verify — an
+issue found there mints a NEW ticket, not a back-reference here. Shared
+ruling across 46/49/53/54/59; the table-surface verify formally lives
+in dcg-avtt-integration (its AGENTS.md §"Atlas-side e2e", 6dcd5ea).

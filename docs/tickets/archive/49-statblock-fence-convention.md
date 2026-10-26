@@ -1,10 +1,10 @@
 # 49 — Statblock fence convention (P1's core half)
 
-**Status:** in-progress (implemented 2026-10-10; the manual
-once-with-Atlas verify is pending — ember-coast is the live campaign
-for it since the 2026-10-20 sitting; its entity pages are the
-statblock path's exercise material whenever the Atlas half of the
-shared sitting runs)
+**Status:** completed (implemented 2026-10-10 — all core boxes pinned
+by tests and the fence live-approved into a real ember-coast entity
+page the same sitting. Closed 2026-10-26 per user ruling: the manual
+once-with-Atlas render check is retired, not satisfied; see the
+close-out below)
 **Priority:** P2 — unblocks the companion repo's ICRPG fence templates
 **Area:** `studio/spine.py`, `studio/routers/review.py`,
 `studio/static/js/review.js`, `verification/check.py`,
@@ -167,3 +167,13 @@ in ticket 54). The remaining human step is unchanged in substance:
 open the ember-coast collection in Atlas, place a token named
 "Sera Vael", link it to the person page - the fence should render on
 the token.
+
+## Close-out (2026-10-26)
+
+Closed by user ruling with the manual Atlas box retired, not satisfied:
+the core work is done and pinned, and the fence was live-approved into
+`lore/entities/Sera Vael.md` (above); what is retired is only the
+once-with-Atlas render check. Real use at the table is now the verify —
+an issue found there mints a NEW ticket, not a back-reference here.
+Shared ruling across 46/49/53/54/59; the table-surface verify formally
+lives in dcg-avtt-integration (its AGENTS.md §"Atlas-side e2e", 6dcd5ea).

@@ -1,9 +1,10 @@
 # 54 — Scenes publish button on the table-setup card
 
-**Status:** in-progress (endpoint + card section + tests live since
+**Status:** completed (endpoint + card section + tests live since
 2026-10-20; the publish half re-proven 2026-10-24 —
-the-drowned-crypt-v2, 6 doors; the manual check's Atlas half joins
-the shared sitting with 46/49/53/59)
+the-drowned-crypt-v2, 6 doors. Closed 2026-10-26 per user ruling: the
+manual check's Atlas half is retired, not satisfied; see the close-out
+below)
 **Priority:** P2 — the second half of ticket 53's card; unblocked since
 companion ticket 05 (the scenes publisher) landed 2026-10-12
 **Area:** `studio/routers/table.py`, `studio/static/js/world.js`
@@ -122,3 +123,14 @@ The same endpoint pattern as `publish-presets`:
   ember-coast collection shows the scene on the table — walls, the
   one door, lights; drag-and-drop import not needed anymore (the
   publisher's full path landed it), just open the collection.
+
+## Close-out (2026-10-26)
+
+Closed by user ruling with the Atlas-side view box retired, not
+satisfied: the scenes publish ran the full path live, twice (above) —
+including the refusal that cracked the two core exporter bugs open.
+What is retired is only the look at the published scene in Atlas. Real
+use at the table is now the verify — an issue found there mints a NEW
+ticket, not a back-reference here. Shared ruling across
+46/49/53/54/59; the table-surface verify formally lives in
+dcg-avtt-integration (its AGENTS.md §"Atlas-side e2e", 6dcd5ea).

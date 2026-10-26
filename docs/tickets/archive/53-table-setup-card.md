@@ -1,11 +1,12 @@
 # 53 — Table-setup card: bundle the pinned companion, spawn it behind buttons
 
-**Status:** in-progress (implemented 2026-10-17 — builder staging + stamp
-+ smoke, the spawn endpoint, the card, 8 studio tests; the live verify
-pends only the human's Atlas-side clicks — the publish paths were
-exercised live 2026-10-20 (preset + scene) and again 2026-10-24
-(the-drowned-crypt-v2 republish via the v0.2.0 companion); the scenes
-button spun out as ticket 54)
+**Status:** completed (implemented 2026-10-17 — builder staging + stamp
++ smoke, the spawn endpoint, the card, 8 studio tests; the publish
+paths were exercised live 2026-10-20 (preset + scene) and again
+2026-10-24 (the-drowned-crypt-v2 republish via the v0.2.0 companion);
+the scenes button spun out as ticket 54. Closed 2026-10-26 per user
+ruling: the Atlas-side Asset-Manager confirmation is retired, not
+satisfied; see the close-out below)
 **Priority:** P1 — the friend's path to the seam's "cool stuff" (needs
 companion ticket 07; independent of core 51/52)
 **Area:** `release/build_release.py` (bundle + stamp), `studio/routers/`
@@ -172,3 +173,14 @@ browser:
   collection shows The Drowned Crypt with walls/doors/lights, and the
   **ICRPG** preset (the publisher's `icrpg.json`) appears in collection
   settings' system-preset picker beside the hand-staged *ICRPG (house)*.
+
+## Close-out (2026-10-26)
+
+Closed by user ruling with the Atlas-side confirmation box retired, not
+satisfied: the publish paths were exercised live twice through the real
+card (above) — install, verbatim refusals, snapshots all proven; what
+is retired is only the Asset-Manager look. Real use at the table is now
+the verify — an issue found there mints a NEW ticket, not a
+back-reference here. Shared ruling across 46/49/53/54/59; the
+table-surface verify formally lives in dcg-avtt-integration (its
+AGENTS.md §"Atlas-side e2e", 6dcd5ea).
