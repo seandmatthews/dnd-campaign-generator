@@ -2,6 +2,7 @@
 generation lives in test_sites_job.py; world generation in test_world_gen.py."""
 
 import json
+from pathlib import Path
 
 import engines
 from conftest import wait_for_job
@@ -149,3 +150,90 @@ def test_city_job_rejects_unresolvable_burg_id(client, tmp_spine_root):
                     json={"burg": "999"})
     assert r.status_code == 422
     assert "geography.yaml" in r.json()["error"]
+
+
+# ---------------- ticket 64: atomic canon writes + slug-collision refusals
+
+
+def test_companion_note_write_is_atomic(tmp_path, monkeypatch):
+    """(ticket 64) the companion note is canon: a crash mid-plain-write
+    must not leave a truncated note for the next snapshot to commit — the
+    note goes through write_text_atomic, so the poisoned plain-write path
+    is never taken."""
+    from conftest import poison_plain_write
+
+    from routers import maps
+
+    dest = tmp_path / "provis"
+    dest.mkdir(parents=True)
+    poison_plain_write(monkeypatch)
+    note = maps._companion_note(
+        dest, "provis", {"kind": "city map", "burg": "Provis"},
+        "![[provis.svg]]\n\nCity map of Provis.")
+    text = note.read_text(encoding="utf-8")
+    assert text.startswith("---\nkind: city map\n")
+    assert text.rstrip().endswith("City map of Provis.")
+
+
+def _fake_gen_city(monkeypatch, tmp_spine_root):
+    """A gen-city.mjs fake that writes dunmore.svg (the city-job tests'
+    pattern)."""
+    def fake_run_node(engine_root, *args, timeout=600, on_line=None):
+        out = Path(args[args.index("--out") + 1])
+        (engine_root / "scripts").mkdir(parents=True, exist_ok=True)
+        (out / "dunmore.svg").write_text("<svg/>", encoding="utf-8")
+        return 0, ["wrote dunmore.svg"]
+
+    monkeypatch.setattr(engines, "run_node", fake_run_node)
+    monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+
+
+def test_city_slug_collision_refuses_409(client, tmp_spine_root, monkeypatch):
+    """(ticket 64) 'Dunmore' and 'dunmore' slugify to one destination —
+    the second job used to silently replace the first's artifacts. A
+    DIFFERING request for an existing destination refuses with 409 naming
+    the existing artifact; re-submitting the same city verbatim stays the
+    documented regenerate-overwrite case."""
+    (tmp_spine_root / "testvale" / "world" / "source.map").write_text(
+        "fmg", encoding="utf-8")
+    _fake_gen_city(monkeypatch, tmp_spine_root)
+
+    r = client.post("/api/campaign/testvale/maps/cities",
+                    json={"burg": "Dunmore"})
+    assert r.status_code == 202
+    assert wait_for_job(client, r.json()["job_id"])["status"] == "done"
+    dest = tmp_spine_root / "testvale" / "maps" / "cities" / "dunmore"
+
+    # the case-collision refuses, naming the existing artifact
+    r = client.post("/api/campaign/testvale/maps/cities",
+                    json={"burg": "dunmore"})
+    assert r.status_code == 409
+    detail = r.json()["error"]
+    assert "maps/cities/dunmore" in detail
+    assert "Dunmore" in detail
+    # nothing was replaced
+    assert (dest / "dunmore.svg").read_text(encoding="utf-8") == "<svg/>"
+
+    # the SAME request verbatim is regeneration — allowed to replace
+    r = client.post("/api/campaign/testvale/maps/cities",
+                    json={"burg": "Dunmore"})
+    assert r.status_code == 202
+    assert wait_for_job(client, r.json()["job_id"])["status"] == "done"
+    assert (dest / "dunmore.svg").is_file()
+
+
+def test_city_unidentifiable_destination_refuses_409(client, tmp_spine_root):
+    """A destination whose artifacts record no readable name (a crashed
+    job's leftover) is refused too: generating into it would silently
+    replace what a previous run may have made."""
+    (tmp_spine_root / "testvale" / "world").mkdir(parents=True, exist_ok=True)
+    (tmp_spine_root / "testvale" / "world" / "source.map").write_text(
+        "fmg", encoding="utf-8")
+    dest = tmp_spine_root / "testvale" / "maps" / "cities" / "ghost"
+    dest.mkdir(parents=True)
+    (dest / "ghost.svg").write_text("<svg/>", encoding="utf-8")
+    r = client.post("/api/campaign/testvale/maps/cities",
+                    json={"burg": "Ghost"})
+    assert r.status_code == 409
+    assert "no readable name" in r.json()["error"]
+    assert "maps/cities/ghost" in r.json()["error"]

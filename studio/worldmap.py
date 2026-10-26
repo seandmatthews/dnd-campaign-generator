@@ -23,6 +23,8 @@ import math
 import re
 from pathlib import Path
 
+import spine
+
 # parchment-atlas palette (schematic mode)
 OCEAN = "#9fc3d4"
 LAKE = "#8ab4c9"
@@ -193,8 +195,10 @@ def render_dump_svg(data: dict, out: Path) -> dict:
         )
 
     parts.append("</svg>")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("".join(parts), encoding="utf-8")
+    # atomic like every canon write (ticket 64): a crash mid-write must not
+    # leave a truncated map.svg for the next snapshot to commit under an
+    # unrelated message (the parent dir is made by the atomic write)
+    spine.write_text_atomic(out, "".join(parts))
     return {"burgs": n_burgs, "states": n_labels, "cells": n_cells}
 
 
@@ -208,8 +212,9 @@ def render_world_map(source: Path, out: Path) -> dict:
             raise ValueError(
                 "no embedded SVG found in this .map save — cannot render "
                 "without regenerating (refusing: that would risk divergence)")
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(svg, encoding="utf-8")
+        # atomic like every canon write (ticket 64); the parent dir is
+        # made by the atomic write
+        spine.write_text_atomic(out, svg)
         return {"mode": "fmg-embedded", "bytes": len(svg)}
     info = render_dump_svg(json.loads(text), out)
     return {"mode": "schematic-render", **info}

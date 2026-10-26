@@ -102,3 +102,51 @@ def test_world_map_unrenderable_dump_fails_the_job_honestly(client,
     assert job["status"] == "error"
     assert "unsupported dump" in job["error"]
     assert "cells" in job["error"]
+
+
+# ---------------- ticket 64: the canon writes are atomic
+
+
+def test_render_dump_svg_write_is_atomic(tmp_path, monkeypatch):
+    """(ticket 64) map.svg is canon written through write_text_atomic: a
+    crash mid-plain-write (the poisoned Path.write_text) cannot truncate
+    it — a truncated hero used to sit in the campaign until the NEXT
+    snapshot committed it under an unrelated message."""
+    from conftest import poison_plain_write
+
+    import worldmap
+
+    source = tmp_path / "source.json"
+    source.write_text(json.dumps(tiny_fmg_dump("42")), encoding="utf-8")
+    poison_plain_write(monkeypatch)
+    out = tmp_path / "map.svg"
+    info = worldmap.render_world_map(source, out)
+    assert info["mode"] == "schematic-render"
+    svg = out.read_text(encoding="utf-8")
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+
+
+def test_embedded_svg_write_is_atomic(tmp_path, monkeypatch):
+    """(ticket 64) the fmg-embedded path writes atomically too — and the
+    atomic write makes the (missing) parent directory itself."""
+    from conftest import poison_plain_write
+
+    import worldmap
+
+    source = tmp_path / "source.map"
+    source.write_text(
+        "v1.153.1|3fa|548|878636343|false|878636343|map-01\n"
+        '{"seed":"878636343","graph":{"width":100,"height":80}}\n'
+        "nameBases...\n"
+        '<svg id="map" width="100" height="80" xmlns="http://www.w3.org/2000/svg">'
+        '<path d="M0 0L100 80Z" fill="#5b8ea6"/></svg>\n'
+        '["positional section"]\n',
+        encoding="utf-8")
+    poison_plain_write(monkeypatch)
+    out = tmp_path / "world" / "map.svg"  # parent does not exist yet
+    info = worldmap.render_world_map(source, out)
+    assert info["mode"] == "fmg-embedded"
+    assert out.is_file()  # the atomic write made the parent dir
+    svg = out.read_text(encoding="utf-8")
+    assert svg.startswith('<svg id="map"')
+    assert svg.rstrip().endswith("</svg>")

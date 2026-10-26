@@ -200,7 +200,7 @@ def test_sites_job_missing_artifacts_error_names_real_filenames(
 
 
 def test_sites_post_422_bad_name_and_kind(client, spine_root):
-    for name in ("", "  ", 'evil"quote', "sl/ash", "wild*card"):
+    for name in ("", "  ", 'evil"quote', "sl/ash", "wild*card", "ctrl\x1fchar"):
         r = client.post("/api/campaign/testvale/maps/sites",
                         json={"kind": "camp", "name": name})
         assert r.status_code == 422, name
@@ -209,3 +209,66 @@ def test_sites_post_422_bad_name_and_kind(client, spine_root):
                     json={"kind": "volcano", "name": "Ok"})
     assert r.status_code == 422
     assert "dungeon|cave|camp" in r.json()["error"]
+
+
+# ---------------- ticket 64: atomic canon writes + slug-collision refusals
+
+
+def test_site_params_write_is_atomic(client, tmp_spine_root, monkeypatch):
+    """(ticket 64) params.yaml is canon: a crash mid-plain-write must not
+    truncate it — the write goes through write_text_atomic, so the
+    poisoned plain-write path is never taken and the job completes whole."""
+    from conftest import poison_plain_write
+
+    install(tmp_spine_root, monkeypatch)
+    poison_plain_write(monkeypatch, name_part="params.yaml")
+    r = client.post("/api/campaign/testvale/maps/sites",
+                    json={"kind": "camp", "name": SITE})
+    assert r.status_code == 202
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    params = yaml.safe_load(
+        (tmp_spine_root / "testvale" / "maps" / "sites" / "marsh-camp" /
+         "params.yaml").read_text(encoding="utf-8"))
+    assert params["name"] == SITE and params["kind"] == "camp"
+
+
+def test_site_slug_collision_refuses_409(client, tmp_spine_root, monkeypatch):
+    """(ticket 64) 'The Drowned Crypt' and 'the drowned crypt' slugify to
+    one maps/sites/the-drowned-crypt/ — the second job used to silently
+    replace the first's artifacts. A DIFFERING request (name or kind)
+    refuses with 409 naming the existing artifact; the same request
+    verbatim stays the documented regenerate-overwrite case."""
+    install(tmp_spine_root, monkeypatch)
+
+    def run(name, kind="camp"):
+        r = client.post("/api/campaign/testvale/maps/sites",
+                        json={"kind": kind, "name": name})
+        if r.status_code == 202:
+            return r, wait_for_job(client, r.json()["job_id"])
+        return r, None
+
+    r, job = run("The Drowned Crypt")
+    assert r.status_code == 202 and job["status"] == "done", job and job["error"]
+    dest = tmp_spine_root / "testvale" / "maps" / "sites" / "the-drowned-crypt"
+
+    # the case-collision refuses, naming the existing artifacts
+    r, _ = run("the drowned crypt")
+    assert r.status_code == 409
+    detail = r.json()["error"]
+    assert "maps/sites/the-drowned-crypt" in detail
+    assert "The Drowned Crypt" in detail
+    params = yaml.safe_load((dest / "params.yaml").read_text(encoding="utf-8"))
+    assert params["name"] == "The Drowned Crypt"  # nothing was replaced
+
+    # the same name regenerated as a different kind is also a differing
+    # request into the same artifact set
+    r, _ = run("The Drowned Crypt", kind="dungeon")
+    assert r.status_code == 409
+    assert "dungeon" in r.json()["error"]
+
+    # the same request verbatim is regeneration — allowed to replace
+    r, job = run("The Drowned Crypt")
+    assert r.status_code == 202 and job["status"] == "done", job and job["error"]
+    params = yaml.safe_load((dest / "params.yaml").read_text(encoding="utf-8"))
+    assert params["kind"] == "camp"

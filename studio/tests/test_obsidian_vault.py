@@ -56,11 +56,10 @@ def test_register_merges_and_backs_up_existing_vaults(cfg):
     doc = json.loads(cfg.read_text(encoding="utf-8"))
     assert {v["path"] for v in doc["vaults"].values()} == {
         str(cfg.parent / "other-vault"), str(cfg.parent / "lore")}
-    # the pre-write config survives as the backup
-    backup = json.loads(
-        (cfg.parent / (cfg.name + obsidian_vault._BACKUP_SUFFIX))
-        .read_text(encoding="utf-8"))
-    assert set(backup["vaults"]) == {"cafebabe01020304"}
+    # the pre-write config survives as a backup generation
+    (backup,) = obsidian_vault.backups(cfg)
+    assert set(json.loads(
+        backup.read_text(encoding="utf-8"))["vaults"]) == {"cafebabe01020304"}
 
 
 def test_register_normalizes_the_path(cfg):
@@ -69,6 +68,52 @@ def test_register_normalizes_the_path(cfg):
     # doubled separators and a trailing one are the same folder to normpath
     assert obsidian_vault.is_registered(
         str(cfg.parent) + os.sep + os.sep + "lore" + os.sep) is True
+
+
+# ---------------- ticket 64: the backups are generations, not one slot
+
+
+def test_two_registrations_leave_both_generations_recoverable(cfg):
+    """(ticket 64) the backup used to be ONE fixed name: the second
+    registration overwrote the only copy of the ORIGINAL vault list, and
+    the original was unrecoverable. Every registration now stamps its own
+    generation — both stay recoverable."""
+    original = {"vaults": {"aaaa000000000001": {
+        "path": "V:/Original", "ts": 1, "open": False}}}
+    cfg.write_text(json.dumps(original), encoding="utf-8")
+    obsidian_vault.register(str(cfg.parent / "one"))
+    obsidian_vault.register(str(cfg.parent / "two"))
+
+    gens = [json.loads(p.read_text(encoding="utf-8"))
+            for p in obsidian_vault.backups(cfg)]  # oldest first
+    assert len(gens) == 2
+    # generation 1 is the ORIGINAL list, untouched by the second register
+    assert {v["path"] for v in gens[0]["vaults"].values()} == {"V:/Original"}
+    # generation 2 is the one-registration list
+    assert {v["path"] for v in gens[1]["vaults"].values()} == {
+        "V:/Original", str(cfg.parent / "one")}
+    # and the live config carries all three vaults
+    live = json.loads(cfg.read_text(encoding="utf-8"))
+    assert {v["path"] for v in live["vaults"].values()} == {
+        "V:/Original", str(cfg.parent / "one"), str(cfg.parent / "two")}
+
+
+def test_backup_generations_prune_to_three(cfg):
+    """(ticket 64) the generations roll: the newest three backups stay,
+    older ones prune (the pre-ticket-64 fixed-name backup sorts oldest
+    and prunes first)."""
+    cfg.write_text(json.dumps({"vaults": {}}), encoding="utf-8")
+    for i in range(5):
+        obsidian_vault.register(str(cfg.parent / f"vault-{i}"))
+    gens = obsidian_vault.backups(cfg)
+    assert len(gens) == 3
+    sizes = [len(json.loads(p.read_text(encoding="utf-8"))["vaults"])
+             for p in gens]
+    # oldest surviving -> newest: the configs as they stood before the
+    # third, fourth and fifth registrations
+    assert sizes == [2, 3, 4]
+    live = json.loads(cfg.read_text(encoding="utf-8"))
+    assert len(live["vaults"]) == 5
 
 
 def test_corrupt_config_refused_not_clobbered(cfg):

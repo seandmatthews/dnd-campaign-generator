@@ -31,6 +31,11 @@ def test_export_manifest_and_exclusions(client, tmp_spine_root, monkeypatch,
     (tx / "manifest.json").write_text("{}", encoding="utf-8")
     (root / "testvale" / "llm.env").write_text("LLM_API_KEY=sekrit\n",
                                                encoding="utf-8")
+    # Obsidian's own workspace chrome is chalk (canon.WORKSPACE_IGNORE) —
+    # the export trust boundary agrees with the git one (ticket 64)
+    obs = root / "testvale" / ".obsidian"
+    obs.mkdir(parents=True, exist_ok=True)
+    (obs / "workspace.json").write_text("{}", encoding="utf-8")
     out = tmp_path / "exports" / "testvale.zip"
     rc = export_campaign.main(["testvale", "--out", str(out)])
     assert rc == 0
@@ -46,6 +51,7 @@ def test_export_manifest_and_exclusions(client, tmp_spine_root, monkeypatch,
     joined = "\n".join(names)
     assert ".studio-transactions" not in joined
     assert "llm.env" not in joined
+    assert ".obsidian" not in joined
     assert not any(n.endswith("/") for n in names)
     # every manifest hash matches the live file
     for rel, digest in manifest["files"].items():
@@ -350,7 +356,8 @@ def test_export_excludes_every_documented_noise_pattern(client,
     """excluded() is the whole privacy story — pin every pattern."""
     _make_campaigns(tmp_spine_root, monkeypatch)
     for rel in ("x.log", "x.bak", "x.tmp", "x.pyc", "sub/__pycache__/m.pyc",
-                ".git/HEAD", ".gitignore", "llm.env", "llm.env.example",
+                ".git/HEAD", ".gitignore", ".obsidian/workspace.json",
+                "llm.env", "llm.env.example",
                 "sessions/llm.env", "lore/deep/llm.env.local",
                 "simulation/forecasts/20260925T120000-ab12cd34/manifest.yaml",
                 "simulation/forecasts/20260925T120000-ab12cd34/week-0004.yaml"):
@@ -359,6 +366,24 @@ def test_export_excludes_every_documented_noise_pattern(client,
                 "sessions/session-0001.md",
                 "simulation/proposals/p1/proposal.yaml"):
         assert not export_campaign.excluded(rel), f"{rel} must ride along"
+
+
+def test_export_refuses_an_unvalidated_campaign_argument(
+        client, tmp_spine_root, monkeypatch, tmp_path, capsys):
+    """(ticket 64) restore validates the campaign it is told to write;
+    export resolved its argument raw — '../testvale' would zip a directory
+    OUTSIDE the campaigns root, and the default --out would name an
+    archive outside it too. Same gate as restore (spine.valid_name)."""
+    _make_campaigns(tmp_spine_root, monkeypatch)
+    for bad in ("../testvale", "testvale/../sibling", "sub/dir", ".hidden"):
+        try:
+            export_campaign.main([bad, "--out", str(tmp_path / "evil.zip")])
+        except SystemExit as e:
+            assert e.code == 1, bad
+            assert "not a usable campaign name" in capsys.readouterr().err
+        else:  # pragma: no cover
+            raise AssertionError(f"export accepted the campaign {bad!r}")
+        assert not (tmp_path / "evil.zip").exists()
 
 
 # ---------------- consistency rules (2026-10-02 bug pass)

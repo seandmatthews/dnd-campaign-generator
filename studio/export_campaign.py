@@ -22,6 +22,10 @@ What the export does and does not guarantee (stated plainly):
   self-consistent either way.
 - The archive destination must be OUTSIDE the campaign directory; the
   export refuses one inside it (the zip would swallow itself).
+- The campaign argument is validated like restore's manifest name
+  (spine.valid_name): a name that could never address a campaign
+  (traversal, separators, control characters) is refused before it
+  resolves against the campaigns root — or names the default archive.
 - A same-disk archive is an EXPORT, not protection from disk loss. Copy the
   zip to a separate destination yourself; this tool does not upload
   anything anywhere and does not claim a copy happened.
@@ -73,6 +77,9 @@ EXCLUDES = [
     "*.log",
     ".git/*",
     ".gitignore",
+    ".obsidian/*",  # Obsidian's own workspace chrome: canon.WORKSPACE_IGNORE
+    # declares the folder chalk (the workspace gitignore), so the export
+    # trust boundary agrees with the git one (ticket 64)
     "llm.env*",  # a dropped credential never rides along — at any depth:
     "*/llm.env*",  # fnmatch anchors at the string start, so the top-level
     # pattern alone would miss a copy nested deeper in the tree
@@ -102,6 +109,19 @@ def _inside(path: pathlib.Path, directory: pathlib.Path) -> bool:
     return p == d or p.startswith(d + os.sep)
 
 
+def check_campaign_name(campaign: str) -> None:
+    """Refuse a campaign argument no loader could ever address BEFORE it
+    resolves against the campaigns root (ticket 64) — restore applies the
+    same gate to the manifest's name: a traversal or absolute name would
+    otherwise zip a directory OUTSIDE the campaigns root, and the default
+    --out would name the archive outside it too."""
+    import spine
+    if not spine.valid_name(campaign):
+        print(f"error: not a usable campaign name: {campaign!r}",
+              file=sys.stderr)
+        raise SystemExit(1)
+
+
 def export(campaign: str, out: pathlib.Path) -> pathlib.Path:
     """Zip one campaign + manifest. Returns the archive path.
 
@@ -118,6 +138,7 @@ def export(campaign: str, out: pathlib.Path) -> pathlib.Path:
       hashed and swallows the archive's own half-written bytes."""
     import spine
     root = spine.campaigns_root()
+    check_campaign_name(campaign)
     camp_dir = root / campaign
     if not (camp_dir / "campaign.yaml").is_file():
         print(f"error: no such campaign: {campaign} (under {root})",
@@ -347,6 +368,9 @@ def main(argv=None):
             print(f"no campaigns found under {root} — nothing to export yet")
         ap.print_usage()
         return 2
+    # validate BEFORE the default --out is built from the raw name: a
+    # traversal name must not even name the archive path (ticket 64)
+    check_campaign_name(args.campaign)
     out = pathlib.Path(args.out) if args.out else None
     if out is None:
         import spine
