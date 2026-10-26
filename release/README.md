@@ -1,6 +1,7 @@
 # One-file release
 
-One command produces one shareable file:
+One command produces the shareable exe plus the payload split (ticket
+51):
 
 ```
 python release/build_release.py
@@ -14,6 +15,25 @@ guidance the friend can read before the first double-click (the same
 material inside README.txt, which the friend cannot open until the exe
 has run). Send both files however you like (Google Drive, etc.); the
 friend double-clicks the exe.
+
+The same stage packs three payload archives beside the exe:
+
+- `CampaignStudio-app-<stamp>.7z` — studio + engine + dnd-mapping
+  source + docs + launch scripts + the pinned companion. No runtimes,
+  no tools, **never a key**: this is what an update delivers, and an
+  update must not touch the installed `llm.env`.
+- `CampaignStudio-runtime-py<ver>-node-<ver>.7z` — the bundled Python
+  and node. Ships once; updates ~never.
+- `CampaignStudio-tools-<rev>.7z` — `dnd-mapping/tools/` with
+  node_modules. Ships once; the rev (derived from `setup-tools.py`'s
+  pins) bumps only when the vendor pins move.
+
+These are the assets a `v*` tag push ships: `.github/workflows/
+release.yml` builds the app payload on a Windows runner, attaches it to
+a GitHub Release with its SHA256 in the body, and proves the public
+gate by downloading it anonymously (no token) and hash-checking it.
+The full exe never goes to CI — it stays the local, first-install
+vehicle and offline fallback (design doc §2).
 
 ## What the exe does on the friend's machine
 
@@ -52,10 +72,14 @@ Bundled, nothing installed on the target (64-bit Windows 10/11 only):
 
 - `--campaigns` — copy your `campaign-data/campaigns/` into the bundle (default: empty)
 - `--no-key` — ship without `llm.env` (LLM features then need a key)
+- `--app-payload-only` — build just the app payload (the CI release
+  job's mode): no runtimes, no tools, no exe, never a key; refuses
+  `--campaigns`/`--no-key`/`--sfx-only` because they do not apply
 - `--no-smoke` — skip the boot + installer self-tests (not recommended)
 - `--sfx-only` — reuse `release/work/payload.7z`, redo only the SFX step
   (warns loudly when a tracked template is newer than the cached payload —
-  the reuse would silently skip testing that edit)
+  the reuse would silently skip testing that edit); skips the payload
+  emission, which belongs to full builds only
 - `--keep-work` — keep the staging tree, payload, and installed test copy
 
 Downloads (CPython embeddable, get-pip, node, 7zr, LZMA SDK) are cached
@@ -78,6 +102,15 @@ in `release/cache/` (git-ignored, ~52 MB); staging and payload live in
    must refuse before mirroring; and a forced robocopy failure must
    leave no completion stamp, so the next run re-mirrors instead of
    fast-pathing (port 8795).
+5. Payload-set pass (ticket 51): every packed archive is listed and
+   compared against the plan — the three payloads are disjoint, cover
+   every staged file, and their union is the exe's `payload.7z`; any
+   gap, overlap, or stray file fails the build.
+6. App-over-full equivalence (ticket 51): the app payload extracted
+   fresh must equal the installed app surface byte for byte, and laid
+   over a real install it must boot and serve `/`, `/tutorial`,
+   `/atlas` (port 8797) — the update path result is the full-install
+   result.
 
 ## Updating the release
 

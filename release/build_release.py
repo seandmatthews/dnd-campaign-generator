@@ -29,6 +29,21 @@ exe, where the friend cannot open it yet. Share both files.
 
 Usage:  python release/build_release.py [--no-key] [--no-smoke]
                                         [--campaigns] [--keep-work]
+                                        [--sfx-only] [--app-payload-only]
+A full build packs ONE stage three ways (ticket 51): the full exe as
+always, plus the split payloads into release/dist —
+  CampaignStudio-app-<stamp>.7z       studio + engine + dnd-mapping
+                                      source + docs + launch scripts +
+                                      the pinned companion (no runtimes,
+                                      no tools, never a key) — what an
+                                      update delivers
+  CampaignStudio-runtime-*.7z         Python embeddable + node (ships once)
+  CampaignStudio-tools-<rev>.7z       dnd-mapping/tools with node_modules
+                                      (ships once; rev-bumps only when
+                                      the vendor pins move)
+--app-payload-only builds just the app payload (the CI release job):
+no runtimes, no tools, no exe, and never a key.
+
 Downloads (CPython embeddable, node, 7-Zip tools) are cached in
 release/cache and verified against the SHA256s recorded in CHECKSUMS —
 before a cached copy is reused and after every fresh fetch (ticket 67).
@@ -112,7 +127,31 @@ LZMA_SDK_VERSIONS = ["2603", "2501", "2409"]
 APP_VERSION = re.search(
     r'^version\s*=\s*"([^"]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"), re.M
 ).group(1)
+
+
+def _tools_rev():
+    """Derive the tools-pack rev from the pins' single source of truth
+    (setup-tools.py) — a name that cannot drift from what the pack
+    actually carries (the ticket-53 stamp lesson: read it from the thing
+    shipped, never restate it)."""
+    text = (REPO / "setup-tools.py").read_text(encoding="utf-8")
+
+    def pin(name):
+        m = re.search(rf'^{name}\s*=\s*"([^"]+)"', text, re.M)
+        if not m:
+            raise SystemExit(f"FAILED: could not read {name} from "
+                             "setup-tools.py — the tools-rev derivation "
+                             "must move with the pins")
+        return m.group(1)
+
+    fmg_tag, settle_rev, sharp = (pin("FMG_TAG"), pin("SETTLE_REV"),
+                                  pin("SHARP_PIN"))
+    return f"fmg-{fmg_tag}-{settle_rev[:7]}-sharp-{sharp}"
+
+
+TOOLS_REV = _tools_rev()
 PORT_STAGE, PORT_SFX, PORT_UPDATE = 8791, 8793, 8795
+PORT_PAYLOAD = 8797
 # Second granularity on purpose: install.cmd's fast path compares VERSION
 # byte-for-byte, and two rebuilds within one minute at %H%M granularity
 # produced identical bytes — the second exe then skipped mirroring a
@@ -137,6 +176,50 @@ def stale_templates(payload):
     return [name for name in TEMPLATE_NAMES
             if (TEMPLATES / name).is_file()
             and (TEMPLATES / name).stat().st_mtime > packed]
+
+
+# The payload split (ticket 51). Every file the stage carries belongs to
+# exactly one of three payloads: runtime/ and dnd-mapping/tools/ churn
+# only with the vendor pins and ship once; everything else is the app
+# payload an update delivers. The pack step and the post-pack self-check
+# both read this one mapping — the packed sets cannot disagree with it,
+# and it cannot silently drop or double-count a file
+# (studio/tests/test_payload_plan.py pins the seam).
+
+def payload_plan(files):
+    """Map file paths (either separator, normalized to /) to the payload
+    that carries them: 'runtime', 'tools', or 'app'. Pure — ownership is
+    by path prefix and nothing else, so a name cannot leak between packs
+    (only the exact subtrees 'runtime/' and 'dnd-mapping/tools/' are
+    theirs; 'dnd-mapping/toolbox' or a top-level file named 'runtime'
+    stays app)."""
+    plan = {"runtime": set(), "tools": set(), "app": set()}
+    for f in files:
+        p = str(f).replace("\\", "/")
+        if p.startswith("runtime/"):
+            plan["runtime"].add(p)
+        elif p.startswith("dnd-mapping/tools/"):
+            plan["tools"].add(p)
+        else:
+            plan["app"].add(p)
+    return plan
+
+
+def stage_files(root=STAGE):
+    """Every FILE under the stage as a /-separated relative path, minus
+    the names the pack strips with -xr! — exactly what a payload pack
+    can carry, so the plan over these files is checkable against the
+    packed archives."""
+    out = set()
+    for p in Path(root).rglob("*"):
+        if not p.is_file():
+            continue
+        parts = p.relative_to(root).parts
+        if any(part == "__pycache__" or part.endswith(".pyc")
+               for part in parts):
+            continue
+        out.add("/".join(parts))
+    return out
 
 
 def step(msg):
@@ -185,13 +268,19 @@ def download(url, dest, sha256=None):
     return dest
 
 
-def ensure_cache():
+def ensure_cache(full=True):
     step("cache: python embeddable, get-pip, node, 7-zip sfx tools "
-         "(every artifact sha256-verified against CHECKSUMS, ticket 67)")
+         "(every artifact sha256-verified against CHECKSUMS, ticket 67)"
+         + ("" if full else " — app-payload mode needs 7zr only"))
     for name, (url, sha) in CHECKSUMS.items():
+        if not full and name != "7zr.exe":
+            continue
         download(url, CACHE / name, sha)
 
     sevenzr = CACHE / "7zr.exe"
+    if not full:
+        # the app payload is never an exe: no SFX module to extract
+        return sevenzr, None, None
     sdk = None
     for ver in LZMA_SDK_VERSIONS:
         try:
@@ -305,6 +394,11 @@ def build_stage(node_zip):
         for p in (worlds / "candidates").iterdir():  # build-machine scratch
             shutil.rmtree(p) if p.is_dir() else p.unlink()
     (worlds / "raw").mkdir(exist_ok=True)
+    if ARGS.app_payload_only:
+        # the app payload never carries the tool tree — that is the
+        # tools pack (ticket 51); a build-machine checkout has it, so
+        # the stage drops it explicitly here.
+        shutil.rmtree(STAGE / "dnd-mapping" / "tools", ignore_errors=True)
     copy_tree(REPO / "verification", STAGE / "verification")
     step("stage: avtt companion (pinned release: source + LICENSE, no .git)")
     # IGNORE_BASE strips .git — the bundle carries the pinned snapshot,
@@ -332,32 +426,42 @@ def build_stage(node_zip):
                 copy_tree(camp,
                           STAGE / "campaign-data" / "campaigns" / camp.name)
 
-    step("stage: bundled python (embeddable + pip + requirements.txt)")
-    pydir = STAGE / "runtime" / "python"
-    with zipfile.ZipFile(CACHE / f"python-{PY_VERSION}-embed.zip") as z:
-        z.extractall(pydir)
-    (pydir / f"python{PY_MM}._pth").write_text(
-        f"python{PY_MM}.zip\n.\nLib/site-packages\nimport site\n", encoding="ascii")
-    py = pydir / "python.exe"
-    env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
-    pip_log = (WORK / "pip.log").open("w")
-    try:
-        run([py, CACHE / "get-pip.py", "--no-warn-script-location"],
-            stdout=pip_log, stderr=subprocess.STDOUT, env=env)
-        run([py, "-m", "pip", "install", "--no-warn-script-location",
-             "-r", REPO / "studio" / "requirements.txt"],
-            stdout=pip_log, stderr=subprocess.STDOUT, env=env)
-    finally:
-        pip_log.close()
+    py = None
+    if ARGS.app_payload_only:
+        # CI mode: no runtimes in the stage (they are the runtime pack,
+        # ticket 51) — the stamp read below goes through the builder's
+        # own python instead.
+        step("stage: runtimes skipped (--app-payload-only)")
+    else:
+        step("stage: bundled python (embeddable + pip + requirements.txt)")
+        pydir = STAGE / "runtime" / "python"
+        with zipfile.ZipFile(CACHE / f"python-{PY_VERSION}-embed.zip") as z:
+            z.extractall(pydir)
+        (pydir / f"python{PY_MM}._pth").write_text(
+            f"python{PY_MM}.zip\n.\nLib/site-packages\nimport site\n", encoding="ascii")
+        py = pydir / "python.exe"
+        env = {**os.environ, "PIP_DISABLE_PIP_VERSION_CHECK": "1"}
+        pip_log = (WORK / "pip.log").open("w")
+        try:
+            run([py, CACHE / "get-pip.py", "--no-warn-script-location"],
+                stdout=pip_log, stderr=subprocess.STDOUT, env=env)
+            run([py, "-m", "pip", "install", "--no-warn-script-location",
+                 "-r", REPO / "studio" / "requirements.txt"],
+                stdout=pip_log, stderr=subprocess.STDOUT, env=env)
+        finally:
+            pip_log.close()
 
-    step("stage: bundled node")
-    with zipfile.ZipFile(node_zip) as z:
-        info = next(n for n in z.namelist() if n.endswith("/node.exe"))
-        (STAGE / "runtime" / "node").mkdir(parents=True, exist_ok=True)
-        (STAGE / "runtime" / "node" / "node.exe").write_bytes(z.read(info))
+        step("stage: bundled node")
+        with zipfile.ZipFile(node_zip) as z:
+            info = next(n for n in z.namelist() if n.endswith("/node.exe"))
+            (STAGE / "runtime" / "node").mkdir(parents=True, exist_ok=True)
+            (STAGE / "runtime" / "node" / "node.exe").write_bytes(z.read(info))
 
     step("stage: llm.env")
-    if ARGS.no_key:
+    if ARGS.app_payload_only:
+        print("  skipped: an app payload never carries the key — an "
+              "update must not touch the installed llm.env (design §3)")
+    elif ARGS.no_key:
         print("  skipped (--no-key): the bundle's sim/worldgen features "
               "will ask for a key")
     else:
@@ -388,7 +492,7 @@ def build_stage(node_zip):
     # The stamp also names the bundled companion's tag + its ATLAS_PIN
     # (ticket 53) — read from the staged companion by the bundled python,
     # so the stamp cannot drift from what actually shipped.
-    r = run([py, "-c",
+    r = run([(py or Path(sys.executable)), "-c",
              "import sys; sys.path.insert(0, sys.argv[1]); "
              "from avtt._version import VERSION, ATLAS_PIN; "
              "print(VERSION, ATLAS_PIN)",
@@ -490,6 +594,126 @@ def smoke(port):
                 copy_tree(camp, dst)
 
 
+def smoke_app():
+    """--app-payload-only smoke: no runtime to boot, so the gate is
+    structural — the app payload must be exactly the bootable half of a
+    full install (everything except runtime/, tools/, and the key)."""
+    step("smoke (app payload): structural")
+    for rel in ("VERSION", "llm.env.example", "studio/run.py",
+                "studio/server.py", "launch.cmd", "install.cmd",
+                "export.cmd", "README.txt",
+                "avtt-integration/LICENSE",
+                "avtt-integration/src/avtt/publish.py",
+                "docs/for-new-gms/TUTORIAL.md",
+                "docs/for-new-gms/ATLAS.md"):
+        if not (STAGE / rel).is_file():
+            raise SystemExit(f"FAILED: app-payload stage missing {rel}")
+    for rel in ("runtime", "dnd-mapping/tools", "llm.env"):
+        if (STAGE / rel).exists():
+            raise SystemExit(f"FAILED: app-payload stage carries {rel} — "
+                             "runtimes and tools are their own packs and "
+                             "an app payload never contains the key "
+                             "(design doc §3)")
+    (STAGE / "campaign-data" / "campaigns" / ".locks").mkdir(
+        parents=True, exist_ok=True)
+    print("  app stage structural: ok")
+
+
+def verify_app_over_full(sevenzr, port, app_path):
+    """Ticket 51, acceptance 1: an app payload laid over a full-exe
+    install boots and serves, and the update-path result equals the
+    full-install result — file tree compared.
+
+    1. install.cmd (the script the exe runs) performs a full install
+       into a scratch home; the chain is killed before snapshotting so
+       runtime noise (logs) cannot masquerade as shipped bytes.
+    2. The app payload extracted FRESH must equal the install's
+       app-owned tree, byte for byte — the payload is the app surface,
+       neither missing nor extra.
+    3. The app payload extracted OVER the install, then booted: /,
+       /tutorial, /atlas -> 200 — the update path serves."""
+    step(f"verify: app payload over a full install (port {port})")
+    tdir = WORK / "payload-test"
+    kill_parked_chains(tdir)
+    shutil.rmtree(tdir, onerror=_clear_readonly_and_retry)
+    tdir.mkdir(parents=True, exist_ok=True)
+    dest = tdir / "installed"
+    payload_dir = tdir / "payload"
+    payload_dir.mkdir()
+    run([sevenzr, "x", f"-o{payload_dir}", "-y", WORK / "payload.7z"],
+        stdout=subprocess.DEVNULL)
+    env = {**os.environ, "STUDIO_PORT": str(port), "STUDIO_NO_BROWSER": "1",
+           "CAMPAIGN_STUDIO_HOME": str(dest)}
+    install_out = (WORK / "payload-install.out").open("w")
+    try:
+        subprocess.run(["cmd", "/c", "install.cmd"], env=env,
+                       cwd=payload_dir, stdout=install_out,
+                       stderr=subprocess.STDOUT, check=False, timeout=900)
+    finally:
+        install_out.close()
+    # install.cmd always ends by starting the studio — kill the whole
+    # chain, then strip what the boot created (logs) so only shipped
+    # bytes reach the comparison.
+    kill_parked_chains(tdir)
+    kill_port(port)
+    if not (dest / "VERSION").is_file():
+        raise SystemExit("FAILED: install.cmd did not produce an install "
+                         "for the app-payload equivalence check")
+    logs = dest / "studio" / "logs"
+    if logs.exists():
+        shutil.rmtree(logs)
+
+    def app_surface(root):
+        out = {}
+        for p in Path(root).rglob("*"):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(root).as_posix()
+            if rel.startswith("runtime/") \
+                    or rel.startswith("dnd-mapping/tools/") \
+                    or rel in (".install-complete", "install-log.txt"):
+                continue
+            out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
+        return out
+
+    fresh = tdir / "fresh"
+    fresh.mkdir()
+    run([sevenzr, "x", f"-o{fresh}", "-y", app_path],
+        stdout=subprocess.DEVNULL)
+    installed, carried = app_surface(dest), app_surface(fresh)
+    if installed != carried:
+        miss = sorted(carried - installed)[:5]
+        extra = sorted(installed - carried)[:5]
+        differ = sorted(k for k in installed.keys() & carried.keys()
+                        if installed[k] != carried[k])[:5]
+        raise SystemExit(f"FAILED: the app payload is not the install's "
+                         f"app surface (missing {miss}, extra {extra}, "
+                         f"differing {differ})")
+    print(f"  file-tree compare: {len(installed)} app files, byte-identical")
+    # lay the update path over the real install and boot it
+    run([sevenzr, "x", f"-o{dest}", "-y", app_path], stdout=subprocess.DEVNULL)
+    boot_log = (WORK / "payload-boot.log").open("w")
+    boot = subprocess.Popen(["cmd", "/c", "launch.cmd"], env=env, cwd=dest,
+                            stdout=boot_log, stderr=subprocess.STDOUT)
+    try:
+        wait_http(f"http://127.0.0.1:{port}/", 600)
+        wait_http(f"http://127.0.0.1:{port}/tutorial", 30)
+        wait_http(f"http://127.0.0.1:{port}/atlas", 30)
+        print("  app-over-full boot: /, /tutorial and /atlas -> 200")
+    finally:
+        kill_parked_chains(tdir)
+        kill_port(port)
+        if boot.poll() is None:
+            boot.kill()
+        boot_log.close()
+    if kill_port(port):
+        raise SystemExit(f"FAILED: port {port} still busy after kill")
+    if ARGS.keep_work:
+        print(f"  equivalence install kept at {dest}")
+    else:
+        shutil.rmtree(tdir, ignore_errors=True)
+
+
 def kill_sfx_tree(proc, exe_name, port):
     """/T tree-kill on the stub takes the whole chain down — install.cmd,
     the `start`ed launch.cmd, the python server. Killing only the stub
@@ -528,6 +752,71 @@ def pack(sevenzr):
          str(payload), "."], cwd=STAGE, stdout=subprocess.DEVNULL)
     print(f"  payload: {payload.stat().st_size // (1024 * 1024)} MB")
     return payload
+
+
+def pack_payload(sevenzr, out_name, *args):
+    """One payload archive from the stage (cwd=STAGE), same strip rules
+    as the full pack. args are the include/exclude path spec."""
+    out = DIST / out_name
+    DIST.mkdir(exist_ok=True)
+    out.unlink(missing_ok=True)
+    run([sevenzr, "a", "-t7z", "-mx=7", "-xr!__pycache__", "-xr!*.pyc",
+         str(out), *args], cwd=STAGE, stdout=subprocess.DEVNULL)
+    print(f"  {out.name}: {out.stat().st_size // (1024 * 1024)} MB")
+    return out
+
+
+def app_pack_name():
+    return f"CampaignStudio-app-{bundle_version()}.7z"
+
+
+def list_payload_files(sevenzr, archive):
+    """The FILE entries of a packed payload as /-separated relative
+    paths (-slt listing; directory entries and the archive's own line
+    are dropped)."""
+    r = run([sevenzr, "l", "-slt", str(archive)], capture_output=True,
+            text=True)
+    files, cur = set(), None
+    for ln in r.stdout.splitlines():
+        if ln.startswith("Path = "):
+            cur = ln[len("Path = "):].strip()
+        elif ln.startswith("Attributes = ") and cur is not None:
+            attrs = ln[len("Attributes = "):].strip()
+            if "D" not in attrs and not Path(cur).is_absolute() \
+                    and cur != archive.name:
+                files.add(cur.replace("\\", "/"))
+            cur = None
+    return files
+
+
+def verify_payload_sets(sevenzr, packs, app_only):
+    """The post-pack self-check (ticket 51's 'deterministically'): each
+    packed payload must carry exactly the files the plan assigns it —
+    no gap, no overlap, no stray file — and in a full build the exe's
+    payload.7z must be the union of the three. Reads the SAME plan the
+    packs were built from, so a packer bug cannot pass silently."""
+    step("verify: packed payloads match the plan (disjoint, total, no strays)")
+    plan = payload_plan(stage_files())
+    packed = {kind: list_payload_files(sevenzr, path)
+              for kind, path in packs.items()}
+    for kind, got in packed.items():
+        want = plan[kind]
+        if got != want:
+            miss, extra = sorted(want - got)[:5], sorted(got - want)[:5]
+            raise SystemExit(f"FAILED: the {kind} payload does not match "
+                             f"the plan (missing {miss}, unexpected "
+                             f"{extra})")
+        print(f"  {kind}: {len(got)} files, exact")
+    if not app_only:
+        union = set().union(*packed.values())
+        full = list_payload_files(sevenzr, WORK / "payload.7z")
+        if union != full:
+            miss, extra = sorted(union - full)[:5], sorted(full - union)[:5]
+            raise SystemExit(f"FAILED: payload.7z is not the union of the "
+                             f"three payloads (missing {miss}, extra "
+                             f"{extra})")
+        print(f"  full payload.7z == union of the three "
+              f"({len(full)} files)")
 
 
 AS_INVOKER_MANIFEST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -855,11 +1144,39 @@ def main():
                          "step + verification (for iterating on the sfx "
                          "layer); warns when tracked templates are newer "
                          "than the cached payload")
+    ap.add_argument("--app-payload-only", action="store_true",
+                    help="build only the app payload (the CI release job, "
+                         "ticket 51): no runtimes, no tools, no exe, and "
+                         "never a key")
     ARGS = ap.parse_args()
 
     CACHE.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
+    if ARGS.app_payload_only:
+        if ARGS.sfx_only or ARGS.campaigns or ARGS.no_key:
+            raise SystemExit("--app-payload-only conflicts with "
+                             "--sfx-only/--campaigns/--no-key: there is no "
+                             "sfx to reuse, and an app payload never "
+                             "carries campaigns or a key")
+        sevenzr, _, _ = ensure_cache(full=False)
+        ensure_companion()
+        build_stage(None)
+        if not ARGS.no_smoke:
+            smoke_app()
+        app = pack_payload(sevenzr, app_pack_name(), ".",
+                           "-x!runtime", "-x!dnd-mapping/tools")
+        verify_payload_sets(sevenzr, {"app": app}, app_only=True)
+        step("done")
+        h = hashlib.sha256(app.read_bytes()).hexdigest()
+        print(f"  {app}")
+        print(f"  size: {app.stat().st_size / (1024 * 1024):.1f} MB")
+        print(f"  sha256: {h}")
+        if not ARGS.keep_work:
+            shutil.rmtree(WORK, ignore_errors=True)
+        return
+
     sevenzr, sfx_module, node_zip = ensure_cache()
+    packs = {}
     if ARGS.sfx_only:
         payload = WORK / "payload.7z"
         if not payload.exists():
@@ -891,11 +1208,43 @@ def main():
         verify_sfx(exe, PORT_SFX)
         verify_update(exe, sevenzr, PORT_UPDATE)
 
+    # the split payloads (ticket 51): same stage, three targets — the
+    # app payload is what an update delivers; runtime + tools ship once
+    # per pin change. --sfx-only skips them: that loop iterates on the
+    # exe layer over a cached payload, and stale payloads must not be
+    # re-shipped as release assets.
+    if not ARGS.sfx_only:
+        packs["app"] = pack_payload(sevenzr, app_pack_name(), ".",
+                                    "-x!runtime", "-x!dnd-mapping/tools")
+        packs["runtime"] = pack_payload(
+            sevenzr,
+            f"CampaignStudio-runtime-py{PY_VERSION}-node-{NODE_VERSION}.7z",
+            "runtime")
+        if (STAGE / "dnd-mapping" / "tools").is_dir():
+            packs["tools"] = pack_payload(
+                sevenzr, f"CampaignStudio-tools-{TOOLS_REV}.7z",
+                "dnd-mapping/tools")
+        else:
+            print("!" * 66)
+            print("WARNING: the stage has no dnd-mapping/tools — the exe "
+                  "ships without")
+            print("the FMG tool tree and NO tools pack is emitted. Build "
+                  "on a machine")
+            print("that ran setup-tools.py, or the maps features break on "
+                  "the target.")
+            print("!" * 66)
+        verify_payload_sets(sevenzr, packs, app_only=False)
+        if not ARGS.no_smoke:
+            verify_app_over_full(sevenzr, PORT_PAYLOAD, packs["app"])
+
     step("done")
     h = hashlib.sha256(exe.read_bytes()).hexdigest()
     print(f"  {exe}")
     print(f"  size: {exe.stat().st_size / (1024 * 1024):.0f} MB  "
           f"sha256: {h[:16]}…")
+    for p in sorted(packs.values(), key=lambda p: p.name):
+        print(f"  payload: {p.name}  "
+              f"({p.stat().st_size / (1024 * 1024):.1f} MB)")
     # the share message names BOTH files (ticket 68): the sidecar is the
     # only thing that reaches the friend before the first double-click.
     print(f"  share BOTH files: {exe.name} + BEFORE-YOU-RUN.txt (beside it "
