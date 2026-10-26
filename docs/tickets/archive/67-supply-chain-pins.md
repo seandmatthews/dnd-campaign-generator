@@ -1,6 +1,6 @@
 # 67 — Supply-chain pins: movable tags, unpinned actions, floating node
 
-**Status:** in-progress — implemented on ticket/67-supply-chain-pins
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 48938d0, reviewed round 1; merged as d4a0a0a with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — every "pin" in the chain is either a movable tag or
 a floating latest
 **Area**: `.github/workflows/ci.yml`, `setup-tools.py`,

@@ -1,7 +1,6 @@
 # 63 — Frontend failure honesty: expensive runs fail invisibly, refused cancels look successful
 
-**Status:** in-progress — implemented on ticket/63-frontend-failure-honesty
-2026-10-25 (fast tier green; review pending)
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 7db57b4, reviewed round 1; merged as 01ef91e with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P2 — the costliest failures in the app are the least
 visible ones
 **Area:** `studio/static/js/{core,sim,sessions,knowledge,maps}.js`

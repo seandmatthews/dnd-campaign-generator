@@ -1,7 +1,6 @@
 # 66 — Spend visibility: the two priciest flows record zero usage
 
-**Status:** in-progress — implemented on ticket/66-spend-visibility
-2026-10-26 (fast tier green; review pending)
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 80b0ed1, reviewed round 1; merged as f25d160 with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — the most expensive operations are the least
 metered ones
 **Area:** `studio/engines.py`, `studio/llm_client.py`,

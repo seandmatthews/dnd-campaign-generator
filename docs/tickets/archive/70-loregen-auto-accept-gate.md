@@ -1,7 +1,6 @@
 # 70 — Loregen: the auto-accept gate checks names, not claims
 
-**Status:** in-progress — implemented on ticket/70-loregen-auto-accept-gate
-(fast tier green; review pending)
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, b2b115e, reviewed round 1; merged as c5428e0 with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — a prompt-injection-shaped gap with real containment
 but a weak gate
 **Area:** `studio/loregen.py`, `studio/routers/lore.py`

@@ -1,7 +1,6 @@
 # 64 — Canon write discipline: non-atomic artifacts, slug collisions, export gaps
 
-**Status:** in-progress — implemented on ticket/64-canon-write-discipline
-2026-10-25 (fast tier green; review pending)
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, ec0514a, reviewed round 2; merged as 324f527 with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — three classes of quiet wrongness in canon writes,
 all with cheap fixes
 **Area:** `studio/routers/maps.py`, `studio/worldmap.py`,

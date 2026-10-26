@@ -1,6 +1,6 @@
 # 62 — LLM clients: the engine twin keeps its crash, truncation reads as complete, and check.py ignores llm.env
 
-**Status:** proposed
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 4fd5d62, reviewed round 1; merged as 1bdb6d9 with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P2 — one crash the studio twin already fixed, silent
 truncation into canon, and a third client with its own hardcoded
 provider

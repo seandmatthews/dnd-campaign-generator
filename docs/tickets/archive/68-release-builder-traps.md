@@ -1,6 +1,6 @@
 # 68 — Release builder + friend-docs traps
 
-**Status:** in-progress — implemented on ticket/68-release-builder-traps
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 6d1384a, reviewed round 1; merged as ee05cdb with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — small builder behaviors and friend-facing gaps the
 2026-10-23 review and the 57/58 landing left open
 **Area:** `release/build_release.py`, `release/templates/README.txt`,

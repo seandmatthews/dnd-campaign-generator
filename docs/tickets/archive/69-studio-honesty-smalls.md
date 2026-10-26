@@ -1,7 +1,6 @@
 # 69 — Studio honesty smalls: doc drift, hardcoded version, the 504 that lies
 
-**Status:** in-progress — implemented on ticket/69-studio-honesty-smalls
-2026-10-26 (fast tier green; review pending)
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 4e8ff0c, reviewed round 1; merged as 935efc6 with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — a batch of small honesty fixes, each independent,
 grouped because none is a lane alone
 **Area:** `studio/API.md`, `studio/routers/{system,table}.py`,

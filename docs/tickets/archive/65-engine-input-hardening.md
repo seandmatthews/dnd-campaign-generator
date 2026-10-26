@@ -1,6 +1,6 @@
 # 65 — Engine input hardening: hand-edited states crash or no-op, and small hygiene debts
 
-**Status:** proposed
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, 4d7bc15, reviewed round 1; merged as c414a3a with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P3 — loud crashes and one silent no-op on hand-edited
 states, plus four small hygiene debts
 **Area:** `agentic-simulator/src/{effects,tick,ingest,views,llm,store}.py`,

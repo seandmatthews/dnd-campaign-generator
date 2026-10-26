@@ -1,6 +1,6 @@
 # 61 — Local API: mutations need an Origin check, not just a Host allowlist
 
-**Status:** proposed
+**Status:** completed (implemented by the 61-70 ticket sweep 2026-10-25/26, fd9c19a, reviewed round 1; merged as a5ce8db with green main gates; the sweep's final fast tier AND --all passed on integrated main)
 **Priority:** P2 — any webpage the GM visits can fire no-preflight
 mutating POSTs at the running studio
 **Area:** `studio/server.py`
