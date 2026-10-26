@@ -1,6 +1,6 @@
 # 67 — Supply-chain pins: movable tags, unpinned actions, floating node
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/67-supply-chain-pins
 **Priority:** P3 — every "pin" in the chain is either a movable tag or
 a floating latest
 **Area**: `.github/workflows/ci.yml`, `setup-tools.py`,
@@ -32,8 +32,8 @@ and verify before reuse (a mismatch re-downloads once, then fails).
 
 ## Acceptance criteria
 
-- [ ] CI actions resolve by SHA — directly checkable
-- [ ] setup-tools verifies the FMG checkout's SHA, not just marker
+- [x] CI actions resolve by SHA — directly checkable
+- [x] setup-tools verifies the FMG checkout's SHA, not just marker
       files — extends `test_setup_tools.py`
-- [ ] Node version pinned; downloads checksum-verified — same file's
+- [x] Node version pinned; downloads checksum-verified — same file's
       tests / a builder unit test
