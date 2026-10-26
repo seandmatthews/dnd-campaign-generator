@@ -7,6 +7,7 @@ folder of files, so grep-shaped behavior is the honest shape.
 """
 
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -20,38 +21,77 @@ from routers.common import require_campaign
 
 router = APIRouter()
 
+STUDIO_DIR = Path(__file__).resolve().parents[1]
+
 SEARCH_CAP = 50
 SEARCH_LINE_MAX = 200
 # a "heading-ish" previous line worth showing as context: markdown headings,
 # YAML keys introducing a block ("rumors:"), and list-entry ids ("- id: t0003")
 _SEARCH_CONTEXT_RE = re.compile(r"^(#{1,6}\s\s*\S.*|.*:)\s*$|^\s*-\s*id\s*:")
 
+# the running build's name (ticket 69): release/build_release.py stamps a
+# VERSION file at the bundle root — beside studio/ — and install.cmd mirrors
+# it on every update, so an installed copy can name its exact build; a dev
+# checkout has no stamp and falls back to pyproject's version. health used
+# to answer a hardcoded "0.1.0" whatever it ran, so a bug report could not.
+_VERSION_PATH = STUDIO_DIR.parent / "VERSION"
+
+
+def install_version() -> str:
+    """The VERSION stamp's text, else pyproject's version, else "unknown" —
+    the one rule: never a hardcoded guess."""
+    try:
+        text = _VERSION_PATH.read_text(encoding="ascii").strip()
+    except OSError:
+        text = ""
+    if text:
+        return text
+    try:
+        m = re.search(r'^version\s*=\s*"([^"]+)"',
+                      (STUDIO_DIR.parent / "pyproject.toml")
+                      .read_text(encoding="utf-8"), re.M)
+    except OSError:
+        return "unknown"
+    return m.group(1) if m else "unknown"
+
 
 @router.get("/api/health")
 def health():
-    return {"ok": True, "version": "0.1.0",
+    return {"ok": True, "version": install_version(),
             "week_run_in_progress": engines.week_flag_path().is_file()}
 
 
 # full doctor runs subprocess probes (engine CLIs + one live LLM probe) —
 # minutes on a request thread — so its result is cached 60s. quick=1 skips
 # the live probe (presence-only key check) and never caches, so a page load
-# can poll it. (tests monkeypatch doctor.report.)
+# can poll it. (tests monkeypatch doctor.report.) A full probe holds
+# _doctor_probe_lock, so two concurrent calls run the minutes-long probe
+# ONCE — the second waits, re-checks the cache, and answers from the
+# winner's report instead of draining the threadpool a second time
+# (ticket 69; the same hazard review.py's check.py budget fixed).
 _DOCTOR_CACHE_S = 60.0
 _doctor_cache: dict = {"at": None, "report": None}
+_doctor_probe_lock = threading.Lock()
+
+
+def _doctor_cache_fresh() -> bool:
+    at = _doctor_cache["at"]
+    return at is not None and time.monotonic() - at < _DOCTOR_CACHE_S
 
 
 @router.get("/api/doctor")
 def get_doctor(quick: bool = False):
     if quick:
         return doctor.report(live_llm=False)
-    now = time.monotonic()
-    if _doctor_cache["at"] is not None and now - _doctor_cache["at"] < _DOCTOR_CACHE_S:
+    if _doctor_cache_fresh():
         return _doctor_cache["report"]
-    rep = doctor.report()
-    _doctor_cache["at"] = now
-    _doctor_cache["report"] = rep
-    return rep
+    with _doctor_probe_lock:
+        if _doctor_cache_fresh():  # the probe finished while we waited
+            return _doctor_cache["report"]
+        rep = doctor.report()
+        _doctor_cache["at"] = time.monotonic()
+        _doctor_cache["report"] = rep
+        return rep
 
 
 @router.get("/api/jobs/{job_id}")

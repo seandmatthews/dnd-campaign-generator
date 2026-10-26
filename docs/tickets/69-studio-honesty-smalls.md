@@ -1,6 +1,7 @@
 # 69 — Studio honesty smalls: doc drift, hardcoded version, the 504 that lies
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/69-studio-honesty-smalls
+2026-10-26 (fast tier green; review pending)
 **Priority:** P3 — a batch of small honesty fixes, each independent,
 grouped because none is a lane alone
 **Area:** `studio/API.md`, `studio/routers/{system,table}.py`,
@@ -41,12 +42,26 @@ consumed regardless of render success.
 
 ## Acceptance criteria
 
-- [ ] API.md's simulation shape + engine line match the code — the
+- [x] API.md's simulation shape + engine line match the code — the
       existing doc-pinning test pattern
-- [ ] health carries the install VERSION — studio test with a staged
-      VERSION
-- [ ] The 504 detail no longer claims "nothing was changed" — studio
-      test on the detail string
-- [ ] Concurrent doctor calls collapse to one probe — studio test on
-      the lock
-- [ ] Log box caps its DOM tail — cjs harness
+      (`test_api_doc.py::test_simulation_doc_names_every_key_the_route_returns`
+      pins every key the route answers into the doc's shape line,
+      `::test_views_engine_line_carries_the_state_flag` pins `--state`
+      into the engine line, `::test_health_doc_does_not_pin_a_hardcoded_version`
+      keeps the health line honest too)
+- [x] health carries the install VERSION — studio test with a staged
+      VERSION (`test_system.py::test_health_carries_the_install_version`,
+      plus the pyproject fallback and the stamp-wins / blank / "unknown"
+      ladder in `::test_install_version_stages_win` and the rewritten
+      `::test_health_ok`)
+- [x] The 504 detail no longer claims "nothing was changed" — studio
+      test on the detail string (`test_table_setup.py::test_publish_times_out_honestly`
+      and the scenes twin `test_table_scenes.py::test_scenes_times_out_honestly`)
+- [x] Concurrent doctor calls collapse to one probe — studio test on
+      the lock (`test_system.py::test_concurrent_doctor_calls_collapse_to_one_probe`,
+      with `::test_doctor_cache_still_serves_within_the_window` keeping
+      the 60s cache)
+- [x] Log box caps its DOM tail — cjs harness (`studio/tests/js/test_maps_log_clean.cjs`:
+      the cap is derived from jobs.py's LOG_CAP so the two cannot drift,
+      plus the `open()` reset leg; the stale-`factPrefill` fix rides the
+      same change-set, pinned by `studio/tests/js/test_fact_prefill.cjs`)

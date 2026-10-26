@@ -28,16 +28,30 @@
   }
 
   // log-tail boxes under forms: open() clears and shows, push() appends a
-  // line and keeps the view scrolled to the newest
+  // line and keeps the view scrolled to the newest. The box keeps the same
+  // capped tail the server's job log does — jobs.py's LOG_CAP (40), the
+  // ring logtail.js documents — because a chatty 30-minute week run used
+  // to append every line for the life of the watch and grow the DOM
+  // without bound (ticket 69). The newest 40 lines are the useful window;
+  // the full log stays in the job record server-side.
+  const LOG_BOX_CAP = 40;
+
   Studio.makeLogBox = function (boxEl) {
+    const lines = [];
+    function render() {
+      boxEl.textContent = lines.length ? lines.join('\n') + '\n' : '';
+      boxEl.scrollTop = boxEl.scrollHeight;
+    }
     return {
       open() {
+        lines.length = 0;
         boxEl.classList.remove('hidden');
         boxEl.textContent = '';
       },
       push(line) {
-        boxEl.textContent += stripAnsi(String(line == null ? '' : line)) + '\n';
-        boxEl.scrollTop = boxEl.scrollHeight;
+        lines.push(stripAnsi(String(line == null ? '' : line)));
+        if (lines.length > LOG_BOX_CAP) lines.shift();
+        render();
       }
     };
   };

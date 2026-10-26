@@ -251,12 +251,13 @@
   /* A "Tell the party" click on the Simulation tab parks a prefill payload
      ({text, visibility, source_file, week} — see js/handoff.js) and switches
      here. Fill the record form from it, say what happened AND what did not
-     (recording is not revealing), then consume it: a later plain visit must
-     not find a stale prefill. Submission stays the unchanged record flow. */
-  function applyFactPrefill(panel, visScope) {
-    const pre = S.state.factPrefill;
+     (recording is not revealing). The payload itself is consumed by the tab
+     render (S.tabs.knowledge, before anything that can throw) and handed in
+     here — so a handoff render that fails partway never leaves a stale
+     prefill parked for a later visit to self-fill the form. Submission
+     stays the unchanged record flow. */
+  function applyFactPrefill(panel, visScope, pre) {
     if (!pre) return;
-    delete S.state.factPrefill;
     const form = panel.querySelector('.fact-form');
     if (!form) return;
     form.querySelector('.fact-text').value = String(pre.text || '');
@@ -278,7 +279,7 @@
     form.insertAdjacentElement('beforebegin', note);
   }
 
-  async function factsPanel(factions, simReadError) {
+  async function factsPanel(factions, simReadError, factPrefill) {
     const panel = S.el(
       '<section class="panel panel-card">' +
         '<h3 class="panel-title">Approved facts</h3>' +
@@ -352,7 +353,7 @@
       }
     });
 
-    applyFactPrefill(panel, visScope);
+    applyFactPrefill(panel, visScope, factPrefill);
 
     let data;
     let disclosure;
@@ -624,6 +625,15 @@
       container.appendChild(S.noCampaign());
       return;
     }
+    // consume the handoff ONCE, before anything that can throw (ticket 69):
+    // the delete used to live inside applyFactPrefill, so a handoff render
+    // that failed before reaching it left the prefill parked — and a much
+    // later plain visit to this tab self-filled the record form with a
+    // stale rumor. A failed render shows its error instead; the DM simply
+    // re-clicks "Tell the party" if they still want the handoff.
+    const factPrefill = S.state.factPrefill || null;
+    delete S.state.factPrefill;
+
     const root = S.el('<div class="tab-root"></div>');
     container.appendChild(root);
 
@@ -640,7 +650,7 @@
       simReadError = err;
     }
 
-    root.appendChild(await factsPanel(factions, simReadError));
+    root.appendChild(await factsPanel(factions, simReadError, factPrefill));
     root.appendChild(await briefingPanel());
     root.appendChild(await disclosurePanel());
   };
