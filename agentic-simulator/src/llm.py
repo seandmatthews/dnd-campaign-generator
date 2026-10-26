@@ -215,10 +215,12 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
     """Complete with a self-extending budget: reasoning models burn
     max_tokens on thought (no unbounded API setting), so finish_reason
-    "length" means double max_tokens and retry, keeping the longest answer.
-    Usage printed to stderr per call. The per-run ceiling is enforced
-    inside _post_json before every POST, retries included — a failed
-    attempt is metered too."""
+    "length" means double max_tokens and retry. A whole reply wins outright
+    over a longer truncated one; a reply still cut at the budget cap comes
+    back visibly marked ("[truncated]") so callers never publish a
+    mid-thought cut as if it were whole. Usage printed to stderr per call.
+    The per-run ceiling is enforced inside _post_json before every POST,
+    retries included — a failed attempt is metered too."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -233,8 +235,18 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
         "max_tokens": max_tokens,
     }
     best = ""
+    best_complete = ""
     while True:
         data = _post_json(cfg, body, timeout)
+        if not isinstance(data, dict):
+            # a 200 whose body is not a JSON object (a proxy returning an
+            # array) takes the readable provider-error path — dereferencing
+            # data.get("usage") before this guard crashed with
+            # AttributeError (P3-24, fixed in the studio twin first)
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response was {type(data).__name__}, not a "
+                "JSON object")
         b = _BUDGET
         usage = data.get("usage") or {}
         if usage:
@@ -243,11 +255,11 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
                   f"~{b['tokens']} tokens — estimates, not the "
                   f"provider's bill): prompt={usage.get('prompt_tokens', '?')} "
                   f"completion={usage.get('completion_tokens', '?')}", file=sys.stderr)
-        choices = data.get("choices") if isinstance(data, dict) else None
+        choices = data.get("choices")
         if not choices:
             # a 200 with no choices (content filter, proxy anomaly) must not
             # become an IndexError masked as "proposal failed"
-            shape = sorted(data)[:6] if isinstance(data, dict) else type(data).__name__
+            shape = sorted(data)[:6]
             raise RuntimeError(
                 f"provider returned no choices (content filter or proxy "
                 f"anomaly?); response keys: {shape}")
@@ -255,9 +267,25 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
         content = choice["message"].get("content") or ""
         if len(content.strip()) > len(best.strip()):
             best = content
-        if choice.get("finish_reason") != "length" or body["max_tokens"] >= max_budget:
-            return best
+        if choice.get("finish_reason") != "length":
+            if content.strip():
+                best_complete = content
+            break
+        if body["max_tokens"] >= max_budget:
+            break
         body["max_tokens"] = min(max_budget, body["max_tokens"] * 2)
+    if best_complete.strip():
+        # a whole reply wins outright — even a shorter one: plain
+        # longest-wins preferred the truncated attempt over the complete
+        # answer
+        return best_complete
+    if best.strip():
+        # the budget is spent and every attempt hit finish_reason "length":
+        # the text ends mid-thought — return it visibly marked (the marker
+        # travels with the text into the chronicle), never as if it were
+        # whole
+        return best + "\n\n[truncated]"
+    return best
 
 
 def render_prompt(template_text, faction):

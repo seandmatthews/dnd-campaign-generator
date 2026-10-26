@@ -216,6 +216,100 @@ def test_empty_choices_is_a_readable_error_not_indexerror():
     print("  provider: empty choices -> readable RuntimeError  OK")
 
 
+def test_complete_non_dict_200_takes_the_provider_error_path():
+    """Mirrors the studio twin's P3-24 test: a 200 whose body is a JSON
+    array (a proxy anomaly) must raise the readable provider error — the
+    old code called data.get("usage") BEFORE the isinstance guard and
+    crashed with AttributeError."""
+    saved_post, saved_resolve = llm._post_json, llm.resolve_config
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    llm._post_json = lambda cfg, body, timeout, attempts=3: [
+        {"role": "assistant", "content": "hi"}]
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
+    try:
+        try:
+            llm.complete("prompt")
+        except RuntimeError as e:
+            assert "no choices" in str(e) and "JSON object" in str(e), str(e)
+        else:
+            raise AssertionError("a list body must take the provider-error path")
+    finally:
+        llm._post_json, llm.resolve_config = saved_post, saved_resolve
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    print("  provider: 200-with-array body -> readable RuntimeError  OK")
+
+
+def test_complete_truncated_at_cap_comes_back_marked():
+    """The budget is spent and the provider still says finish_reason
+    "length": the reply IS cut mid-thought — it must come back visibly
+    marked, never as if it were whole (the chronicle consumed the raw text
+    verbatim, so a cut landed in staged canon unnoticed)."""
+    scripted = [
+        response("half a thought, cut", finish="length"),
+        response("a longer thought, still cut at the cap", finish="length"),
+    ]
+
+    def fake_post(cfg, body, timeout):
+        return scripted.pop(0)
+
+    saved_post, saved_resolve = llm._post_json, llm.resolve_config
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    llm._post_json = fake_post
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = llm.complete("prompt", max_tokens=16, max_budget=32)
+    finally:
+        llm._post_json, llm.resolve_config = saved_post, saved_resolve
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    assert out.endswith("[truncated]"), out
+    assert out.startswith("a longer thought"), \
+        "the longest (still truncated) attempt is kept under the marker"
+    assert "[truncated]" in out
+    print("  complete: length-capped reply comes back marked  OK")
+
+
+def test_complete_short_reply_beats_longer_truncated():
+    """A whole reply wins outright — even a shorter one: plain longest-wins
+    preferred the truncated attempt over the complete answer."""
+    scripted = [
+        response("one two three four five six seven eight nine ten "
+                 "eleven twelve", finish="length"),
+        response("a short whole answer", finish="stop"),
+    ]
+
+    def fake_post(cfg, body, timeout):
+        return scripted.pop(0)
+
+    saved_post, saved_resolve = llm._post_json, llm.resolve_config
+    saved_key = os.environ.get("LLM_API_KEY")
+    os.environ["LLM_API_KEY"] = "test-key"
+    llm._post_json = fake_post
+    llm.resolve_config = lambda env_file=None: {
+        "key": "k", "url": llm.API_URL, "model": llm.MODEL}
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            out = llm.complete("prompt", max_tokens=16, max_budget=32)
+    finally:
+        llm._post_json, llm.resolve_config = saved_post, saved_resolve
+        if saved_key is None:
+            os.environ.pop("LLM_API_KEY", None)
+        else:
+            os.environ["LLM_API_KEY"] = saved_key
+    assert out == "a short whole answer", out
+    print("  complete: a shorter whole reply beats a longer truncated one  OK")
+
+
 def test_legacy_key_scan_prefers_the_coding_plan_rule():
     """Same order as studio/llm_client: rule 1 (the coding-plan key the
     default endpoint needs) first, rule 0 last — both sides must pick the
@@ -539,6 +633,9 @@ if __name__ == "__main__":
         test_budget_is_rechecked_on_length_retries,
         test_failed_posts_are_metered_too,
         test_empty_choices_is_a_readable_error_not_indexerror,
+        test_complete_non_dict_200_takes_the_provider_error_path,
+        test_complete_truncated_at_cap_comes_back_marked,
+        test_complete_short_reply_beats_longer_truncated,
         test_find_key_env_wins_and_fallback_walks_rules,
         test_legacy_key_scan_prefers_the_coding_plan_rule,
         test_resolve_config_precedence_and_custom_base_error,

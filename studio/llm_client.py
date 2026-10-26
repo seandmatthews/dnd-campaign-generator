@@ -220,10 +220,13 @@ def run_usage():
 def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
              max_budget=24576):
     """Ask the model; on ANY finish_reason == "length", double max_tokens up
-    to max_budget (24576) and retry, keeping the longest content seen. The
-    per-run ceiling is enforced inside _post_json, before EVERY POST —
-    initial calls, length-extension retries, and HTTP retries alike — so no
-    attempt can spend past it (a failed attempt is metered too)."""
+    to max_budget (24576) and retry. A whole reply wins outright over a
+    longer truncated one; a reply still cut at the budget cap comes back
+    visibly marked ("[truncated]") so callers never publish a mid-thought
+    cut as if it were whole. The per-run ceiling is enforced inside
+    _post_json, before EVERY POST — initial calls, length-extension
+    retries, and HTTP retries alike — so no attempt can spend past it (a
+    failed attempt is metered too)."""
     cfg = resolve_config()
     if not cfg["key"]:
         raise RuntimeError(
@@ -237,6 +240,7 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
         "max_tokens": max_tokens,
     }
     best = ""
+    best_complete = ""
     while True:
         data = _post_json(cfg, body, timeout)
         if not isinstance(data, dict):
@@ -269,6 +273,21 @@ def complete(prompt, model=None, temperature=0.8, timeout=300, max_tokens=6144,
         content = choice["message"].get("content") or ""
         if len(content.strip()) > len(best.strip()):
             best = content
-        if choice.get("finish_reason") != "length" or body["max_tokens"] >= max_budget:
-            return best
+        if choice.get("finish_reason") != "length":
+            if content.strip():
+                best_complete = content
+            break
+        if body["max_tokens"] >= max_budget:
+            break
         body["max_tokens"] = min(max_budget, body["max_tokens"] * 2)
+    if best_complete.strip():
+        # a whole reply wins outright — even a shorter one: plain
+        # longest-wins preferred the truncated attempt over the complete
+        # answer
+        return best_complete
+    if best.strip():
+        # the budget is spent and every attempt hit finish_reason "length":
+        # the text ends mid-thought — return it visibly marked, never as if
+        # it were whole
+        return best + "\n\n[truncated]"
+    return best
