@@ -5,11 +5,20 @@ recorded SHA256s before reuse and after every fetch, and the CI
 workflow's actions resolving by commit SHA rather than a movable major
 tag. The real builder downloads, extracts and boots; these tests pin
 the constants and drive download() against a fake urllib.
+
+Ticket 68 adds the builder behaviors the 2026-10-23 release review left
+open: --sfx-only warns loudly when tracked templates are newer than the
+cached payload (template edits were silently untested), a fully warm
+cache carries the build to the smoke stage with the network stubbed out
+(offline builds died on a fetch), and the share message names the
+BEFORE-YOU-RUN.txt sidecar the build stages beside the exe.
 """
 
 import hashlib
 import importlib.util
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -164,3 +173,203 @@ def test_ci_actions_are_sha_pinned():
         ref = ln.split("@", 1)[1].split()[0]  # up to the trailing comment
         assert re.fullmatch(r"[0-9a-f]{40}", ref), ln
         assert "# v" in ln, ln  # the tag recorded beside it for humans
+
+
+# ------------------ ticket 68: --sfx-only staleness + warm-cache offline
+
+def _write_templates(directory):
+    directory.mkdir(parents=True, exist_ok=True)
+    for name in build_release.TEMPLATE_NAMES:
+        (directory / name).write_text(f"template {name}\n", encoding="ascii")
+    # the sidecar is a template too (make_sfx copies it beside the exe) —
+    # but not a payload one, so it stays out of TEMPLATE_NAMES
+    (directory / "BEFORE-YOU-RUN.txt").write_text("read first\n",
+                                                  encoding="ascii")
+    return directory
+
+
+def test_stale_templates_names_edits_newer_than_the_payload(tmp_path,
+                                                            monkeypatch):
+    """--sfx-only reuses the cached payload.7z, so a template edited after
+    the pack is silently untested (ticket 68 finding 1): stale_templates()
+    must name exactly the templates newer than the payload, and nothing
+    when the cache is fresh."""
+    templates = _write_templates(tmp_path / "templates")
+    monkeypatch.setattr(build_release, "TEMPLATES", templates)
+    payload = tmp_path / "payload.7z"
+    payload.write_bytes(b"payload")
+    past = payload.stat().st_mtime - 120
+    for name in build_release.TEMPLATE_NAMES:
+        os.utime(templates / name, (past, past))
+    assert build_release.stale_templates(payload) == []
+
+    future = payload.stat().st_mtime + 120
+    os.utime(templates / "README.txt", (future, future))
+    os.utime(templates / "install.cmd", (future, future))
+    assert build_release.stale_templates(payload) == ["install.cmd",
+                                                      "README.txt"]
+
+
+def test_sfx_only_main_warns_loudly_and_the_share_message_names_the_sidecar(
+        tmp_path, monkeypatch, capsys):
+    """The loud path through main(): --sfx-only over a payload older than
+    an edited template prints the WARNING banner naming the stale file,
+    and the final share message names BEFORE-YOU-RUN.txt beside the exe —
+    the sidecar is part of what the builder tells you to share."""
+    templates = _write_templates(tmp_path / "templates")
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = work / "payload.7z"
+    payload.write_bytes(b"payload")
+    future = payload.stat().st_mtime + 120
+    os.utime(templates / "launch.cmd", (future, future))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "VERSION").write_text(
+        "0.1.0+20261026000000+v0.2.0+atlas-0.7.1\n", encoding="ascii")
+    sfx = tmp_path / "7zSD.sfx"
+    sfx.write_bytes(b"sfx-module")
+    dist = tmp_path / "dist"
+
+    monkeypatch.setattr(build_release, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(build_release, "WORK", work)
+    monkeypatch.setattr(build_release, "STAGE", stage)
+    monkeypatch.setattr(build_release, "DIST", dist)
+    monkeypatch.setattr(build_release, "TEMPLATES", templates)
+    monkeypatch.setattr(build_release, "ensure_cache",
+                        lambda: (tmp_path / "7zr.exe", sfx,
+                                 tmp_path / "node.zip"))
+    monkeypatch.setattr(sys, "argv",
+                        ["build_release.py", "--sfx-only", "--no-smoke",
+                         "--keep-work"])
+    build_release.main()
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "launch.cmd" in out, out
+    assert "drop --sfx-only" in out, out
+    assert "BEFORE-YOU-RUN.txt" in out, out  # the share message
+    assert (dist / "BEFORE-YOU-RUN.txt").is_file()
+
+
+def test_sfx_only_on_a_fresh_cache_prints_no_warning(tmp_path, monkeypatch,
+                                                     capsys):
+    """The quiet half of the contract: a payload newer than every template
+    (the normal post-full-build state) runs --sfx-only warning-free."""
+    templates = _write_templates(tmp_path / "templates")
+    work = tmp_path / "work"
+    work.mkdir()
+    payload = work / "payload.7z"
+    payload.write_bytes(b"payload")
+    past = payload.stat().st_mtime - 120
+    for name in build_release.TEMPLATE_NAMES:
+        os.utime(templates / name, (past, past))
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "VERSION").write_text(
+        "0.1.0+20261026000000+v0.2.0+atlas-0.7.1\n", encoding="ascii")
+    sfx = tmp_path / "7zSD.sfx"
+    sfx.write_bytes(b"sfx-module")
+
+    monkeypatch.setattr(build_release, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(build_release, "WORK", work)
+    monkeypatch.setattr(build_release, "STAGE", stage)
+    monkeypatch.setattr(build_release, "DIST", tmp_path / "dist")
+    monkeypatch.setattr(build_release, "TEMPLATES", templates)
+    monkeypatch.setattr(build_release, "ensure_cache",
+                        lambda: (tmp_path / "7zr.exe", sfx,
+                                 tmp_path / "node.zip"))
+    monkeypatch.setattr(sys, "argv",
+                        ["build_release.py", "--sfx-only", "--no-smoke",
+                         "--keep-work"])
+    build_release.main()
+    out = capsys.readouterr().out
+    assert "WARNING" not in out, out
+
+
+def _warm_cache(tmp_path, monkeypatch):
+    """A cache holding every artifact ensure_cache() wants: the four
+    pinned downloads whose bytes match the (test-local) CHECKSUMS table,
+    the LZMA SDK package of the first fallback version, and an extracted
+    7zSD.sfx that already carries its asInvoker manifest."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(build_release, "CACHE", cache)
+    pins = {}
+    for name in build_release.CHECKSUMS:
+        data = f"warm bytes for {name}".encode()
+        (cache / name).write_bytes(data)
+        pins[name] = (f"https://example.test/{name}",
+                      hashlib.sha256(data).hexdigest())
+    monkeypatch.setattr(build_release, "CHECKSUMS", pins)
+    (cache / f"lzma{build_release.LZMA_SDK_VERSIONS[0]}.7z") \
+        .write_bytes(b"sdk package")
+    sfx = cache / "7zSD.sfx"
+    sfx.write_bytes(b"7zSD stub, manifest carries asInvoker")
+    return cache, sfx
+
+
+def _forbid_network(monkeypatch):
+    def forbidden(req, timeout=None):
+        raise AssertionError(f"offline build attempted a fetch: {req}")
+    monkeypatch.setattr(build_release.urllib.request, "urlopen", forbidden)
+
+
+def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch):
+    """Ticket 68 AC: with the cache fully warm the build must reach the
+    smoke stage with the network call stubbed out — the review's finding
+    was an unconditional nodejs.org fetch; the ticket-67 pin made every
+    fetch cache-first, and this drives main() end to end on the warm
+    cache to pin it. Staging, the companion check, pack and the verify
+    passes are faked away (they shell out to pip/git/7zr and run real
+    servers); the seam under test is the cache phase — the build's only
+    network stop before smoke."""
+    cache, sfx = _warm_cache(tmp_path, monkeypatch)
+    _forbid_network(monkeypatch)
+    monkeypatch.setattr(build_release, "ensure_companion", lambda: None)
+
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    def fake_build_stage(node_zip):
+        (stage / "VERSION").write_text(
+            "0.1.0+warm-cache-offline+v0.2.0+atlas-0.7.1\n", encoding="ascii")
+
+    monkeypatch.setattr(build_release, "STAGE", stage)
+    monkeypatch.setattr(build_release, "build_stage", fake_build_stage)
+    smoked = []
+    monkeypatch.setattr(build_release, "smoke",
+                        lambda port: smoked.append(port))
+
+    def fake_pack(sevenzr):
+        payload = tmp_path / "work" / "payload.7z"
+        payload.write_bytes(b"payload")
+        return payload
+
+    monkeypatch.setattr(build_release, "WORK", tmp_path / "work")
+    monkeypatch.setattr(build_release, "pack", fake_pack)
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "BEFORE-YOU-RUN.txt").write_text("read first\n",
+                                                  encoding="ascii")
+    monkeypatch.setattr(build_release, "TEMPLATES", templates)
+    monkeypatch.setattr(build_release, "DIST", tmp_path / "dist")
+    monkeypatch.setattr(build_release, "verify_sfx", lambda exe, port: None)
+    monkeypatch.setattr(build_release, "verify_update",
+                        lambda exe, sevenzr, port: None)
+    monkeypatch.setattr(sys, "argv", ["build_release.py", "--keep-work"])
+
+    build_release.main()
+    assert smoked == [build_release.PORT_STAGE], \
+        "the warm-cache offline build must reach the stage smoke"
+
+
+def test_warm_cache_ensure_cache_itself_needs_no_network(tmp_path,
+                                                         monkeypatch):
+    """The unit-level seam under the end-to-end test above: with the cache
+    warm, ensure_cache() verifies and reuses every artifact — urlopen is
+    never reached (an offline machine gets (7zr, sfx, node zip) back)."""
+    cache, sfx = _warm_cache(tmp_path, monkeypatch)
+    _forbid_network(monkeypatch)
+    sevenzr, sfx_module, node_zip = build_release.ensure_cache()
+    assert sevenzr == cache / "7zr.exe"
+    assert sfx_module == sfx
+    assert node_zip == cache / f"node-{build_release.NODE_VERSION}-win-x64.zip"

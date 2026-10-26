@@ -301,14 +301,66 @@ def test_make_sfx_names_the_exe_with_the_full_version_stamp(tmp_path,
     stage.mkdir()
     version = "0.1.0+20261023120000+v0.2.0+atlas-0.7.1"
     (stage / "VERSION").write_text(version + "\n", encoding="ascii")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "BEFORE-YOU-RUN.txt").write_text("read first\n",
+                                                  encoding="ascii")
     monkeypatch.setattr(mod, "STAGE", stage)
     monkeypatch.setattr(mod, "DIST", tmp_path / "dist")
+    monkeypatch.setattr(mod, "TEMPLATES", templates)
     payload = tmp_path / "payload.7z"
     payload.write_bytes(b"payload")
     sfx = tmp_path / "7zSD.sfx"
     sfx.write_bytes(b"sfx")
     exe = mod.make_sfx(payload, sfx)
     assert exe.name == f"CampaignStudio-{version}.exe", exe.name
+
+
+# ----------------------------- ticket 68: the BEFORE-YOU-RUN sidecar
+
+def test_make_sfx_stages_the_friend_sidecar_beside_the_exe(tmp_path,
+                                                           monkeypatch):
+    """The sidecar doc lands BESIDE the built exe, a byte copy of the
+    tracked template (template edits flow through): the SmartScreen and
+    antivirus guidance must reach the friend BEFORE the first
+    double-click, and README.txt — which carries the same material —
+    travels inside the exe the friend cannot open yet (ticket 68)."""
+    mod = _build_release()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "VERSION").write_text(
+        "0.1.0+20261026000000+v0.2.0+atlas-0.7.1\n", encoding="ascii")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    sidecar = templates / "BEFORE-YOU-RUN.txt"
+    sidecar.write_text("READ ME BEFORE THE FIRST DOUBLE-CLICK\n",
+                       encoding="ascii")
+    monkeypatch.setattr(mod, "STAGE", stage)
+    monkeypatch.setattr(mod, "DIST", tmp_path / "dist")
+    monkeypatch.setattr(mod, "TEMPLATES", templates)
+    payload = tmp_path / "payload.7z"
+    payload.write_bytes(b"payload")
+    sfx = tmp_path / "7zSD.sfx"
+    sfx.write_bytes(b"sfx")
+    exe = mod.make_sfx(payload, sfx)
+    staged = exe.parent / "BEFORE-YOU-RUN.txt"
+    assert staged.is_file(), "the sidecar must ship beside the exe"
+    assert staged.read_text(encoding="ascii") == sidecar.read_text(
+        encoding="ascii")
+
+
+def test_before_you_run_names_smartscreen_and_av_quarantine():
+    """The sidecar's promise: readable BEFORE anything runs, carrying the
+    SmartScreen steps (More info -> Run anyway) and the antivirus-
+    quarantine guidance — including the honest force-recopy step (delete
+    .install-complete, re-run the exe), which re-running the exe alone
+    is NOT: the fast path would skip the mirror."""
+    text = (RELEASE / "templates" / "BEFORE-YOU-RUN.txt").read_text(
+        encoding="ascii")
+    assert "More info" in text and "Run anyway" in text
+    assert "quarantine" in text.lower()
+    assert ".install-complete" in text
+    assert "BEFORE anything runs" in text
 
 
 @pytest.mark.skipif(sys.platform != "win32"
