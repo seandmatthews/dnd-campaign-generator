@@ -100,6 +100,9 @@ if _node:
         ("studio-js-copy-claims", [_node,
                                    "studio/tests/js/test_copy_claims.cjs"]))
     FAST_SUITES.append(
+        ("studio-js-failure-honesty",
+         [_node, "studio/tests/js/test_failure_honesty.cjs"]))
+    FAST_SUITES.append(
         ("studio-js-campaign-select-order",
          [_node, "studio/tests/js/test_campaign_select_order.cjs"]))
     # Browser E2E (ticket 36): the first-DM pass against a real server +
@@ -123,7 +126,8 @@ else:
           "sessions-tab/banners/"
           "toast/design/design-restore/maps-seed/maps-burg-form/prep/"
           "api-timeout/"
-          "log-clean/copy-claims/campaign-select-order) and the "
+          "log-clean/copy-claims/failure-honesty/campaign-select-order) "
+          "and the "
           "studio-e2e suites (first_dm + second_evening)")
 
 # The integration tier: real engines behind studio/engines.py's wrappers.

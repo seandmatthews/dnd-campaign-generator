@@ -308,6 +308,7 @@
           '</section>' +
           '<section class="panel ssn-review"><h4 class="panel-title">Suggested changes</h4>' +
             '<div class="ssn-extract-failure"></div>' +
+            '<div class="section-error-slot"></div>' +
             '<div class="ssn-cards">' +
               (cards ||
                 (draft
@@ -339,6 +340,12 @@
     const lastFailure = extractFailures.get(
       (S.state.campaign || '') + '/' + sid);
     if (lastFailure && failBox) failBox.appendChild(S.errorPanel(lastFailure));
+
+    // the durable failed-run note (ticket 63, the maps/world pattern):
+    // the client-remembered failure above dies with the page — the jobs
+    // snapshot's last_finished record survives navigation and reloads
+    S.wireSectionError(panel.querySelector('.section-error-slot'),
+      'session-extract', 'extract run');
 
     panel.querySelector('.ssn-back').addEventListener('click', () => S.showTab('sessions'));
 
@@ -388,19 +395,25 @@
       }
     });
 
-    // extract (explicit, metered)
+    // extract (explicit, metered). One in-flight guard: repeated clicks
+    // each spent a provider call while the first was still running
+    // (ticket 63) — the disable gates the whole confirm-plus-run.
     panel.querySelector('.ssn-extract').addEventListener('click', async () => {
+      const btn = panel.querySelector('.ssn-extract');
+      if (btn.disabled) return;
+      btn.disabled = true;
       const ok = await S.confirmRun(
         'Extraction asks the configured model once to map the notes onto ' +
         'suggestions. It spends provider credits (at most two completion ' +
         'attempts, retries metered). The result is a DRAFT — nothing is ' +
         'applied without your review.');
-      if (!ok) return;
+      if (!ok) { btn.disabled = false; return; }
       const failKey = (S.state.campaign || '') + '/' + sid;
       try {
         const r = await S.api(camp() + 'sessions/' + encodeURIComponent(sid) +
           '/extract', { method: 'POST', body: { confirm: true } });
-        S.toast('Extracting — watch the job log on the Simulation tab.', 'ok');
+        S.toast('Extracting — the queue strip under the header shows it ' +
+          'running.', 'ok');
         // pollJob resolves with the job's RESULT itself (already unwrapped)
         const result = await S.pollJob(r.job_id);
         extractFailures.delete(failKey);
@@ -411,6 +424,7 @@
         extractFailures.set(failKey, err);
         if (failBox) { failBox.innerHTML = ''; failBox.appendChild(S.errorPanel(err)); }
         errBox.textContent = (err && err.error) || 'Extraction failed.';
+        btn.disabled = false; // a failed extract can be retried
       }
     });
 
@@ -590,13 +604,18 @@
     });
 
     const errBox = panel.querySelector('.proposal-error');
+    // in-flight disable: a double-click on Save used to fire two POSTs and
+    // create two sessions (ticket 63) — one guard around the whole submit
     panel.querySelector('.ssn-new-btn').addEventListener('click', async () => {
+      const btn = panel.querySelector('.ssn-new-btn');
+      if (btn.disabled) return;
       const title = panel.querySelector('.ssn-new-title').value.trim();
       const notes = panel.querySelector('.ssn-new-notes').value;
       if (!title || !notes.trim()) {
         errBox.textContent = 'A session needs a title and notes — even rough ones.';
         return;
       }
+      btn.disabled = true;
       try {
         const r = await S.api(camp() + 'sessions', {
           method: 'POST', body: { title: title, notes: notes }
@@ -606,6 +625,7 @@
         S.showTab('sessions');
       } catch (err) {
         errBox.textContent = (err && err.error) || 'Could not save the session.';
+        btn.disabled = false; // a failed save can be retried
       }
     });
   }

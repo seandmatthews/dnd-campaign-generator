@@ -199,6 +199,40 @@ def test_last_finished_carries_the_newest_job_per_kind(
         "last_finished"]["map-city"]["status"] == "done"
 
 
+def test_last_finished_shape_serves_the_sim_and_session_tabs(
+        tmp_spine_root, client):
+    """Ticket 63: the Sim tab's week/forecast/goal-review panels and the
+    session detail's extract note render their durable failed-run error
+    from `last_finished[kind]`, exactly as the Maps tab does. The payload
+    shape they read — status "error" plus a non-empty `error` string —
+    must hold for those job kinds, not only the map ones."""
+    def boom(log):
+        raise RuntimeError("the ledger could not be read: state.yaml "
+                           "parse failed at line 4")
+
+    kinds = ("sim-week", "forecast", "goal-review", "session-extract")
+    for kind in kinds:
+        jobs.submit(kind, boom, campaign="testvale")
+        assert jobs.wait_all(timeout=10.0)
+
+    lf = client.get("/api/campaign/testvale/jobs").json()["last_finished"]
+    for kind in kinds:
+        rec = lf[kind]
+        # the exact fields S.renderSectionError branches on and prints
+        assert rec["status"] == "error"
+        assert rec["error"] and "parse failed" in rec["error"]
+        assert rec["kind"] == kind
+
+    # a later finished run of the kind clears the note — the shape must
+    # carry the non-error status the renderer checks for
+    jobs.submit("sim-week", lambda log: {"proposal_id": "p-1"},
+                campaign="testvale")
+    assert jobs.wait_all(timeout=10.0)
+    lf = client.get("/api/campaign/testvale/jobs").json()["last_finished"]
+    assert lf["sim-week"]["status"] == "done"
+    assert lf["forecast"]["status"] == "error"  # the others stay put
+
+
 def test_last_finished_orders_by_finish_not_submit(tmp_spine_root, client):
     """A job CANCELLED while queued was submitted after an older job but
     finished before it — "newest finished" must follow the finish (the

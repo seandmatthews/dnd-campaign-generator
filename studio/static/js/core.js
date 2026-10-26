@@ -93,7 +93,20 @@
         const b = banner.querySelector('.queue-cancel');
         b.disabled = true;
         b.textContent = 'Cancelling…';
-        Studio.cancelJob(job.id).catch(() => {});
+        // A refused cancel (409: the job left the queue and is running or
+        // finished) used to be swallowed — the button stuck at
+        // "Cancelling…", the refusal was invisible, and the job spent to
+        // completion looking cancelled (ticket 63). On a refusal the
+        // button comes back and the toast says nothing was cancelled; on
+        // success the poll's cancelled rejection delivers the quiet note.
+        Studio.cancelJob(job.id).catch((err) => {
+          b.disabled = false;
+          b.textContent = 'Cancel';
+          toast('Cancel refused' +
+            (err && err.error ? ': ' + err.error : '') +
+            ' — nothing was cancelled and the job runs to completion.',
+            'error');
+        });
       });
       o.errBox.appendChild(banner);
     };
@@ -253,14 +266,34 @@
             job = await api('/api/jobs/' + encodeURIComponent(id));
             failures = 0;
           } catch (err) {
-            // a gone job (404/410: restart wiped the in-memory registry) is
-            // final; a transient hiccup gets a few more ticks
-            if (err && (err.status === 404 || err.status === 410)) throw err;
+            // a gone job (404/410) is final, and the honest story is worse
+            // than "unknown job": job records live in the server's memory,
+            // so a mid-watch 404 means a restart wiped the registry — the
+            // run died with the server, the spend already happened, and no
+            // reopen can recover the result (ticket 63; the bare server
+            // detail never said so). A transient hiccup gets more ticks.
+            if (err && (err.status === 404 || err.status === 410)) {
+              throw {
+                status: err.status,
+                error: 'The studio server no longer knows this job (' +
+                  (err.error || 'unknown job') + '). Job records live in ' +
+                  'the server\u2019s memory, so this means a restart wiped ' +
+                  'the registry: the run died with the server, the spend ' +
+                  'already happened, and the result is unrecoverable. ' +
+                  'Re-run when the server is back.'
+              };
+            }
             failures += 1;
             if (failures > 15) {
+              // "it may still finish" was a guess stated as comfort: from
+              // here the outcome is simply unknown, and if the server is
+              // down the record went with it (ticket 63)
               throw { status: 0, error: 'Lost contact with the studio server '
-                + 'while waiting for the job — it may still finish; reopen '
-                + 'this tab later to see the result' };
+                + 'while waiting for the job — the watch has given up, and '
+                + 'whether the job finished is unknown from here. If the '
+                + 'server restarted, its in-memory job record went with it '
+                + 'and the spend is lost. Reopen this tab and check the '
+                + 'queue strip before spending on a retry.' };
             }
             return;
           }
@@ -809,6 +842,20 @@
       '</div>'
     );
   }
+
+  /* The fetch half of the failed-run surface (ticket 63, sim/sessions
+     joining the maps/world pattern): read the campaign-jobs snapshot's
+     last_finished record for ONE job kind and render it through
+     renderSectionError. Advisory: the jobs read failing never blocks the
+     panel it decorates. */
+  Studio.wireSectionError = function (slot, kind, what) {
+    if (!slot) return;
+    api(campUrl('/jobs')).then((snap) => {
+      if (!slot.isConnected) return;
+      Studio.renderSectionError(slot, snap && snap.last_finished &&
+        snap.last_finished[kind], what);
+    }).catch(() => {});
+  };
 
   /* ---------- help modal (header ? button) ---------- */
 

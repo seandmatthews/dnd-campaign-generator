@@ -1099,6 +1099,7 @@
           '<span><strong>Auto-accept</strong> — apply the proposed goal updates the moment they stage ' +
           '(error-level findings leave the proposal pending instead). Default is off.</span>' +
         '</label>' +
+        '<div class="section-error-slot"></div>' +
         '<pre class="log-tail hidden goals-log"></pre>' +
         '<div class="goals-error"></div>' +
       '</section>'
@@ -1107,6 +1108,10 @@
     const logBox = card.querySelector('.goals-log');
     const errBox = card.querySelector('.goals-error');
     const autoChk = card.querySelector('.goal-auto-accept');
+    // the durable failed-run note (ticket 63): a goal review that failed
+    // out of sight stays visible, from the jobs snapshot's last_finished
+    S.wireSectionError(card.querySelector('.section-error-slot'),
+      'goal-review', 'goal review');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const auto = autoChk && autoChk.checked;
@@ -1171,6 +1176,7 @@
             'per projected week — and one week of engine time: ' +
             S.DURATIONS.band(2) + ' for a 2-week forecast, roster-dependent.</span>' +
         '</div>' +
+        '<div class="section-error-slot"></div>' +
         '<pre class="log-tail hidden forecast-log"></pre>' +
         '<div class="forecast-run-error"></div>' +
       '</section>'
@@ -1179,6 +1185,9 @@
     const weeksSel = card.querySelector('.forecast-weeks');
     const logBox = card.querySelector('.forecast-log');
     const errBox = card.querySelector('.forecast-run-error');
+    // the durable failed-run note (ticket 63): same pattern as the week
+    S.wireSectionError(card.querySelector('.section-error-slot'),
+      'forecast', 'forecast run');
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const n = parseInt(weeksSel.value, 10) || 2;
@@ -2161,6 +2170,7 @@
           'Auto-accept: the proposal is accepted the moment it stages — no chronicle review, no discard step. ' +
           'The engine still refuses invalid candidates and git keeps the undo. Default is off; reading the chronicle is the point.</span>' +
         '</label>' +
+        '<div class="section-error-slot"></div>' +
         '<pre class="log-tail hidden run-log"></pre>' +
         '<div class="run-error"></div>' +
       '</section>'
@@ -2169,6 +2179,12 @@
     const runLog = runPanel.querySelector('.run-log');
     const runErr = runPanel.querySelector('.run-error');
     const autoChk = runPanel.querySelector('.week-auto-accept');
+    // the durable failed-run note (ticket 63, the maps/world pattern): a
+    // week that failed while the DM was in another window used to leave a
+    // normal-looking tab with a live Propose button — the campaign-jobs
+    // snapshot's last_finished record remembers it across navigation.
+    S.wireSectionError(runPanel.querySelector('.section-error-slot'),
+      'sim-week', 'week run');
     runBtn.addEventListener('click', async () => {
       if (runBtn.disabled) return;
       const auto = autoChk && autoChk.checked;
