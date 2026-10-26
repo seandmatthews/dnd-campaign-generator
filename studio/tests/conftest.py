@@ -116,3 +116,23 @@ def tiny_fmg_dump(seed="42"):
                           "state": 1, "port": True, "capital": True}],
         },
     }
+
+
+def poison_plain_write(monkeypatch, name_part=None):
+    """(ticket 64) Patch pathlib.Path.write_text to write HALF the text and
+    then die — the mid-write crash that leaves a truncated file behind
+    when canon is written with plain write_text. spine.write_text_atomic
+    never passes through Path.write_text (mkstemp + os.replace), so a
+    write routed through it survives intact: a test asserting the FULL
+    file after a call under this poison pins the atomic routing.
+    name_part narrows the poison to matching filenames — a full job also
+    writes files through the engine fakes, which must keep working."""
+    real = Path.write_text
+
+    def half_then_die(self, text, *a, **k):
+        if name_part is None or name_part in self.name:
+            real(self, text[: len(text) // 2], *a, **k)
+            raise RuntimeError("simulated crash mid-write")
+        return real(self, text, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", half_then_die)

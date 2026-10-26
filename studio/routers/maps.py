@@ -31,7 +31,10 @@ Generation jobs are campaign MUTATIONS: each goes through the campaign's
 FIFO job queue (routers/common.submit_campaign_job — 202 with a queue
 position while another mutating job runs, ticket 02) and commits a canon
 snapshot on success ("campaign/<name>: generate world / map city / map
-site ...").
+site ..."). A map destination that already holds a DIFFERENT request (a
+name or kind that slugifies onto the existing artifacts) refuses with
+409 before anything is queued (ticket 64); the same request verbatim is
+the documented regenerate-overwrite case.
 """
 
 import hashlib
@@ -67,8 +70,10 @@ MAPPING_LOCK = threading.Lock()
 
 _SEED_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SITE_KINDS = ("dungeon", "cave", "camp")
-# characters a scene directory (engine home, Windows) cannot carry
-_BAD_SITE_NAME = re.compile(r'[<>:"/\\|?*]')
+# characters a scene directory (engine home, Windows) cannot carry, plus
+# the control-char class every spine validator carries (NUL breaks
+# path.resolve; the rest never belongs in a name) — ticket 64
+_BAD_SITE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 class CityBody(BaseModel):
@@ -362,8 +367,104 @@ def _companion_note(dest: Path, slug: str, front: dict, body: str) -> Path:
     text = (f"---\n{meta}\n---\n\n{body.strip()}\n" if meta
             else f"{body.strip()}\n")
     path = dest / f"{slug}.md"
-    path.write_text(text, encoding="utf-8")
+    # atomic like every canon write (ticket 64): a crash mid-write must not
+    # leave a truncated note for the next snapshot to commit under an
+    # unrelated message
+    spine.write_text_atomic(path, text)
     return path
+
+
+# ------------------------------------------------ ticket 64: slug collisions
+#
+# Two distinct names that slugify identically ("Drowned Crypt" vs "drowned
+# crypt") share one maps/<kind>/<slug>/ destination — the second job used
+# to silently replace the first's artifacts. The review batch refuses the
+# same class with a 409 (_claim_page_target); the map jobs now do too,
+# keyed on a DIFFERING request: re-submitting the same request verbatim is
+# the existing regenerate-overwrite case (the companion note and
+# params.yaml say regeneration replaces; hand edits do not survive) and
+# passes with no --force.
+
+def _note_frontmatter(dest: Path, slug: str) -> dict | None:
+    """A companion note's frontmatter, or None when absent or unreadable —
+    read-only, best effort (a broken hand edit must never 500 the guard)."""
+    try:
+        text = (dest / f"{slug}.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.startswith("---"):
+        return None
+    try:
+        doc = yaml.safe_load(text.split("---", 2)[1])
+    except yaml.YAMLError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _recorded_map_identity(dest: Path, slug: str) -> tuple[str | None,
+                                                           str | None]:
+    """What an existing maps/<kind>/<slug>/ destination says it holds:
+    (name, kind) from params.yaml — engine-written for cities, studio-
+    written for sites — falling back to the companion note's frontmatter
+    (which carries `burg` for cities, `name` for sites). (None, None) when
+    nothing readable is there: a crashed job's leftover or a hand-made
+    folder."""
+    name = kind = None
+    try:
+        p = dest / "params.yaml"
+        doc = yaml.safe_load(p.read_text(encoding="utf-8")) \
+            if p.is_file() else None
+    except (yaml.YAMLError, OSError, UnicodeDecodeError):
+        doc = None
+    if isinstance(doc, dict):
+        if isinstance(doc.get("name"), str) and doc["name"].strip():
+            name = doc["name"].strip()
+        if isinstance(doc.get("kind"), str) and doc["kind"].strip():
+            kind = doc["kind"].strip()
+    if name is None:
+        front = _note_frontmatter(dest, slug)
+        if front:
+            v = front.get("name") or front.get("burg")
+            if isinstance(v, str) and v.strip():
+                name = v.strip()
+    return name, kind
+
+
+def _refuse_map_collision(dest: Path, slug: str, wanted_name: str,
+                          wanted_kind: str | None, kind_dir: str) -> None:
+    """409 at submit time when the destination exists and THIS request
+    differs from what it already holds (the ruling the ticket took: refuse
+    on a differing request, no version suffix, no --force). The name
+    compares verbatim — 'Drowned Crypt' and 'drowned crypt' are two names
+    for one folder, exactly the pair the ticket names. The kind compares
+    only when both sides know it (cities pass None; a site re-generated as
+    a different kind is a different request into the same artifacts)."""
+    if not dest.is_dir():
+        return
+    have_name, have_kind = _recorded_map_identity(dest, slug)
+    if have_name == wanted_name and (have_kind is None or wanted_kind is None
+                                     or have_kind == wanted_kind):
+        return  # the same request again — regeneration, not a collision
+    if have_name is None:
+        detail = (f"maps/{kind_dir}/{slug}/ already exists but its "
+                  "artifacts record no readable name (a leftover from a "
+                  "crashed job, or a hand-made folder) — generating "
+                  f"{wanted_name!r} there would silently replace them. "
+                  "Remove or rename the existing folder first; nothing "
+                  "was queued.")
+    elif have_name == wanted_name:
+        detail = (f"maps/{kind_dir}/{slug}/ already holds a "
+                  f"{have_kind or 'different-kind'} named {have_name!r} — "
+                  f"this job would generate a {wanted_kind} into the same "
+                  "folder and silently replace it. Remove or rename the "
+                  "existing folder first; nothing was queued.")
+    else:
+        detail = (f"maps/{kind_dir}/{slug}/ already holds {have_name!r} — "
+                  f"{wanted_name!r} slugifies to the same destination, and "
+                  "generating it would silently replace the existing "
+                  "artifacts. Rename one of the two (or remove the "
+                  "existing folder to regenerate it); nothing was queued.")
+    raise HTTPException(status_code=409, detail=detail)
 
 
 def ensure_site_slugs(name: str):
@@ -500,6 +601,15 @@ def post_city(name: str, body: CityBody):
     except spine.CampaignError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    # ticket 64: the destination is the generated file's stem — normally
+    # the burg name's slug — so a second city whose name slugifies
+    # identically would land on the first's artifacts. Refuse a differing
+    # request for the expected destination; the job re-checks with the
+    # REAL stem below.
+    expected_slug = spine.slugify(burg_name)
+    _refuse_map_collision(d / "maps" / "cities" / expected_slug,
+                          expected_slug, burg_name, None, "cities")
+
     def job(log):
         out = Path(tempfile.mkdtemp(prefix="studio-city-"))
         try:
@@ -523,6 +633,19 @@ def post_city(name: str, body: CityBody):
             # ![[embed]] named after "12" would reference nothing
             slug = spine.slugify(svg.stem)
             dest = d / "maps" / "cities" / slug
+            # ticket 64: re-check with the REAL stem — the submit guard ran
+            # on the expected slug, but a job queued ahead (or an engine
+            # stem that differs) must still not silently replace a
+            # different city's artifacts. Same city again = regeneration,
+            # the documented overwrite.
+            if dest.is_dir():
+                have, _ = _recorded_map_identity(dest, slug)
+                if have != burg_name:
+                    raise RuntimeError(
+                        f"maps/cities/{slug}/ already holds "
+                        f"{have or 'an unreadable artifact set'} — refusing "
+                        f"to replace it with {burg_name!r}; remove or "
+                        "rename the existing folder")
             for p in outputs:
                 engines.copy_file(p, dest / p.name)
                 log(f"copied {p.name} -> maps/cities/{slug}/")
@@ -730,9 +853,10 @@ def post_world(name: str, body: WorldBody):
             # message — the seed alone never distinguished two differently
             # steered worlds.
             fingerprint = _options_fingerprint(fmg_options)
-            (world / "options.yaml").write_text(yaml.safe_dump(
+            # the replayable steering record is canon too — atomic (ticket 64)
+            spine.write_text_atomic(world / "options.yaml", yaml.safe_dump(
                 {"seed": seed, "options": client_options or {}},
-                sort_keys=False, allow_unicode=True), encoding="utf-8")
+                sort_keys=False, allow_unicode=True))
             log(f"options recorded -> world/options.yaml "
                 f"(fingerprint {fingerprint})")
 
@@ -794,7 +918,8 @@ def post_site(name: str, body: SiteBody):
     if _BAD_SITE_NAME.search(site_name):
         raise HTTPException(
             status_code=422,
-            detail='name must not contain any of <>:"/\\|?*')
+            detail='name must not contain any of <>:"/\\|?* '
+                   "(or control characters)")
     hostile = spine.windows_hostile_stem(site_name)
     if hostile:
         raise HTTPException(status_code=422, detail=hostile)
@@ -805,6 +930,12 @@ def post_site(name: str, body: SiteBody):
     seed = (body.seed or "").strip() or str(
         zlib.crc32(spine.slugify(site_name).encode("utf-8")) % 10_000_000)
     slug = spine.slugify(site_name)
+    # ticket 64: 'Drowned Crypt' vs 'drowned crypt' slugify to one
+    # maps/sites/<slug>/ — the second job used to replace the first's
+    # artifacts silently. Refuse a differing request (name or kind); the
+    # same request verbatim is the documented regenerate case.
+    _refuse_map_collision(d / "maps" / "sites" / slug, slug, site_name,
+                          kind, "sites")
     place = _place_link(body.place)
     if place:
         try:
@@ -891,13 +1022,14 @@ def post_site(name: str, body: SiteBody):
                 log(f"copied {p.name} -> maps/sites/{slug}/")
             engines.copy_file(uvtt, dest / uvtt.name)
             log(f"copied {uvtt.name} -> maps/sites/{slug}/")
-        # provenance beside the artifact set, as cities do
-        (dest / "params.yaml").write_text(yaml.safe_dump(
+        # provenance beside the artifact set, as cities do — atomic like
+        # every canon write (ticket 64)
+        spine.write_text_atomic(dest / "params.yaml", yaml.safe_dump(
             {"name": site_name, "kind": kind, "seed": seed,
              "generator": f"battlemap.py gen-{kind} + render + rasterize + wrap",
              "generated": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
              "place_id": (body.place_id or "").strip() or None},
-            sort_keys=False, allow_unicode=True), encoding="utf-8")
+            sort_keys=False, allow_unicode=True))
 
         note = _companion_note(
             dest, slug,

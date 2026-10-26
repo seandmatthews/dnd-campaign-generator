@@ -1,6 +1,7 @@
 # 64 — Canon write discipline: non-atomic artifacts, slug collisions, export gaps
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/64-canon-write-discipline
+2026-10-25 (fast tier green; review pending)
 **Priority:** P3 — three classes of quiet wrongness in canon writes,
 all with cheap fixes
 **Area:** `studio/routers/maps.py`, `studio/worldmap.py`,
@@ -42,11 +43,26 @@ export; `.obsidian/` in EXCLUDES; timestamped obsidian backups
 
 ## Acceptance criteria
 
-- [ ] All four canon writes go through `write_text_atomic` — studio
+- [x] All four canon writes go through `write_text_atomic` — studio
       tests monkeypatching a mid-write crash assert no truncated file
-- [ ] A slug-colliding map job refuses with 409 naming the existing
+      (`test_world_map.py::test_render_dump_svg_write_is_atomic`,
+      `::test_embedded_svg_write_is_atomic`,
+      `test_maps.py::test_companion_note_write_is_atomic`,
+      `test_sites_job.py::test_site_params_write_is_atomic`; the world
+      job's `world/options.yaml` write — same class, found while there —
+      converted too)
+- [x] A slug-colliding map job refuses with 409 naming the existing
       artifact — studio test
-- [ ] Export refuses an unvalidated campaign arg and excludes
+      (`test_sites_job.py::test_site_slug_collision_refuses_409`,
+      `test_maps.py::test_city_slug_collision_refuses_409`,
+      `test_maps.py::test_city_unidentifiable_destination_refuses_409`;
+      ruling taken: refuse on a differing request, same request verbatim
+      stays the regenerate-overwrite case)
+- [x] Export refuses an unvalidated campaign arg and excludes
       `.obsidian/` — extends `test_export.py`
-- [ ] Two obsidian registrations leave both backups recoverable —
+      (`test_export_refuses_an_unvalidated_campaign_argument`, the pin
+      test, and the manifest exclusions test)
+- [x] Two obsidian registrations leave both backups recoverable —
       extends `test_obsidian_vault.py`
+      (`test_two_registrations_leave_both_generations_recoverable`,
+      `test_backup_generations_prune_to_three`)
