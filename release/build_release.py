@@ -25,12 +25,13 @@ machine needs nothing installed:
 Usage:  python release/build_release.py [--no-key] [--no-smoke]
                                         [--campaigns] [--keep-work]
 Downloads (CPython embeddable, node, 7-Zip tools) are cached in
-release/cache; staging and payload live in release/work. Stdlib only.
+release/cache and verified against the SHA256s recorded in CHECKSUMS —
+before a cached copy is reused and after every fresh fetch (ticket 67).
+Staging and payload live in release/work. Stdlib only.
 """
 
 import argparse
 import hashlib
-import json
 import os
 import re
 import shutil
@@ -52,7 +53,12 @@ TEMPLATES = RELEASE / "templates"
 
 PY_VERSION = "3.11.9"
 PY_MM = "311"
-NODE_MAJOR = 24
+# Node pinned to an EXACT release (ticket 67): the builder used to take
+# the live index's latest v24 on every build, so two exes with adjacent
+# stamps could carry different node runtimes with no trace. v24.22.1 was
+# the current v24 LTS when the pin landed (the FMG tool tree wants >= 24);
+# bump by hand, pin and CHECKSUMS entry together.
+NODE_VERSION = "v24.22.1"
 # The avtt companion (dcg-avtt-integration) rides in the bundle at a
 # pinned RELEASE TAG — tags only, never main (the companion's own ticket
 # 07 discipline; design doc §4). The stamp records the tag + its
@@ -61,7 +67,39 @@ COMPANION_REPO = "https://github.com/seandmatthews/dcg-avtt-integration.git"
 COMPANION_TAG = "v0.2.0"  # the 0.7.1 Atlas pin bump (companion ticket 08) —
 # v0.1.0 pinned Atlas 0.6.0 and would warn + _inbox-degrade on the table
 # machine's 0.7.1 vaults; ticket 53's lean was always to follow this bump
+# The tag's COMMIT, resolved 2026-10-25 with `git ls-remote` (ticket 67):
+# "tags are immutable" was wrong — a tag is a movable pointer server-side,
+# so the pin is the commit SHA and the tag rides beside it for humans.
+# The build cache must sit at the SHA and every fresh clone verifies
+# against it; a moved tag fails the build instead of silently shipping a
+# different companion.
+COMPANION_REV = "2669dd233ad434e2c7c5dadc133ac9b1e1838ef2"  # tag v0.2.0
 COMPANION_CACHE = CACHE / "avtt-integration"
+# Download pins (ticket 67): SHA256 of the exact bytes each cached
+# artifact must carry, verified before the cache is reused and after
+# every fetch. A mismatch deletes the cached copy, re-downloads ONCE, and
+# fails the build if the bytes still disagree — a corrupted cache was
+# trusted forever before, and a rotated upstream (get-pip.py rotates with
+# pip releases) must force a re-pin, not float past silently. Resolved
+# from the live sources 2026-10-25; bump pin+hash together. The LZMA SDK
+# package carries no pin: it is a fallback chain of three versions (first
+# one that answers), and only the 7zSD.sfx extracted FROM it ships.
+CHECKSUMS = {
+    f"python-{PY_VERSION}-embed.zip": (
+        f"https://www.python.org/ftp/python/{PY_VERSION}/"
+        f"python-{PY_VERSION}-embed-amd64.zip",
+        "009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b"),
+    "get-pip.py": (
+        "https://bootstrap.pypa.io/get-pip.py",
+        "f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424"),
+    f"node-{NODE_VERSION}-win-x64.zip": (
+        f"https://nodejs.org/dist/{NODE_VERSION}/"
+        f"node-{NODE_VERSION}-win-x64.zip",
+        "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5"),
+    "7zr.exe": (
+        "https://www.7-zip.org/a/7zr.exe",
+        "256feca8e274e5da655e2a284fabafd9f554365eb164862089dacd4e8276d282"),
+}
 # The installer SFX module (bin/7zSD.sfx) ships in the LZMA SDK package
 # (the -extra packages stopped carrying it). Igor's minimal module extracts
 # to a TEMP dir and runs RunProgram from there — hence the install.cmd step.
@@ -93,38 +131,52 @@ def run(cmd, **kw):
     return r
 
 
-def download(url, dest):
+def _sha256(p):
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def download(url, dest, sha256=None):
+    """Fetch url into dest (the cache). With a recorded sha256 the bytes
+    are verified before REUSE and after every fetch (ticket 67 — a
+    corrupted cached zip used to be trusted forever): one mismatch
+    deletes the copy and re-downloads once; a second mismatch fails the
+    build, because the pin is the provenance. Without a pin (the LZMA
+    SDK fallback chain) the old trust-the-cache behavior stands."""
     if dest.exists():
-        print(f"  cached  {dest.name} ({dest.stat().st_size // 1024} KB)", flush=True)
-        return dest
+        if sha256 is not None and _sha256(dest) != sha256:
+            print(f"  cached  {dest.name} failed its sha256 check — "
+                  "re-downloading once", flush=True)
+            dest.unlink()
+        else:
+            print(f"  cached  {dest.name} ({dest.stat().st_size // 1024} KB)", flush=True)
+            return dest
     print(f"  fetch   {url}", flush=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 campaign-studio-build"})
     with urllib.request.urlopen(req, timeout=180) as r, open(tmp, "wb") as f:
         shutil.copyfileobj(r, f)
+    if sha256 is not None and _sha256(tmp) != sha256:
+        tmp.unlink(missing_ok=True)
+        raise SystemExit(f"FAILED: the fresh {dest.name} does not match its "
+                         "recorded sha256 — upstream rotated or the "
+                         "download is broken; re-pin CHECKSUMS or retry")
     tmp.rename(dest)
     return dest
 
 
 def ensure_cache():
-    step("cache: python embeddable, get-pip, node, 7-zip sfx tools")
-    download(f"https://www.python.org/ftp/python/{PY_VERSION}/"
-             f"python-{PY_VERSION}-embed-amd64.zip", CACHE / f"python-{PY_VERSION}-embed.zip")
-    download("https://bootstrap.pypa.io/get-pip.py", CACHE / "get-pip.py")
+    step("cache: python embeddable, get-pip, node, 7-zip sfx tools "
+         "(every artifact sha256-verified against CHECKSUMS, ticket 67)")
+    for name, (url, sha) in CHECKSUMS.items():
+        download(url, CACHE / name, sha)
 
-    req = urllib.request.Request("https://nodejs.org/dist/index.json",
-                                 headers={"User-Agent": "Mozilla/5.0 campaign-studio-build"})
-    index = json.loads(urllib.request.urlopen(req, timeout=60).read())
-    node_ver = next(e["version"] for e in index if e["version"].startswith(f"v{NODE_MAJOR}."))
-    download(f"https://nodejs.org/dist/{node_ver}/node-{node_ver}-win-x64.zip",
-             CACHE / f"node-{node_ver}-win-x64.zip")
-
-    sevenzr = download("https://www.7-zip.org/a/7zr.exe", CACHE / "7zr.exe")
+    sevenzr = CACHE / "7zr.exe"
     sdk = None
     for ver in LZMA_SDK_VERSIONS:
         try:
-            sdk = download(f"https://www.7-zip.org/a/lzma{ver}.7z", CACHE / f"lzma{ver}.7z")
+            sdk = download(f"https://www.7-zip.org/a/lzma{ver}.7z",
+                           CACHE / f"lzma{ver}.7z")
             break
         except OSError:
             continue
@@ -138,7 +190,7 @@ def ensure_cache():
         raise SystemExit("7zSD.sfx did not extract from the LZMA SDK package")
     if sfx.read_bytes().find(b"asInvoker") < 0:
         embed_as_invoker_manifest(sfx)
-    return sevenzr, sfx, CACHE / f"node-{node_ver}-win-x64.zip"
+    return sevenzr, sfx, CACHE / f"node-{NODE_VERSION}-win-x64.zip"
 
 
 def _clear_readonly_and_retry(func, path, exc_info):
@@ -157,19 +209,19 @@ def copy_tree(src, dst, extra_ignores=()):
 def ensure_companion():
     """The pinned companion clone in the build cache: cloned once, reused
     while the cache sits exactly at the pin, re-cloned when the pin moves
-    (tags are immutable, so a stale cache is safe to replace) — same
-    hygiene as setup-tools.py: an existing dir that is not a git clone is
-    refused, never clobbered."""
-    step(f"companion: dcg-avtt-integration pinned at {COMPANION_TAG}")
+    (the pin is COMPANION_REV, the tag's commit — a tag is a movable
+    pointer server-side, so the old "tags are immutable" was wrong and the
+    local `rev-parse <tag>^{commit}` check could bless a moved tag it had
+    itself cloned; ticket 67) — same hygiene as setup-tools.py: an
+    existing dir that is not a git clone is refused, never clobbered."""
+    step(f"companion: dcg-avtt-integration pinned at {COMPANION_TAG} "
+         f"({COMPANION_REV[:12]})")
     if COMPANION_CACHE.exists():
         head = subprocess.run(["git", "-C", str(COMPANION_CACHE),
                                "rev-parse", "HEAD"],
                               capture_output=True, text=True)
-        pinned = subprocess.run(["git", "-C", str(COMPANION_CACHE),
-                                 "rev-parse", f"{COMPANION_TAG}^{{commit}}"],
-                                capture_output=True, text=True)
-        if head.returncode == 0 and pinned.returncode == 0 \
-                and head.stdout.strip() == pinned.stdout.strip():
+        if head.returncode == 0 \
+                and head.stdout.strip().lower() == COMPANION_REV:
             print("  cache is at the pin")
             return
         if head.returncode != 0:
@@ -180,6 +232,18 @@ def ensure_companion():
         shutil.rmtree(COMPANION_CACHE, onerror=_clear_readonly_and_retry)
     run(["git", "clone", "--depth", "1", "--branch", COMPANION_TAG,
          COMPANION_REPO, str(COMPANION_CACHE)])
+    # ticket 67: the tag named here may have moved server-side between the
+    # pin and this clone — HEAD must be the pinned commit, by SHA.
+    head = subprocess.run(["git", "-C", str(COMPANION_CACHE),
+                           "rev-parse", "HEAD"],
+                          capture_output=True, text=True)
+    if head.returncode != 0 \
+            or head.stdout.strip().lower() != COMPANION_REV:
+        raise SystemExit(
+            f"FAILED: the fresh companion clone is at "
+            f"{head.stdout.strip() or '<unresolvable>'}, not the pinned "
+            f"commit {COMPANION_REV} (tag {COMPANION_TAG}) — the tag moved "
+            "server-side; re-pin COMPANION_REV from the tag you trust")
 
 
 def build_stage(node_zip):

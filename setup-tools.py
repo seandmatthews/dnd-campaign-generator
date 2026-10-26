@@ -3,14 +3,16 @@
 
   python setup-tools.py           clone + patch + install + build whatever is missing
   python setup-tools.py --check   report only; exit 1 if anything is missing
-                                  (a pnpm-shaped tree, a drifted FMG tag or a
+                                  (a pnpm-shaped tree, a drifted FMG pin or a
                                   stale vendor patch counts as missing)
   python setup-tools.py --force   re-apply patches and re-run installs
 
 What it sets up (all under dnd-mapping/tools/, which is git-ignored):
 
   Fantasy-Map-Generator   upstream https://github.com/Azgaar/Fantasy-Map-Generator
-                          at tag 1.153.1, plus OUR custom headless runner from
+                          at tag 1.153.1, pinned by commit SHA (FMG_REV — a
+                          tag is movable server-side, the SHA is not), plus
+                          OUR custom headless runner from
                           dnd-mapping/vendor-patches/fmg/ (the clone is not
                           vanilla without those files)
   settlemaker             upstream https://github.com/barrulus/settlemaker at
@@ -53,6 +55,13 @@ PATCHES = ROOT / "dnd-mapping" / "vendor-patches" / "fmg"
 
 FMG_URL = "https://github.com/Azgaar/Fantasy-Map-Generator.git"
 FMG_TAG = "1.153.1"
+# The tag's commit, resolved 2026-10-25 with `git ls-remote` (ticket 67):
+# a tag is a movable pointer server-side, so the pin is the commit SHA and
+# the tag is recorded beside it only for humans. Clones and existing
+# checkouts verify against the SHA — a moved tag fails setup or --check
+# instead of silently shipping a different world. (The stronger pattern
+# settlemaker already used.)
+FMG_REV = "bf32ac7230654361eedfc25985b4ecc3473889b1"  # tag 1.153.1
 SETTLE_URL = "https://github.com/barrulus/settlemaker"
 SETTLE_REV = "d5cf3590cf59e1d382110d25a6910f12507299e2"  # v3.0.1
 SHARP_PIN = "0.33.5"  # must match PINNED_SHARP in dnd-mapping/scripts/render-scene-png.mjs
@@ -138,6 +147,10 @@ def fmg_apply():
     if not (d / ".git").is_dir():
         print(f"  cloning Fantasy-Map-Generator at tag {FMG_TAG} ...")
         _run(["git", "clone", "--depth", "1", "--branch", FMG_TAG, FMG_URL, str(d)])
+        # ticket 67: the tag is the human handle, the SHA is the pin — a
+        # tag moved server-side between the pin and this clone must stop
+        # setup, not seed a new machine with a different world.
+        _verify_pinned_commit(d)
     _apply_headless_patch(d)
     (d / "src" / "generators").mkdir(parents=True, exist_ok=True)
     shutil.copy2(PATCHES / "headless-export.test.ts",
@@ -172,6 +185,53 @@ def _apply_headless_patch(d):
 # same-seed regeneration silently becomes a different world), and a fix
 # committed to vendor-patches/ that never re-applied to an existing clone
 # (different machines, different worlds, same claimed version).
+#
+# Ticket 67 hardened the pin itself: FMG_TAG names a tag, and a tag is a
+# movable pointer server-side — a checkout cloned after a tag move sits at
+# a different commit that `git describe --tags` still reports by the
+# tag's own name. So the pin is FMG_REV (the commit SHA) and the checkout
+# must match it by SHA, not by version string.
+
+def _checkout_commit(d):
+    """HEAD's commit SHA for the clone at `d`: `git rev-parse HEAD`, falling
+    back to reading .git/HEAD directly (a --branch tag clone sits on a
+    detached HEAD whose file IS the raw SHA) so the check still works when
+    git is missing or hung. None when neither resolves — including any tree
+    whose .git does not even hold a HEAD file (the fake trees of the unit
+    tests, or a leftover empty .git dir): running git there would let it
+    walk up and answer with some OUTER repository's HEAD. List-form args,
+    never a shell."""
+    if not (d / ".git" / "HEAD").exists():
+        return None
+    try:
+        proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(d),
+                              capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0 and proc.stdout.strip():
+            return proc.stdout.strip().lower()
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # no git / hung git: the raw HEAD file answers
+    try:
+        txt = (d / ".git" / "HEAD").read_text(encoding="utf-8").strip().lower()
+    except (OSError, ValueError):
+        return None
+    hexdigits = "0123456789abcdef"
+    if len(txt) == 40 and all(c in hexdigits for c in txt):
+        return txt
+    return None
+
+
+def _verify_pinned_commit(d):
+    """A fresh clone must sit at FMG_REV — the tag it was asked for may
+    have moved server-side (ticket 67). sys.exit(1) with the evidence when
+    it does not; returns the verified SHA."""
+    head = _checkout_commit(d)
+    if head != FMG_REV:
+        print(f"  !! the clone is at commit {head or '<unresolvable>'}, "
+              f"not the pinned commit {FMG_REV} (tag {FMG_TAG}) — the tag "
+              "moved server-side; re-pin FMG_REV from the tag you trust")
+        sys.exit(1)
+    return head
+
 
 def _checkout_version(d):
     """The FMG checkout's live version: `git describe --tags` (exact at the
@@ -215,14 +275,26 @@ def fmg_runner_stale(d):
 
 
 def fmg_freshness(d):
-    """(tag_drift_or_None, runner_stale) for an FMG tree whose marker files
-    all say done. --check refuses on either finding; setup mode re-copies a
-    stale runner (offline-safe, it is our own file) and prints the tag fix
-    (a re-pin may need the network — advised, never attempted)."""
+    """(drift_or_None, runner_stale) for an FMG tree whose marker files
+    all say done. The pin is the commit SHA (ticket 67): a checkout can
+    sit at a tag literally named FMG_TAG while being a different world
+    (cloned after a server-side tag move), so HEAD must equal FMG_REV —
+    the version compare only answers when no commit can be resolved
+    (no usable git, no raw-SHA HEAD file). --check refuses on either
+    finding; setup mode re-copies a stale runner (offline-safe, it is our
+    own file) and prints the drift fix (a re-pin may need the network —
+    advised, never attempted)."""
     live = _checkout_version(d)
-    drift = None if live == FMG_TAG else (
-        f"checkout is at {live or 'an unresolvable version'}, not the "
-        f"pinned tag {FMG_TAG}")
+    head = _checkout_commit(d)
+    if head is not None:
+        drift = None if head == FMG_REV else (
+            f"checkout is at commit {head[:12]} "
+            f"({live or 'an unresolvable version'}), not the pinned "
+            f"commit {FMG_REV[:12]} (tag {FMG_TAG})")
+    else:
+        drift = None if live == FMG_TAG else (
+            f"checkout is at {live or 'an unresolvable version'}, not the "
+            f"pinned tag {FMG_TAG}")
     return drift, fmg_runner_stale(d)
 
 
@@ -314,8 +386,9 @@ def main(argv=None):
             if args.check:
                 if tag_drift:
                     print(f"[stale]    {label}: {tag_drift}")
-                    print(f"           fix: git -C {tree} fetch --tags "
-                          f"&& git -C {tree} checkout {FMG_TAG}")
+                    print(f"           fix: git -C {tree} fetch origin "
+                          f"&& git -C {tree} checkout {FMG_REV} "
+                          f"(tag {FMG_TAG})")
                 if stale_runner:
                     print(f"[stale]    {label}: the installed headless "
                           "runner does not match the tracked vendor-patches "
@@ -336,8 +409,9 @@ def main(argv=None):
                           "re-copied from vendor-patches/")
                 if tag_drift:
                     print(f"[drift]    {label}: {tag_drift}")
-                    print(f"           fix: git -C {tree} fetch --tags "
-                          f"&& git -C {tree} checkout {FMG_TAG}")
+                    print(f"           fix: git -C {tree} fetch origin "
+                          f"&& git -C {tree} checkout {FMG_REV} "
+                          f"(tag {FMG_TAG})")
             print(f"[done]     {label}")
             if args.force and not args.check:
                 apply_step()

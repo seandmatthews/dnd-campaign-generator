@@ -14,7 +14,10 @@ without them and the fakes stand in.
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
+
+import pytest
 
 PARENT = Path(__file__).resolve().parents[2]  # repo root (or worktree)
 
@@ -167,3 +170,121 @@ def test_setup_mode_re_copies_a_stale_runner(tmp_path, monkeypatch, capsys):
                / "headless-export.test.ts")
     assert installed.read_bytes() == tracked.read_bytes()
     assert not setup_tools.fmg_runner_stale(fmg)
+
+
+# ----------------------------------- ticket 67: the pin is the commit SHA
+#
+# A tag is a movable pointer server-side: a checkout cloned after a tag
+# move sits at a different commit that `git describe --tags` still
+# reports by the tag's own name. The pin is therefore FMG_REV — the
+# tag's commit — and a tree counts as fresh only when its HEAD matches
+# by SHA, not when the version string agrees.
+
+def _git_init_at_commit(repo):
+    """A real one-commit git repo at `repo` (git is a setup-tools
+    prerequisite); returns its HEAD SHA."""
+    repo.mkdir(parents=True, exist_ok=True)
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True)
+
+    git("init", "-q")
+    (repo / "file.txt").write_text("x", encoding="utf-8")
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@example",
+        "commit", "-q", "-m", "a commit")
+    return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                          check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def test_fmg_pin_is_a_commit_sha_with_the_tag_recorded_beside_it():
+    """The pin must be a full commit SHA (a tag can move server-side);
+    the human-readable tag stays recorded beside it."""
+    assert len(setup_tools.FMG_REV) == 40
+    assert all(c in "0123456789abcdef" for c in setup_tools.FMG_REV)
+    assert setup_tools.FMG_TAG == "1.153.1"
+
+
+def test_checkout_commit_resolves_a_real_clone(tmp_path):
+    d = tmp_path / "clone"
+    head = _git_init_at_commit(d)
+    assert setup_tools._checkout_commit(d) == head
+
+
+def test_checkout_commit_reads_the_head_file_when_git_cannot(tmp_path):
+    """The offline fallback: a --branch tag clone sits on a detached HEAD
+    whose .git/HEAD IS the raw SHA, so the check works even with git
+    missing or hung. (An empty .git dir — the fake trees above — resolves
+    to None and never lets git answer from some OUTER repository.)"""
+    d = tmp_path / "clone"
+    (d / ".git").mkdir(parents=True)
+    (d / ".git" / "HEAD").write_text(
+        setup_tools.FMG_REV + "\n", encoding="ascii")
+    assert setup_tools._checkout_commit(d) == setup_tools.FMG_REV
+    (d / ".git" / "HEAD").write_text("ref: refs/heads/main\n",
+                                     encoding="ascii")
+    assert setup_tools._checkout_commit(d) is None  # a ref needs git
+    assert setup_tools._checkout_commit(tmp_path / "empty-git-dir") is None
+
+
+def test_check_catches_a_moved_tag_even_when_describe_agrees(
+        tmp_path, monkeypatch, capsys):
+    """The ticket-67 finding: every marker green, `git describe --tags`
+    reporting exactly the pinned TAG name — and HEAD still not the pinned
+    commit (the checkout was cloned after the tag moved server-side).
+    The version-string check is green here by construction; the SHA
+    check must refuse it."""
+    tools = _fake_tools(tmp_path)
+    fmg = tools / "Fantasy-Map-Generator"
+    head = _git_init_at_commit(fmg)
+    subprocess.run(["git", "-C", str(fmg), "tag", setup_tools.FMG_TAG],
+                   check=True, capture_output=True)
+    # the old check's blind spot, exactly: describe answers the tag name
+    assert setup_tools._checkout_version(fmg) == setup_tools.FMG_TAG
+    assert head != setup_tools.FMG_REV
+    monkeypatch.setattr(setup_tools, "TOOLS", tools)
+    assert setup_tools.main(["--check"]) == 1
+    out = capsys.readouterr().out
+    assert "[stale]" in out
+    assert head[:12] in out and setup_tools.FMG_REV[:12] in out
+
+
+def test_check_passes_when_head_is_the_pinned_commit(
+        tmp_path, monkeypatch, capsys):
+    """The SHA decides: a tree whose version fallback would scream
+    (package.json says 9.9.9) is fresh when HEAD equals FMG_REV."""
+    tools = _fake_tools(tmp_path)
+    (tools / "Fantasy-Map-Generator" / "package.json").write_text(
+        json.dumps({"version": "9.9.9"}), encoding="utf-8")
+    monkeypatch.setattr(setup_tools, "TOOLS", tools)
+    monkeypatch.setattr(setup_tools, "_checkout_commit",
+                        lambda d: setup_tools.FMG_REV)
+    assert setup_tools.main(["--check"]) == 0
+    assert "[done]" in capsys.readouterr().out
+
+
+def test_fresh_clone_refuses_a_moved_tag(tmp_path, monkeypatch, capsys):
+    """The clone leg verifies HEAD against the SHA pin before anything
+    else runs: a tag moved server-side between the pin and the clone
+    must stop setup, not seed a new machine with a different world."""
+    monkeypatch.setattr(setup_tools, "TOOLS", tmp_path)
+    target = setup_tools.TOOLS / "Fantasy-Map-Generator"
+
+    def fake_run(cmd, *a, **k):
+        if cmd[0] == "git" and cmd[1] == "clone":
+            # what upstream serves after a tag move: a DIFFERENT commit,
+            # tagged with the pin's own name
+            head = _git_init_at_commit(target)
+            subprocess.run(["git", "-C", str(target), "tag",
+                            setup_tools.FMG_TAG], check=True,
+                           capture_output=True)
+            assert head != setup_tools.FMG_REV
+        return 0, ""
+
+    monkeypatch.setattr(setup_tools, "_run", fake_run)
+    with pytest.raises(SystemExit):
+        setup_tools.fmg_apply()
+    out = capsys.readouterr().out
+    assert setup_tools.FMG_REV in out and "moved server-side" in out
