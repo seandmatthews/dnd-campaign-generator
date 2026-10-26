@@ -584,8 +584,12 @@ def verify_sfx(exe, port):
     install root proves robocopy /MIR never ran again)."""
     step(f"verify: run the setup exe (install pass) on port {port}")
     tdir = WORK / "sfx-test"
-    shutil.rmtree(tdir, ignore_errors=True)
-    tdir.mkdir(parents=True)
+    # a locked leftover must not kill the verify: rmtree with the
+    # read-only-clearing onerror (a parked launch.cmd or a read-only git
+    # pack survives ignore_errors), then exist_ok on the mkdir — seen for
+    # real when a previous session's sfx-test outlived its process
+    shutil.rmtree(tdir, onerror=_clear_readonly_and_retry)
+    tdir.mkdir(parents=True, exist_ok=True)
     exe2 = tdir / exe.name
     shutil.copy2(exe, exe2)
     # CS_TEST_HOME lets the verify run against an install home with a
