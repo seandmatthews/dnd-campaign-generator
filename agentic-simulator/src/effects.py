@@ -84,6 +84,7 @@ from store import (
     STATE_FILE,
     faction_map,
     places_of,
+    read_shape_errors,
     split_argv,
 )
 from store import load_state as _store_load
@@ -406,6 +407,13 @@ def apply_session_record(record, state):
     dates to the clock) and every stored event carries it — never None."""
     if not isinstance(record, dict):
         return 0, 0, ["session record is not a mapping"]
+    # the state-shape gate (ticket 65): a factions list with a null entry
+    # used to TypeError the id-set build below, and a scalar
+    # meta.applied_effects became its CHARACTERS in the dedup set —
+    # "applied 0 effect(s)", exit 0. Refuse naming the shape instead.
+    shape = read_shape_errors(state)
+    if shape:
+        return 0, 0, shape
     source = str(record.get("source") or "").strip() or None
     errors = []
     # the record's week, resolved once and used everywhere: a digit string

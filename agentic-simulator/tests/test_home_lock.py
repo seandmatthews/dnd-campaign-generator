@@ -313,6 +313,46 @@ def test_concurrent_save_state_writers_all_land_whole():
     print("  save_state: concurrent writers land whole documents  OK")
 
 
+def test_boot_sweeps_a_killed_run_s_tmp_litter():
+    """AC (ticket 65): the watchdog's taskkill /F never runs save_state's
+    cleanup finally, so a hard-killed run's state.yaml.XXXX.tmp survived
+    in the engine home forever. Every standalone CLI's boot claims the
+    home lock — and the claim now sweeps the litter first (only while the
+    lock is held, so a live writer's in-flight tmp is unreachable). The
+    state itself and its .bak (boot-restore) must survive the sweep."""
+    tmp = tempfile.mkdtemp()
+    home = pathlib.Path(tmp)
+    _relocate_home_lock(home)
+    (home / "state.yaml").write_text("meta: {clock: {week: 4}}\n",
+                                     encoding="utf-8")
+    (home / "state.yaml.bak").write_text("meta: {clock: {week: 3}}\n",
+                                         encoding="utf-8")
+    (home / "state.yaml.k3jt91x0.tmp").write_text("half a write",
+                                                  encoding="utf-8")
+    (home / "state.yaml.zzzzzzzz.tmp").write_text("another kill",
+                                                  encoding="utf-8")
+    try:
+        with standalone_home_lock():
+            left = sorted(p.name for p in home.iterdir())
+            assert "state.yaml.k3jt91x0.tmp" not in left and \
+                "state.yaml.zzzzzzzz.tmp" not in left, \
+                f"the boot sweep must clear the tmp litter: {left}"
+            assert "state.yaml" in left and "state.yaml.bak" in left, \
+                f"the sweep takes only tmps: {left}"
+            # a live-looking tmp dropped while the lock is held survives
+            # until the NEXT boot (the sweep ran before this write)
+            (home / "state.yaml.newkill1.tmp").write_text("x",
+                                                          encoding="utf-8")
+        assert (home / "state.yaml.newkill1.tmp").exists(), \
+            "the sweep runs once per boot, not continuously"
+        with standalone_home_lock():  # the next boot takes it
+            assert not (home / "state.yaml.newkill1.tmp").exists(), \
+                "the next boot sweeps what the last run left"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("  boot: a killed run's tmp litter is swept under the lock  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_standalone_lock_refuses_a_second_holder,
@@ -324,6 +364,7 @@ if __name__ == "__main__":
         test_ingest_apply_refuses_on_the_home_state,
         test_save_state_tmp_names_are_per_writer_unique,
         test_concurrent_save_state_writers_all_land_whole,
+        test_boot_sweeps_a_killed_run_s_tmp_litter,
     ]:
         fn()
     print("all home-lock tests passed")

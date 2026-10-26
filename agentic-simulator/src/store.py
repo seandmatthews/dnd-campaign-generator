@@ -116,6 +116,10 @@ def standalone_home_lock():
                 "or forecast job, or another standalone run) holds "
                 f"{HOME_LOCK_FILE}. Wait for it to finish before running "
                 "standalone against the shared engine home.")
+        # boot sweep: a previous run the watchdog SIGKILL'd leaves its
+        # save_state tmp behind forever (the finally never runs) — clear it
+        # now that THIS run alone owns the home (sweep_tmp_litter)
+        sweep_tmp_litter(HOME_LOCK_FILE.parent)
         try:
             yield
         finally:
@@ -479,6 +483,71 @@ def validate_state(state):
                         f"rumor {i + 1} transmission {j + 1} is missing "
                         f"{', '.join(tmiss)} — views.heard reads every "
                         "field")
+
+
+def read_shape_errors(state):
+    """The hand-edit shapes the read/apply paths cannot serve, each named
+    for refusal (empty list == servable). validate_state gates --live;
+    the other CLIs serve hand-edited states the gate never saw, and three
+    shapes used to fail ugly there: a factions list carrying a non-mapping
+    entry (a hand-written null) TypeError'd the id-set builds, a scalar
+    meta.applied_effects became its CHARACTERS in the effect-dedup set and
+    silently skipped every one-character effect id while printing "applied
+    0 effect(s)", and a missing meta.clock.week crashed the views, tick's
+    inspect print, and ingest with a raw KeyError one tolerant line after
+    the read began. The session/inspect paths refuse with these errors
+    instead — this is the one shared gate (effects, tick, views, ingest)."""
+    if not isinstance(state, dict):
+        return ["state is not a mapping (empty or corrupt file?)"]
+    errs = []
+    meta = state.get("meta")
+    clock = meta.get("clock") if isinstance(meta, dict) else None
+    week = clock.get("week") if isinstance(clock, dict) else None
+    if not isinstance(week, int) or isinstance(week, bool):
+        errs.append(f"meta.clock.week is {week!r}, not an integer — every "
+                    "read and applied record dates from the clock; set "
+                    "meta: {clock: {week: N}} in the state file")
+    factions = state.get("factions")
+    if factions is not None:
+        if not isinstance(factions, list):
+            errs.append(f"factions must be a list of faction mappings, "
+                        f"not {factions!r}")
+        else:
+            for i, f in enumerate(factions):
+                if not isinstance(f, dict) or \
+                        not str(f.get("id") or "").strip():
+                    errs.append(
+                        f"factions entry {i + 1} carries no usable id "
+                        f"({f!r}) — every faction needs at least a "
+                        "non-empty id")
+    applied = meta.get("applied_effects") if isinstance(meta, dict) else None
+    if applied is not None and not isinstance(applied, list):
+        errs.append(
+            f"meta.applied_effects must be a list of applied effect ids, "
+            f"not {applied!r} — read as a scalar it becomes its characters "
+            "in the dedup set and silently skips effects; make it a list "
+            "or delete the key")
+    return errs
+
+
+def sweep_tmp_litter(home=None):
+    """Delete the state.yaml.*.tmp writes a hard-killed run leaves in the
+    engine home: save_state's cleanup is a finally, and the watchdog's
+    taskkill /F never runs it, so the litter survived every boot. Swept at
+    boot UNDER the home lock — a live writer's in-flight tmp can never be
+    swept, because every writer runs under that lock (studio children ride
+    their parent's claim, and the studio's copy_state_in sweeps before
+    each run). Best-effort: a file that will not delete waits for the next
+    boot instead of failing the run. Returns the names swept."""
+    root = pathlib.Path(home) if home is not None else ENGINE_HOME
+    swept = []
+    for p in root.glob("state.yaml.*.tmp"):
+        try:
+            p.unlink()
+            swept.append(p.name)
+        except OSError:
+            pass
+    return swept
 
 
 def save_state(state, path=None):

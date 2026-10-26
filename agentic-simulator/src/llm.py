@@ -423,6 +423,12 @@ def _validate(p, actor_id, actual_resources=None, known_ids=(), districts=(),
               project_ctx=None):
     if not isinstance(p, dict) or not isinstance(p.get("action"), str) or not p["action"].strip():
         raise ValueError("missing or empty 'action'")
+    # the action id is the ENGINE's provenance mint (tick.py setdefaults
+    # act-<week>-<actor> once per proposal, and projects.apply_week joins
+    # same-week events on it): a model-supplied one rode validation
+    # unchecked and could mis-join the project ledger — drop it so the
+    # engine mints its own downstream (ticket 65)
+    p.pop("action_id", None)
     # Project intent first: it may rewrite target (sabotage resolves to the
     # owner); the check below validates the final target.
     _validate_project_action(p, actor_id, project_ctx or

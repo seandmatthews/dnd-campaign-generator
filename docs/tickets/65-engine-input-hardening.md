@@ -44,12 +44,12 @@ loudly, naming the shape); digit-tolerant `_HOLDS_RE` (or restrict
 
 ## Acceptance criteria
 
-- [ ] `factions: [null]` and scalar `applied_effects` → loud named
+- [x] `factions: [null]` and scalar `applied_effects` → loud named
       refusal, never a silent no-op — engine tests
-- [ ] Missing `meta.clock` → named refusal on the read paths — engine
+- [x] Missing `meta.clock` → named refusal on the read paths — engine
       test
-- [ ] Digit-bearing faction ids parse in HOLDS lines — studio test
-- [ ] A model-supplied `action_id` never reaches the ledger — engine
+- [x] Digit-bearing faction ids parse in HOLDS lines — studio test
+- [x] A model-supplied `action_id` never reaches the ledger — engine
       test on `_validate`
-- [ ] A SIGKILL'd run's temp files are swept at next boot — engine
+- [x] A SIGKILL'd run's temp files are swept at next boot — engine
       test

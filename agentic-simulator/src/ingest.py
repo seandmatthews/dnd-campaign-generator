@@ -32,7 +32,8 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import effects
-from store import ENGINE_HOME, STATE_FILE, place_words, split_argv
+from store import ENGINE_HOME, STATE_FILE, place_words, read_shape_errors, \
+    split_argv
 from store import load_state as _store_load
 from store import save_state as _store_save
 from store import HomeLockBusy, standalone_home_lock
@@ -146,6 +147,14 @@ def apply(pending, state_path):
     ('8') is the int it names, a missing week dates the record to the
     clock, anything else non-integer is refused with a finding."""
     state = load_state(state_path)
+    # the apply hard-indexes the clock for the staleness warning before
+    # anything else: a hand-edited state without meta.clock.week KeyError'd
+    # here — refuse naming the shape instead (ticket 65)
+    shape = read_shape_errors(state)
+    if shape:
+        for e in shape:
+            print(f"refusing: {e}", file=sys.stderr)
+        return -1
     week = pending.get("week")
     # a quoted 'week: "8"' dates the file the same as a bare 8: coerce once
     # so the staleness warning compares ints (it used to fire on a week
@@ -228,6 +237,14 @@ def main(argv):
     if not isinstance(state, dict):
         print(f"error: {state_path} is empty or not a mapping",
               file=sys.stderr)
+        return 1
+    # extract dates every proposal the clock's week + 1: a hand-edited
+    # state without meta.clock.week KeyError'd here — refuse naming the
+    # shape instead (ticket 65)
+    shape = read_shape_errors(state)
+    if shape:
+        for e in shape:
+            print(f"refusing: {e}", file=sys.stderr)
         return 1
     proposals = extract(notes_text, state)
     if not proposals:

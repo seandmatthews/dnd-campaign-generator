@@ -523,7 +523,12 @@ def run_contract() -> dict:
             "queue_deadline_s": engine_lock_deadline_s()}
 
 
-_HOLDS_RE = re.compile(r"^\s*([a-z_]+)\s+HOLDS\b")
+# tick.py prints HOLDS lines as `f"{faction['id']:<14} HOLDS (...)"` and
+# the studio mints ids with slugify().replace('-', '_') — which KEEPS
+# digits ("Sect 9" -> sect_9) — so the id charset is [a-z0-9_]; the old
+# [a-z_] pattern dropped every digit-bearing faction out of the held
+# reporting entirely (ticket 65).
+_HOLDS_RE = re.compile(r"^\s*([a-z0-9_]+)\s+HOLDS\b")
 
 
 def run_record_identity(engine: str) -> dict:
@@ -594,10 +599,13 @@ def engine_lock_logged(log, why: str, holder=None):
 def copy_state_in(name: str) -> None:
     """D4: campaign state.yaml -> engine home, backing up the engine's
     previous state first, and clearing the home's run OUTPUTS (chronicles,
-    replay trails). The home is shared scratch: leftover projection files
-    from a discarded forecast would collide with a real week's chronicle
-    names (-2 suffixes) and a stale replay/week-N.yaml would ride into an
-    unrelated campaign's proposal as its replay trail."""
+    replay trails, a killed run's orphaned state.yaml.*.tmp writes). The
+    home is shared scratch: leftover projection files from a discarded
+    forecast would collide with a real week's chronicle names (-2
+    suffixes) and a stale replay/week-N.yaml would ride into an unrelated
+    campaign's proposal as its replay trail. The copy-in itself is atomic
+    (copy_file_atomic) like every other state write: a crash mid-copy
+    must not truncate the home's state.yaml."""
     src = spine.campaign_dir(name) / "simulation" / "state.yaml"
     engine_state = engine_state_path()
     engine_state.parent.mkdir(parents=True, exist_ok=True)
@@ -611,7 +619,15 @@ def copy_state_in(name: str) -> None:
     if replay_dir.is_dir():
         for p in replay_dir.glob("week-*.yaml"):
             p.unlink(missing_ok=True)
-    copy_file(src, engine_state)
+    # a hard-killed run's save_state tmp never ran its cleanup finally (the
+    # watchdog's own taskkill /F skips it) — sweep the litter beside the
+    # other run outputs (ticket 65; the engine's standalone boot sweeps
+    # its own copy of the home the same way). state.yaml.bak does not
+    # match the *.tmp pattern and survives, as does an in-flight atomic
+    # copy's fixed-name tmp ("state.yaml.tmp" has no second dot).
+    for p in engine_state.parent.glob("state.yaml.*.tmp"):
+        p.unlink(missing_ok=True)
+    copy_file_atomic(src, engine_state)
 
 
 # ------------------------------------------------- interrupted-week flag

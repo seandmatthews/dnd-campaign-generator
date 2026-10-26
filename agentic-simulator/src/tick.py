@@ -71,8 +71,8 @@ import scheduler
 import consistency
 import resolve
 from store import (DATA_ROOT, RESOURCE_LEVELS, STATE_FILE, HomeLockBusy,
-                   load_state, save_state, standalone_home_lock,
-                   validate_state, places_of)
+                   load_state, read_shape_errors, save_state,
+                   standalone_home_lock, validate_state, places_of)
 from why import why_cli
 from views import faction_view
 
@@ -629,6 +629,15 @@ def main(argv=None):
             print("usage: python src/tick.py --why <week> <actor>", file=sys.stderr)
             return 2
         sys.exit(why_cli(state, ["tick.py", argv[i + 1], argv[i + 2]]))
+    # the inspect read (the header line prints the clock, every faction
+    # view dates from it): a hand-edited state without meta.clock.week
+    # printed "week ?" for one line and then KeyError'd inside
+    # faction_view — refuse naming the shape instead (ticket 65)
+    shape = read_shape_errors(state)
+    if shape:
+        for e in shape:
+            print(f"error: {e}", file=sys.stderr)
+        return 2
     clock = (state.get("meta") or {}).get("clock") or {}
     print(f"{place_label_of(state)}, week {clock.get('week', '?')} "
           f"({clock.get('season') or 'unknown season'})")

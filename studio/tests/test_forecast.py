@@ -260,7 +260,9 @@ def test_copy_in_clears_engine_home_run_outputs(
     """The engine home's chronicle dir and replay trail are shared scratch:
     leftovers from a discarded forecast used to pollute real weeks' chronicle
     names (-2 suffixes) and a stale replay/week-N.yaml could ride into an
-    unrelated campaign's proposal."""
+    unrelated campaign's proposal. A hard-killed run's save_state tmp never
+    ran its cleanup finally either — copy_state_in sweeps that litter
+    beside the other run outputs (ticket 65)."""
     from engines import copy_state_in
     home = tmp_spine_root / "engine-home"
     monkeypatch.setattr(engines, "ENGINE_HOME", home)
@@ -274,8 +276,12 @@ def test_copy_in_clears_engine_home_run_outputs(
     (replay / "week-4.yaml").write_text("stale: true\n", encoding="utf-8")
     engines.ENGINE_HOME.mkdir(parents=True, exist_ok=True)
     engines.engine_state_path().write_text("old: true\n", encoding="utf-8")
+    (engines.ENGINE_HOME / "state.yaml.k3jt91x0.tmp").write_text(
+        "a killed run's half write\n", encoding="utf-8")
     copy_state_in("testvale")
     assert list(chron.glob("*.md")) == []
     assert list(replay.glob("week-*.yaml")) == []
+    assert list(home.glob("state.yaml.*.tmp")) == [], \
+        "a killed run's tmp litter is swept at copy-in"
     # the copy-in itself still works: canon state now lives in the home
     assert "clock" in engines.engine_state_path().read_text(encoding="utf-8")
