@@ -65,6 +65,25 @@ Traps and per-project notes:
   optional: this is a Windows-first app (junctions, MAX_PATH handling,
   WinError-32 log rotation are all Windows code paths).
 
+## Live full-flow verification (periodic, agent-initiated)
+
+The tiers above pin units and seams. Occasionally the whole flow this
+repo owns gets exercised end to end, live: boot the studio for real,
+create a throwaway campaign through the real endpoints, and walk the
+loop a GM walks — worldgen, maps, lore, a sim week on the real LLM,
+review → accept → canon, chronicle, export. This is agent-initiated:
+run one every few weeks of active work, and after any change that
+touched the run path (engines, publication, the review loop) — do not
+wait to be asked.
+
+The boundary is the seam ruling: the flow STOPS at canon. No Obsidian,
+no Atlas, no vault interaction of any kind — driving the table surface
+is `dcg-avtt-integration`'s e2e job (its AGENTS.md owns that half).
+
+Run it disposable: a scratch campaign (or `CAMPAIGN_DATA_ROOT` /
+`E2E_DATA_ROOT` pointed at a throwaway dir), torn down after; kill the
+studio and verify the ports are free when it ends (AGENTS.md).
+
 ## Review rules
 
 - The reviewer reports findings; it does not fix them in the same pass.
