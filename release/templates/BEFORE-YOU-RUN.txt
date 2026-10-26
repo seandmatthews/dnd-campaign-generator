@@ -1,0 +1,52 @@
+CAMPAIGN STUDIO - READ THIS FIRST
+=================================
+
+This file travels beside the installer exe on purpose: you can read it
+BEFORE anything runs. The fuller manual (README.txt) sits inside the
+app folder that the exe creates - which only exists after it runs.
+
+What double-clicking does
+-------------------------
+The exe unpacks the app to a temp folder, installs it under
+"Campaign Studio" in your user folder (no admin needed), starts it, and
+opens your browser at http://127.0.0.1:8765. You need 64-bit Windows 10
+or 11 and about 1.7 GB of free disk space - nothing else: Python, Node
+and every library are bundled, nothing is installed system-wide.
+
+"Windows protected your PC" (SmartScreen)
+-----------------------------------------
+The app is not sold through a store, so the exe is not code-signed, and
+Windows may show a blue warning screen on the first double-click:
+
+  1. Click "More info".
+  2. Click "Run anyway".
+
+That is the whole trick. It happens once per downloaded file.
+
+If your antivirus objects
+-------------------------
+The installer unpacks many program files at once (a Python runtime and
+a Node runtime), which some antivirus tools look at twice even though
+nothing here installs drivers or starts with Windows. If the exe is
+blocked, or files go missing right after an install:
+
+  1. Open your antivirus' protection history / quarantine and restore
+     anything it took from this exe or the "Campaign Studio" folder.
+  2. Add an exclusion for the "Campaign Studio" folder in your user
+     folder so it does not happen again.
+  3. Run the exe again. If the app still fails to start, open the
+     "Campaign Studio" folder in your user folder, delete the file
+     named ".install-complete", and run the exe once more - the
+     installer then re-copies every program file (your campaigns and
+     your settings are kept).
+
+Where your data lives
+---------------------
+Everything you create stays in the "campaign-data" folder inside the
+"Campaign Studio" folder in your user folder. The app runs entirely on
+your machine and talks only to your browser (and, for the AI features,
+to the AI provider configured in llm.env - see README.txt inside the
+app folder).
+
+Problems? Tell the person who gave you the exe the exe's file name (it
+names the exact build) and what you saw.

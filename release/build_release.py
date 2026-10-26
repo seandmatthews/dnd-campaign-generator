@@ -22,6 +22,11 @@ machine needs nothing installed:
                       it on this machine (repo llm.env, else the ZCode
                       provider config) — drop with --no-key
 
+Beside the exe the build stages BEFORE-YOU-RUN.txt (ticket 68): the
+SmartScreen and antivirus guidance, readable BEFORE the first
+double-click — README.txt has the same material but travels INSIDE the
+exe, where the friend cannot open it yet. Share both files.
+
 Usage:  python release/build_release.py [--no-key] [--no-smoke]
                                         [--campaigns] [--keep-work]
 Downloads (CPython embeddable, node, 7-Zip tools) are cached in
@@ -117,6 +122,21 @@ STAMP_FMT = "%Y%m%d%H%M%S"
 
 # Never copied into the bundle, at any depth (name-based, per copy call).
 IGNORE_BASE = [".git", ".venv", "__pycache__", "*.pyc", ".pytest_cache"]
+
+# The tracked templates build_stage copies INTO the payload — the files a
+# --sfx-only rebuild's cached payload.7z can silently predate (ticket 68):
+# the sfx iteration loop exists to iterate on exactly these, and a stale
+# cache turns the verify green over a payload that lacks the edit.
+TEMPLATE_NAMES = ["install.cmd", "launch.cmd", "export.cmd", "README.txt"]
+
+
+def stale_templates(payload):
+    """Tracked templates modified after the cached payload was packed —
+    the ones an --sfx-only rebuild would silently leave untested."""
+    packed = payload.stat().st_mtime
+    return [name for name in TEMPLATE_NAMES
+            if (TEMPLATES / name).is_file()
+            and (TEMPLATES / name).stat().st_mtime > packed]
 
 
 def step(msg):
@@ -549,6 +569,11 @@ def make_sfx(payload, sfx_module):
     exe = DIST / f"CampaignStudio-{bundle_version()}.exe"
     exe.write_bytes(sfx_module.read_bytes()
                     + config.encode("utf-8-sig") + payload.read_bytes())
+    # the friend-facing sidecar (ticket 68): the SmartScreen/AV guidance
+    # must reach the friend BEFORE the first double-click, and README.txt
+    # — which carries it today — travels inside the payload the exe
+    # extracts, i.e. inside the file the friend cannot open yet.
+    shutil.copy2(TEMPLATES / "BEFORE-YOU-RUN.txt", DIST / "BEFORE-YOU-RUN.txt")
     print(f"  {exe.name}: {exe.stat().st_size // (1024 * 1024)} MB")
     return exe
 
@@ -804,7 +829,9 @@ def main():
                     help="keep release/work (stage, payload, sfx test copy)")
     ap.add_argument("--sfx-only", action="store_true",
                     help="reuse release/work/payload.7z; redo only the sfx "
-                         "step + verification (for iterating on the sfx layer)")
+                         "step + verification (for iterating on the sfx "
+                         "layer); warns when tracked templates are newer "
+                         "than the cached payload")
     ARGS = ap.parse_args()
 
     CACHE.mkdir(parents=True, exist_ok=True)
@@ -814,6 +841,22 @@ def main():
         payload = WORK / "payload.7z"
         if not payload.exists():
             raise SystemExit("--sfx-only: release/work/payload.7z not found")
+        # the cached payload predates any template edited after it was
+        # packed — warn LOUDLY (ticket 68): the whole point of the sfx
+        # loop is iterating on these files, and the verify passes stay
+        # green over a payload that does not contain the edit.
+        stale = stale_templates(payload)
+        if stale:
+            print("!" * 66, flush=True)
+            print("WARNING: --sfx-only reuses the cached payload.7z, but "
+                  "these tracked")
+            print("templates are NEWER than it — this exe is built WITHOUT "
+                  "them, and")
+            print("its verify passes will not test them:")
+            for name in stale:
+                print(f"    {TEMPLATES / name}")
+            print("Run a full build (drop --sfx-only) to pick the edits up.")
+            print("!" * 66, flush=True)
     else:
         ensure_companion()
         build_stage(node_zip)
@@ -830,6 +873,10 @@ def main():
     print(f"  {exe}")
     print(f"  size: {exe.stat().st_size / (1024 * 1024):.0f} MB  "
           f"sha256: {h[:16]}…")
+    # the share message names BOTH files (ticket 68): the sidecar is the
+    # only thing that reaches the friend before the first double-click.
+    print(f"  share BOTH files: {exe.name} + BEFORE-YOU-RUN.txt (beside it "
+          "— the friend reads it before the first double-click)")
     if not ARGS.keep_work:
         shutil.rmtree(WORK, ignore_errors=True)
 

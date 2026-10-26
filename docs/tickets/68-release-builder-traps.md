@@ -1,6 +1,6 @@
 # 68 — Release builder + friend-docs traps
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/68-release-builder-traps
 **Priority:** P3 — small builder behaviors and friend-facing gaps the
 2026-10-23 review and the 57/58 landing left open
 **Area:** `release/build_release.py`, `release/templates/README.txt`,
@@ -38,12 +38,12 @@ LLM section.
 
 ## Acceptance criteria
 
-- [ ] `--sfx-only` with newer templates warns (or refuses) — builder
+- [x] `--sfx-only` with newer templates warns (or refuses) — builder
       unit test
-- [ ] Warm-cache offline build reaches the smoke stage — builder unit
+- [x] Warm-cache offline build reaches the smoke stage — builder unit
       test with the network call stubbed
-- [ ] The sidecar doc is staged beside the exe — extends
+- [x] The sidecar doc is staged beside the exe — extends
       `test_release_seams.py`
-- [ ] Doctor's tool-repair advice never names npm — studio test
-- [ ] Tutorial carries the prose-leaves-the-machine disclosure —
+- [x] Doctor's tool-repair advice never names npm — studio test
+- [x] Tutorial carries the prose-leaves-the-machine disclosure —
       directly checkable

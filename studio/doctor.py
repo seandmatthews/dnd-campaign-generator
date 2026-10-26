@@ -15,10 +15,13 @@ read-only without a key — generation does not).
 
 CLI:  python studio/doctor.py           human-readable
       python studio/doctor.py --json    the API shape
-      python studio/doctor.py --fix     PERFORM the safe repairs (repair
-                                        broken tool trees with npm install,
-                                        run the pip line); everything else
-                                        stays advice — assemble.py is never
+      python studio/doctor.py --fix     PERFORM the safe repairs (the pip
+                                        line; npm in a dev checkout's
+                                        broken tool trees — on a release
+                                        bundle the tool repair is
+                                        reinstall advice only, npm is not
+                                        bundled); everything else stays
+                                        advice — assemble.py is never
                                         auto-run (it writes canon)
       python studio/doctor.py --migrate-data-root
                                         ONE explicit migration (ticket 35):
@@ -253,8 +256,11 @@ def check_engines():
 def check_tool_trees():
     """The two third-party tool trees (git-ignored on purpose — setup-tools.py
     clones, patches, pins and builds them; optional: read-only studio use and
-    the fast test tier never need them)."""
+    the fast test tier never need them). On a release-bundle install the
+    repair advice is the bundle's own (reinstall/quarantine — BUNDLE_TOOL_ADVICE):
+    setup-tools.py is a repo-root script the bundle does not carry (ticket 68)."""
     out = []
+    bundle = is_bundle_install()
     for label, root, marker in (
         ("Fantasy-Map-Generator", FMG_DIR, Path("node_modules") / "vitest" / "vitest.mjs"),
         ("settlemaker", SETTLEMAKER_DIR, Path("dist") / "index.js"),
@@ -264,8 +270,9 @@ def check_tool_trees():
                        "ready" if present else
                        f"missing — {label}/ is not under dnd-mapping/tools/",
                        fix=None if present else
-                       "python setup-tools.py  (clones, patches, pins and "
-                       "builds both trees; needs network once)",
+                       (BUNDLE_TOOL_ADVICE if bundle else
+                        "python setup-tools.py  (clones, patches, pins and "
+                        "builds both trees; needs network once)"),
                        required=False))
     return out
 
@@ -876,12 +883,36 @@ MISSING_NPM_ADVICE = (
     "python studio/doctor.py --fix")
 
 
+def is_bundle_install():
+    """True on a release-bundle install (the friend's machine): the app
+    root carries launch.cmd and the bundled runtime beside studio/ — a
+    dev checkout has neither. The bundle ships its tool trees PREBUILT
+    and carries no npm (README.txt promises "nothing else"), so the
+    tool-tree repair there is the reinstall/quarantine path, never npm
+    (ticket 68)."""
+    return (PARENT / "launch.cmd").is_file() \
+        and (PARENT / "runtime").is_dir()
+
+
+BUNDLE_TOOL_ADVICE = (
+    "the release bundle ships these tool trees prebuilt — nothing to "
+    "install by hand. A broken tree almost always means your antivirus "
+    "quarantined a file: restore it from the antivirus' protection "
+    "history and add an exclusion for the Campaign Studio folder. If "
+    "files are still missing, force the installer to re-copy everything: "
+    "delete the '.install-complete' file in the Campaign Studio folder "
+    "and re-run the Campaign Studio exe (your campaigns and llm.env are "
+    "kept)")
+
+
 def plan_fixes(rep=None):
     """What --fix would do: a list of plans
     {name, why, cmd, cwd, env, do, advice} — do=True plans are safe to run
-    (the npm repair, the pip line); do=False plans are advice only, because
-    they write canon (assemble.py) or need something the doctor cannot
-    install (a missing python/node itself, an LLM key)."""
+    (the npm repair on a dev checkout, the pip line); do=False plans are
+    advice only, because they write canon (assemble.py), need something
+    the doctor cannot install (a missing python/node itself, an LLM key),
+    or are on a release bundle, where the tool repair is the
+    reinstall/quarantine advice and npm is not bundled (ticket 68)."""
     rep = rep or report()
     plans = []
     by_name = {c["name"]: c for c in rep["checks"]}
@@ -900,6 +931,19 @@ def plan_fixes(rep=None):
                                ("Fantasy-Map-Generator", FMG_DIR, fmg_ok)):
         ok, why = probe(root)
         if not ok:
+            if is_bundle_install():
+                # ticket 68: on a bundle install npm is NOT bundled (the
+                # payload carries node_modules prebuilt) — the old advice
+                # sent the friend to a tool the machine does not have,
+                # contradicting README.txt's "nothing else". The repair is
+                # the quarantine-restore / reinstall path, advice only.
+                plans.append({
+                    "name": f"tool repair: {label}",
+                    "why": why,
+                    "cmd": None, "cwd": None, "env": None, "do": False,
+                    "advice": BUNDLE_TOOL_ADVICE,
+                })
+                continue
             base = NPM_INSTALL_FMG if label == "Fantasy-Map-Generator" \
                 else NPM_INSTALL_CMD
             cmd = _npm_cmd(base[1:])
@@ -1005,9 +1049,11 @@ def main(argv=None):
                     help="print the API shape instead of the human report")
     ap.add_argument("--fix", action="store_true",
                     help="perform the safe repairs (npm install in broken "
-                         "tool trees, pip install -r studio/requirements.txt); "
-                         "everything else is printed as advice — assemble.py "
-                         "is never auto-run")
+                         "tool trees on a dev checkout, pip install -r "
+                         "studio/requirements.txt); on a release bundle the "
+                         "tool repair is reinstall advice only (npm is not "
+                         "bundled); everything else is printed as advice — "
+                         "assemble.py is never auto-run")
     ap.add_argument("--migrate-data-root", action="store_true",
                     help="move the legacy data dirs (campaigns/, the engine "
                          "home, chronicles, studio logs, map scratch) under "

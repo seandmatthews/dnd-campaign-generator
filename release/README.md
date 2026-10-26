@@ -8,9 +8,12 @@ python release/build_release.py
 
 → `release/dist/CampaignStudio-<version-stamp>.exe` (~155 MB — the full
 `VERSION` stamp is the filename, so every build ships under its own
-self-describing name and an old download is legible as old). Send that
-single file however you like (Google Drive, etc.); the friend
-double-clicks it.
+self-describing name and an old download is legible as old), plus a
+`BEFORE-YOU-RUN.txt` staged beside it — the SmartScreen/antivirus
+guidance the friend can read before the first double-click (the same
+material inside README.txt, which the friend cannot open until the exe
+has run). Send both files however you like (Google Drive, etc.); the
+friend double-clicks the exe.
 
 ## What the exe does on the friend's machine
 
@@ -51,6 +54,8 @@ Bundled, nothing installed on the target (64-bit Windows 10/11 only):
 - `--no-key` — ship without `llm.env` (LLM features then need a key)
 - `--no-smoke` — skip the boot + installer self-tests (not recommended)
 - `--sfx-only` — reuse `release/work/payload.7z`, redo only the SFX step
+  (warns loudly when a tracked template is newer than the cached payload —
+  the reuse would silently skip testing that edit)
 - `--keep-work` — keep the staging tree, payload, and installed test copy
 
 Downloads (CPython embeddable, get-pip, node, 7zr, LZMA SDK) are cached

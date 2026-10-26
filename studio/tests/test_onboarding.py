@@ -252,6 +252,19 @@ def test_tutorial_route_serves_the_real_file(client):
     assert body == disk
 
 
+def test_tutorial_discloses_prose_leaves_the_machine():
+    """Ticket 68: the tutorial's LLM section must say plainly that
+    campaign prose — lore, chronicles, session notes — is sent to the
+    LLM provider when those features run. Spend and key locality were
+    already disclosed; the prose leaving the machine was not."""
+    from conftest import STUDIO_DIR
+    disk = (STUDIO_DIR.parent / "docs" / "for-new-gms" / "TUTORIAL.md") \
+        .read_text(encoding="utf-8")
+    assert "session notes" in disk and "premise" in disk
+    assert "provider" in disk
+    assert "leaves your machine" in disk
+
+
 # ------------------------------------------------------- doctor quick mode
 
 def test_doctor_quick_skips_live_probe(client, monkeypatch):

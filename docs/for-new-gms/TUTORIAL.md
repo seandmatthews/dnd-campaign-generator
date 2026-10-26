@@ -12,6 +12,11 @@ what came back; every long step below states its expected duration before
 it starts. **Cost:** everything except two features is
 free and offline. Story generation and week simulation call an LLM and
 spend API credits — the app asks before every one of those.
+**Privacy, in one line:** those two features work by sending the text
+they operate on — your premise, the lore and chronicles being written,
+your session notes — to the LLM provider you configured; that prose
+leaves your machine, and everything else (campaign files, maps, your
+key) stays local.
 
 ---
 

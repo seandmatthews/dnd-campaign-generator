@@ -81,6 +81,27 @@ def test_fmg_probe(tmp_path):
     assert ok is True
 
 
+def test_tool_tree_check_advice_agrees_with_the_fix_plan(monkeypatch,
+                                                         tmp_path):
+    """The report's fix column follows the same rule as --fix (ticket 68):
+    on a bundle install a missing tool tree advises the reinstall/quarantine
+    path — never npm, and never the dev-only setup-tools.py script the
+    bundle does not carry; a dev checkout keeps the setup-tools advice."""
+    monkeypatch.setattr(doctor, "FMG_DIR", tmp_path / "fmg")
+    monkeypatch.setattr(doctor, "SETTLEMAKER_DIR", tmp_path / "settlemaker")
+
+    monkeypatch.setattr(doctor, "is_bundle_install", lambda: True)
+    for c in doctor.check_tool_trees():
+        assert c["ok"] is False
+        assert "npm" not in (c["fix"] or "").lower()
+        assert "setup-tools.py" not in c["fix"]
+        assert ".install-complete" in c["fix"]
+
+    monkeypatch.setattr(doctor, "is_bundle_install", lambda: False)
+    for c in doctor.check_tool_trees():
+        assert "setup-tools.py" in c["fix"]
+
+
 # -------------------------------------------------------------- plan_fixes
 
 
@@ -114,6 +135,41 @@ def test_plan_fixes_healthy_tools_plan_nothing(monkeypatch):
     _patch_all_probes(monkeypatch)
     plans = doctor.plan_fixes(_fake_report())
     assert not [p for p in plans if p["name"].startswith("npm install:")]
+
+
+def test_plan_fixes_on_a_bundle_install_names_the_reinstall_never_npm(
+        monkeypatch):
+    """Ticket 68: on a release-bundle install the tool repair must never
+    name npm — the bundle ships node_modules prebuilt and carries no npm
+    (README.txt promises "nothing else"), so the old advice sent the
+    friend to a tool the machine does not have. The repair is advice
+    only: the antivirus-quarantine restore + the force-recopy reinstall."""
+    _patch_all_probes(monkeypatch, settlemaker=False, fmg=False, npm=False)
+    monkeypatch.setattr(doctor, "is_bundle_install", lambda: True)
+    plans = doctor.plan_fixes(_fake_report())
+    repairs = [p for p in plans if p["name"].startswith("tool repair:")]
+    assert {p["name"] for p in repairs} == {
+        "tool repair: settlemaker", "tool repair: Fantasy-Map-Generator"}
+    for p in repairs:
+        assert p["do"] is False and p["cmd"] is None and p["cwd"] is None
+        assert "quarantine" in p["advice"].lower()
+        assert ".install-complete" in p["advice"], \
+            "the honest reinstall: same-exe reruns fast-path over the gap"
+    # nothing in ANY plan names npm — not the names, not the advice
+    for p in plans:
+        blob = " ".join([p["name"], p["why"], p.get("advice") or ""])
+        assert "npm" not in blob.lower(), blob
+
+
+def test_plan_fixes_on_a_dev_checkout_keeps_the_npm_repair(monkeypatch):
+    """The bundle branch must not eat the dev path: a checkout still gets
+    the do=True npm plans (setup-tools.py's repair, for the developer
+    machine that has npm)."""
+    _patch_all_probes(monkeypatch, settlemaker=False)
+    monkeypatch.setattr(doctor, "is_bundle_install", lambda: False)
+    plans = doctor.plan_fixes(_fake_report())
+    npm = [p for p in plans if p["name"] == "npm install: settlemaker"]
+    assert len(npm) == 1 and npm[0]["do"] is True
 
 
 def test_plan_fixes_without_npm_is_advice_only(monkeypatch):
