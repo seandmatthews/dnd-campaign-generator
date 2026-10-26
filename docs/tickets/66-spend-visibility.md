@@ -1,6 +1,7 @@
 # 66 — Spend visibility: the two priciest flows record zero usage
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/66-spend-visibility
+2026-10-26 (fast tier green; review pending)
 **Priority:** P3 — the most expensive operations are the least
 metered ones
 **Area:** `studio/engines.py`, `studio/llm_client.py`,
@@ -32,8 +33,21 @@ homes.
 
 ## Acceptance criteria
 
-- [ ] Week + forecast run records carry calls/tokens — studio tests
+- [x] Week + forecast run records carry calls/tokens — studio tests
       on the run-record shape (faked engines carry a canned tally)
-- [ ] llm.env.example documents the knob — directly checkable
-- [ ] BudgetExceeded text names where to set it — engine test on the
-      message
+      (`test_simulation.py::test_week_run_record_carries_the_engine_tally`
+      — the last cumulative `run meter` line wins, with the zero-tally
+      shape pinned in `::test_week_job_happy_path_proposal_not_copy_out`;
+      `test_forecast.py::test_forecast_run_record_carries_the_summed_tally`
+      — per-tick tallies summed over the N subprocesses; keys
+      `llm_calls`/`llm_tokens`, the extraction record's naming)
+- [x] llm.env.example documents the knob — directly checkable
+      (a Per-run call ceiling section: roster default max(24, 3N + 6),
+      env beats llm.env, either beats the roster default; llm.env is
+      now a REAL second home — `env_limit` in both twins reads it, and
+      `engines.week_post_budget` resolves through the same
+      `llm_client.env_limit` so the watchdog follows the honest ceiling)
+- [x] BudgetExceeded text names where to set it — engine test on the
+      message (`test_llm.py::test_budget_exceeded_names_where_to_raise_the_ceiling`
+      pins "LLM_MAX_CALLS" + "llm.env"; tick.py's WeekAborted names the
+      homes too — that text is what the studio's job error surfaces)

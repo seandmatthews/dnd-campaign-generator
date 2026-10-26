@@ -242,7 +242,9 @@ handout with an explanation, never the DM briefing.
 ## Budget
 
 Every LLM-consuming run (a week, a lore generation) meters its provider
-calls against an explicit ceiling (`LLM_MAX_CALLS`; unset, it scales with the roster — 2 calls per faction plus narration, minimum 24) and stops
+calls against an explicit ceiling (`LLM_MAX_CALLS`, set in the environment
+or llm.env; unset, it scales with the roster — 2 calls per faction plus
+narration, minimum 24) and stops
 between calls when it runs out: a WEEK aborts with nothing written (no all-holds canon week), other runs stop with a clear incomplete status — a budget
 guard, not a billing estimate; the token tally in the logs is approximate
 and never presented as the provider's exact charges.
@@ -256,8 +258,9 @@ margin (ticket 55) — 2 h 10 m on a default five-faction roster. The
 goal-review watchdog sits at one `complete()` call's worst case
 (3 attempts × 300 s × 3 length passes + backoff, rounded up = 2800 s),
 and the queued-job dead-man cap is 3× the week watchdog. `STUDIO_WEEK_TIMEOUT_S`
-(positive int) overrides the week cap at boot; `LLM_MAX_CALLS` raises it
-automatically, because the engine subprocess inherits that env and a
+(positive int) overrides the week cap at boot; `LLM_MAX_CALLS` (the
+environment or llm.env) raises it
+automatically, because the engine subprocess resolves the same knob and a
 bigger legal spend is a longer legal run. The UI reads the same numbers
 from `GET /simulation` (`run_contract`) to size its poll give-up, and its
 give-up copy says whether the job was queued or running.

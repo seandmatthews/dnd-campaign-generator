@@ -7,6 +7,7 @@ the frontend poll that watches runs sized by the same numbers.
 """
 
 import engines
+import llm_client
 from routers import simulation
 
 
@@ -34,9 +35,13 @@ def test_week_watchdog_covers_one_llm_call_worst_case():
     assert engines.WEEK_TIMEOUT >= engines.llm_call_watchdog_s()
 
 
-def test_week_timeout_derives_from_the_engine_post_ceiling(monkeypatch):
+def test_week_timeout_derives_from_the_engine_post_ceiling(monkeypatch,
+                                                           tmp_path):
     monkeypatch.delenv("STUDIO_WEEK_TIMEOUT_S", raising=False)
     monkeypatch.delenv("LLM_MAX_CALLS", raising=False)
+    # pinned env file: the derivation must not depend on the machine's
+    # real llm.env (LLM_MAX_CALLS lives there too — ticket 66)
+    monkeypatch.setattr(llm_client, "ENV_FILE", tmp_path / "absent-llm.env")
     # tick.py run_live's own ceiling: max(24, 3N + 6) POSTs on the
     # design-form full roster (five factions — "Five factions is plenty")
     assert engines.week_post_budget() == max(24, 3 * 5 + 6) == 24
@@ -69,6 +74,22 @@ def test_week_timeout_follows_the_engine_call_ceiling(monkeypatch):
     assert engines.week_post_budget() == 48
     assert engines.week_timeout_s() == \
         48 * engines.LLM_POST_TIMEOUT_S + engines.WEEK_ENGINE_MARGIN_S
+
+
+def test_week_budget_reads_llm_env_when_the_env_is_unset(monkeypatch, tmp_path):
+    # llm.env is LLM_MAX_CALLS's second home (ticket 66): the watchdog
+    # budget must resolve the knob exactly the engine subprocess does —
+    # llm.env overrides the roster default, the environment beats llm.env
+    monkeypatch.delenv("STUDIO_WEEK_TIMEOUT_S", raising=False)
+    monkeypatch.delenv("LLM_MAX_CALLS", raising=False)
+    monkeypatch.setattr(llm_client, "ENV_FILE", tmp_path / "absent-llm.env")
+    assert engines.week_post_budget() == 24
+    f = tmp_path / "llm.env"
+    f.write_text("LLM_MAX_CALLS=40\n", encoding="utf-8")
+    monkeypatch.setattr(llm_client, "ENV_FILE", f)
+    assert engines.week_post_budget() == 40
+    monkeypatch.setenv("LLM_MAX_CALLS", "48")
+    assert engines.week_post_budget() == 48, "the environment beats llm.env"
 
 
 def test_queue_deadline_stays_derived_from_the_watchdog():
