@@ -135,11 +135,19 @@ def test_scenes_carries_the_refusal_verbatim_no_snapshot(
 
 def test_scenes_times_out_honestly(client, tmp_spine_root, fake_companion,
                                    monkeypatch):
+    """The timeout KILLS the publisher mid-write: the 504 must say the
+    partial writes are uncommitted, never "nothing was changed"
+    (ticket 69 — same copy as the presets twin in test_table_setup.py)."""
     (fake_companion / "src" / "avtt" / "publish.py").write_text(
         STUB_SLOW, encoding="utf-8")
     monkeypatch.setattr(table_router, "PUBLISH_TIMEOUT_S", 0.3)
     r = client.post(f"{C}/testvale/table-setup/publish-scenes", json={})
-    assert r.status_code == 504 and "nothing was changed" in r.json()["error"]
+    assert r.status_code == 504
+    detail = r.json()["error"]
+    assert "nothing was changed" not in detail
+    assert "killed at the timeout" in detail
+    assert "uncommitted" in detail
+    assert "atlas-vtt/" in detail
 
 
 def test_unknown_campaign_404s_before_any_spawn(client, tmp_spine_root,

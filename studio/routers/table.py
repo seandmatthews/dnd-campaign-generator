@@ -82,10 +82,17 @@ def _spawn_publisher(name: str, home: Path, cmd: list[str], what: str,
                 encoding="utf-8", errors="replace",
                 timeout=PUBLISH_TIMEOUT_S)
         except subprocess.TimeoutExpired:
+            # subprocess.run killed the companion mid-publish: partial
+            # atlas-vtt/ writes are real, and the skipped snapshot leaves
+            # them uncommitted (they would ride into a later unrelated
+            # commit). Say that — never "nothing was changed" (ticket 69).
             raise HTTPException(
                 status_code=504,
                 detail=f"the {what} did not finish within "
-                       f"{PUBLISH_TIMEOUT_S}s — nothing was changed")
+                       f"{PUBLISH_TIMEOUT_S}s — the publisher was killed at "
+                       "the timeout, so any partial writes to atlas-vtt/ "
+                       "are uncommitted; check atlas-vtt/ before "
+                       "republishing")
         except OSError as e:
             raise HTTPException(
                 status_code=500,

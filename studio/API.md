@@ -313,9 +313,14 @@ shapes in this document true.
 
 ### Simulation (B reads/week → G, M3)
 - `GET /api/campaign/{name}/simulation` → `{"clock":{"week","season"},
-  "premise":str,"factions":[full dicts],"events":[…],"rumors":[…],
-  "chronicles":[{"week","title","file"}],"views_available":[ids],
-  "pending_proposal":id|null}`.
+  "premise":str,"places":[the state's places (legacy single-city states
+  degrade to one)],"factions":[full dicts],"projects":[…],"events":[…],
+  "rumors":[…],"chronicles":[{"week","title","file"}],
+  "views_available":[ids],"pending_proposal":id|null,
+  "active_forecast":id|null,"run_contract":{"week_timeout_s",
+  "queue_deadline_s"}}` (run_contract: the honest run numbers from the
+  same derivation the watchdogs use — the UI sizes its poll give-up from
+  them; see README.md's time contract).
   **404 is a normal state for a fresh campaign** (no state.yaml yet — no
   factions exist); the UI renders it as the create-a-simulation form, not
   an error.
@@ -334,8 +339,10 @@ shapes in this document true.
   snapshot `campaign/<name>: simulation created|replaced`.
   Returns `{"ok":true,"week":0,"factions":[ids]}`.
 - `GET /api/campaign/{name}/simulation/views/{faction_id}` → the fog-of-war
-  `faction_view` dict as JSON. Engine: `python -X utf8 src/views.py <faction_id>`
-  (cwd=agentic-simulator; E adds this CLI, printing YAML).
+  `faction_view` dict as JSON. Engine: `python -X utf8 src/views.py
+  <faction_id> --state <campaign>/simulation/state.yaml`
+  (cwd=agentic-simulator; E adds this CLI, printing YAML — no copy-in, no
+  engine lock: the view reads the campaign's own canon).
 - `POST /api/campaign/{name}/simulation/design` → 202 job (kind
   `sim-design`; ticket 42 — the pass is minutes long on a real provider
   and a reload used to destroy a paid result). Body:
@@ -850,8 +857,10 @@ shapes in this document true.
   `routers/system.py`.
 
 ### System (B)
-- `GET /api/health` → `{"ok":true,"version":"0.1.0",
-  "week_run_in_progress":bool}` — the flag is true while
+- `GET /api/health` → `{"ok":true,"version":str,"week_run_in_progress":bool}`
+  — `version` is the install's VERSION stamp (`0.1.0+<build>+<companion>+
+  <atlas-pin>`; pyproject's version in a dev checkout without a stamp) — a
+  bug report can quote what health answers. The flag is true while
   `campaign-data/engine-home/.week-run-flag` exists (a week job is running,
   or a crashed one has not been restored by the boot hook yet).
 - `GET /api/doctor` → the full `doctor.py` JSON (key diagnosis, tool-tree

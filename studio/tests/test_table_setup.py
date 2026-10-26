@@ -131,11 +131,21 @@ def test_publish_carries_the_refusal_verbatim_no_snapshot(
 
 def test_publish_times_out_honestly(client, tmp_spine_root, fake_companion,
                                     monkeypatch):
+    """subprocess.run KILLED the companion mid-publish: partial atlas-vtt/
+    writes are real and the skipped snapshot leaves them uncommitted. The
+    504 must say that — the old copy claimed "nothing was changed", which
+    is the one thing it could not know (ticket 69)."""
     (fake_companion / "src" / "avtt" / "publish.py").write_text(
         STUB_SLOW, encoding="utf-8")
     monkeypatch.setattr(table_router, "PUBLISH_TIMEOUT_S", 0.3)
     r = client.post(f"{C}/testvale/table-setup/publish-presets", json={})
-    assert r.status_code == 504 and "nothing was changed" in r.json()["error"]
+    assert r.status_code == 504
+    detail = r.json()["error"]
+    assert "nothing was changed" not in detail
+    assert "killed at the timeout" in detail
+    assert "uncommitted" in detail
+    assert "atlas-vtt/" in detail
+    assert "republishing" in detail
 
 
 def test_unknown_campaign_404s_before_any_spawn(client, tmp_spine_root,

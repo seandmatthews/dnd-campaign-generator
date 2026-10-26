@@ -213,7 +213,14 @@ class El {
   }
   dispatchEvent(ev) {
     ev = ev || {};
-    ev.target = ev.target || this;
+    try {
+      if (ev.target == null) ev.target = this;
+    } catch (_) {
+      // a real Event instance (the app builds new Event('change')) carries
+      // a getter-only target: re-dispatch a plain object with the fields
+      // the shim's listeners read
+      ev = { type: ev.type, target: this };
+    }
     if (typeof ev.preventDefault !== 'function') {
       ev.preventDefault = function () {};
     }
