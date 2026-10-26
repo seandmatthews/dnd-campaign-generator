@@ -34,10 +34,10 @@ UI is same-origin.
 
 ## Acceptance criteria
 
-- [ ] Foreign-Origin (or missing-Origin) POST to a no-body endpoint →
+- [x] Foreign-Origin (or missing-Origin) POST to a no-body endpoint →
       403, nothing executed — pinned in a studio test extending
       `test_hardening.py`
-- [ ] Same-origin POST (the UI's own shape) passes unchanged — same
+- [x] Same-origin POST (the UI's own shape) passes unchanged — same
       test
-- [ ] GET under a hostile Host still 403s via the existing allowlist —
+- [x] GET under a hostile Host still 403s via the existing allowlist —
       existing tests stay green

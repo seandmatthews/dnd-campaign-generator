@@ -7,7 +7,12 @@ Hardening (this wave):
 - Host allowlist middleware: only loopback Host values (with or without the
   bound port), the TestClient, and STUDIO_EXTRA_HOSTS are served — a DNS-
   rebinding page (attacker domain resolving at 127.0.0.1) gets 403
-  {"error": "unknown host header"}.
+  {"error": "unknown host header"}. Mutating methods (POST/PUT/PATCH/DELETE)
+  must additionally prove same-origin (exact loopback Origin, or
+  Sec-Fetch-Site: same-origin) or they get 403
+  {"error": "cross-site request refused"} — a browser sends the real
+  loopback Host on cross-site POSTs too, so the Host check alone answers
+  rebinding but not a hostile page's no-preflight POSTs (ticket 61).
 - Rotating file log (1 MB x 5) at <data root>/logs/studio.log
   (STUDIO_LOG_FILE overrides): every "studio.*" logger — app modules and
   job progress lines (jobs.py mirrors log() there). Uvicorn's access log
@@ -171,6 +176,18 @@ def atlas():
 # and is refused before any route runs.
 _LOCAL_NAMES = ("127.0.0.1", "localhost", "[::1]")
 
+# Cross-site mutations (ticket 61): a browser sets the real loopback Host on
+# cross-origin requests too, so the allowlist above answers DNS rebinding
+# but not forgery — any page can fire *simple* requests (no preflight: no
+# custom headers, no JSON body) at no-body mutating endpoints. Mutating
+# methods must therefore carry same-origin proof: an Origin exactly matching
+# the bound loopback origin, or — the fallback for clients that omit Origin —
+# Sec-Fetch-Site: same-origin. Browsers attach these themselves and page
+# script can neither strip nor forge them; non-browser local clients (curl,
+# scripts) are outside the threat model. GETs stay Host-only: a read leaks
+# nothing but cached state. No CORS layer — the UI is same-origin.
+_MUTATING_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+
 
 def _host_allowed(host: str, port: int = PORT) -> bool:
     h = (host or "").strip().lower()
@@ -191,10 +208,31 @@ def _host_allowed(host: str, port: int = PORT) -> bool:
     return h in _LOCAL_NAMES
 
 
+def _same_origin(origin: str, port: int = PORT) -> bool:
+    o = (origin or "").strip().lower()
+    return any(o == f"http://{name}:{port}" for name in _LOCAL_NAMES)
+
+
+def _origin_allowed(headers, port: int = PORT) -> bool:
+    """When Origin is present it decides (a foreign Origin paired with
+    same-origin fetch metadata can only come from a non-browser client);
+    without it, Sec-Fetch-Site: same-origin is the proof."""
+    origin = headers.get("origin", "")
+    if origin.strip():
+        return _same_origin(origin, port)
+    return headers.get("sec-fetch-site", "").strip().lower() == "same-origin"
+
+
 @app.middleware("http")
 async def host_allowlist(request: Request, call_next):
-    if not _host_allowed(request.headers.get("host", "")):
+    host = request.headers.get("host", "")
+    if not _host_allowed(host):
         return JSONResponse({"error": "unknown host header"}, status_code=403)
+    if (request.method in _MUTATING_METHODS
+            and host.strip().lower() != "testserver"):  # harness: no Origin
+        if not _origin_allowed(request.headers):
+            return JSONResponse(
+                {"error": "cross-site request refused"}, status_code=403)
     return await call_next(request)
 
 

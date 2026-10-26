@@ -237,6 +237,115 @@ def test_host_allowlist_studio_extra_hosts_env(client, monkeypatch):
                       headers={"host": "still-evil.example"}).status_code == 403
 
 
+# ------------------------------------------- cross-site mutation protection
+
+# POST .../lore/obsidian is the ticket's own probe target: a no-body mutating
+# endpoint whose execution is externally visible (it merges one entry into
+# Obsidian's vault list). With OBSIDIAN_CONFIG pointed at a throwaway file,
+# "nothing executed" is provable as "the config was never created".
+
+
+def test_foreign_and_missing_origin_post_403_before_the_route(
+        client, spine_root, monkeypatch, tmp_path):
+    """Ticket 61: a browser sets Host: 127.0.0.1:<port> on cross-site
+    requests too, so the Host allowlist alone does not stop a hostile page
+    from firing no-preflight POSTs at no-body endpoints. A foreign Origin —
+    or no proof at all — must 403 before any route runs: the obsidian
+    endpoint never executes and the vault config is never written."""
+    cfg = tmp_path / "obsidian.json"
+    monkeypatch.setenv("OBSIDIAN_CONFIG", str(cfg))
+    loopback = {"host": "127.0.0.1:8765"}
+
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers={**loopback, "origin": "https://evil.example"})
+    assert r.status_code == 403, r.text
+    assert r.json() == {"error": "cross-site request refused"}
+    assert not cfg.exists(), "a foreign-Origin POST must not execute"
+
+    # missing Origin (and no fetch metadata): refused the same way
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers=dict(loopback))
+    assert r.status_code == 403, r.text
+    assert r.json() == {"error": "cross-site request refused"}
+    assert not cfg.exists()
+
+    # Sec-Fetch-Site is checked only as the fallback: cross-site metadata
+    # proves the hop was cross-site, even though it carries no Origin
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers={**loopback, "sec-fetch-site": "cross-site"})
+    assert r.status_code == 403, r.text
+    assert not cfg.exists()
+
+    # Origin decides over forged-looking fetch metadata: a foreign Origin
+    # plus "same-origin" metadata is a non-browser forgery, refused
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers={**loopback, "origin": "https://evil.example",
+                             "sec-fetch-site": "same-origin"})
+    assert r.status_code == 403, r.text
+    assert not cfg.exists()
+
+    # a hostile Host still wins first (the allowlist answers before the
+    # origin proof is even consulted — same contract as the GET tests above)
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers={"host": "evil.example", "origin":
+                             "http://127.0.0.1:8765"})
+    assert r.status_code == 403
+    assert r.json() == {"error": "unknown host header"}
+    assert not cfg.exists()
+
+
+def test_same_origin_post_passes_unchanged(client, spine_root, monkeypatch,
+                                           tmp_path):
+    """Ticket 61: the UI's own shape — a same-origin POST from the page the
+    studio served — passes exactly as before, on every loopback spelling;
+    Sec-Fetch-Site: same-origin stands in for clients that omit Origin."""
+    cfg = tmp_path / "obsidian.json"
+    monkeypatch.setenv("OBSIDIAN_CONFIG", str(cfg))
+
+    for host, origin in (("127.0.0.1:8765", "http://127.0.0.1:8765"),
+                         ("localhost:8765", "http://localhost:8765"),
+                         ("[::1]:8765", "http://[::1]:8765")):
+        r = client.post("/api/campaign/testvale/lore/obsidian",
+                        headers={"host": host, "origin": origin})
+        assert r.status_code == 201, (host, r.text)
+    assert cfg.exists(), "the endpoint executed and registered the vault"
+
+    # and the metadata fallback: same-origin Sec-Fetch-Site without Origin
+    cfg.unlink()
+    r = client.post("/api/campaign/testvale/lore/obsidian",
+                    headers={"host": "127.0.0.1:8765",
+                             "sec-fetch-site": "same-origin"})
+    assert r.status_code == 201, r.text
+    assert cfg.exists()
+
+
+def test_origin_proof_follows_bound_port():
+    """Same contract as the Host allowlist: the accepted Origin carries the
+    BOUND port (STUDIO_PORT at import), and https / wrong ports / non-
+    loopback origins are not same-origin no matter the port."""
+    assert server._same_origin("http://127.0.0.1:8791", port=8791)
+    assert server._same_origin("http://localhost:8791", port=8791)
+    assert server._same_origin("http://[::1]:8791", port=8791)
+    assert not server._same_origin("http://127.0.0.1:8765", port=8791)
+    assert not server._same_origin("https://127.0.0.1:8791", port=8791)
+    assert not server._same_origin("http://evil.example:8791", port=8791)
+    assert not server._same_origin("null", port=8791)
+    assert not server._same_origin("", port=8791)
+
+    headers = {"origin": "", "sec-fetch-site": "same-origin"}
+    assert server._origin_allowed(headers, port=8791)
+    assert not server._origin_allowed({"origin": "",
+                                       "sec-fetch-site": "same-site"},
+                                      port=8791)
+    assert not server._origin_allowed({"origin": "", "sec-fetch-site":
+                                       "cross-site"}, port=8791)
+    assert not server._origin_allowed({}, port=8791)
+    assert server._origin_allowed({"origin": "http://127.0.0.1:8791"},
+                                  port=8791)
+    assert not server._origin_allowed({"origin": "http://127.0.0.1:8765"},
+                                      port=8791)
+
+
 # -------------------------------------------- interrupted-week flag/restore
 
 
