@@ -215,10 +215,31 @@ def ensure_cache():
 
 def _clear_readonly_and_retry(func, path, exc_info):
     """rmtree onerror for git-owned trees: pack files carry the read-only
-    attribute, and os.unlink refuses them until it is cleared."""
+    attribute, and os.unlink refuses them until it is cleared. An entry
+    that vanished mid-walk (or a whole tree already gone) is fine — that
+    is the outcome the walk wanted."""
     import stat
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except FileNotFoundError:
+        pass
+
+
+def kill_parked_chains(tdir):
+    """The SFX's install.cmd `start`s launch.cmd under `cmd /K`, and the
+    chain's final pause parks the wrapper with its CWD inside the test
+    install — outliving every kill of the server itself, invisible to
+    port checks, and holding the directory against the next run's rmtree
+    (WinError 32; poisoned three builds in a row). Kill any process whose
+    command line names this test dir. The querying powershell excludes
+    itself by name; the builder's own command line never contains tdir."""
+    ps = ("Get-CimInstance Win32_Process | Where-Object "
+          "{ $_.CommandLine -like '*" + str(tdir) + "*' "
+          "-and $_.Name -ne 'powershell.exe' } | ForEach-Object "
+          "{ taskkill /F /T /PID $($_.ProcessId) 2>$null }")
+    subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                   capture_output=True)
 
 
 def copy_tree(src, dst, extra_ignores=()):
@@ -584,10 +605,7 @@ def verify_sfx(exe, port):
     install root proves robocopy /MIR never ran again)."""
     step(f"verify: run the setup exe (install pass) on port {port}")
     tdir = WORK / "sfx-test"
-    # a locked leftover must not kill the verify: rmtree with the
-    # read-only-clearing onerror (a parked launch.cmd or a read-only git
-    # pack survives ignore_errors), then exist_ok on the mkdir — seen for
-    # real when a previous session's sfx-test outlived its process
+    kill_parked_chains(tdir)
     shutil.rmtree(tdir, onerror=_clear_readonly_and_retry)
     tdir.mkdir(parents=True, exist_ok=True)
     exe2 = tdir / exe.name
@@ -659,8 +677,9 @@ def verify_update(exe, sevenzr, port):
     extraction."""
     step(f"verify: cross-version update over an older install (port {port})")
     tdir = WORK / "update-test"
-    shutil.rmtree(tdir, ignore_errors=True)
-    tdir.mkdir(parents=True)
+    kill_parked_chains(tdir)
+    shutil.rmtree(tdir, onerror=_clear_readonly_and_retry)
+    tdir.mkdir(parents=True, exist_ok=True)
     dest = Path(os.environ.get("CS_TEST_HOME") or str(tdir / "installed"))
     new_version = bundle_version()
     old_version = re.sub(r"\+\d{14}\+", "+00000000000000+", new_version)
