@@ -53,8 +53,12 @@ change — never let them drift.
   approves its own staged bundle through the same approve/accept path the
   UI uses, and the publication carries `auto: true` in the transaction
   manifest, in the receipt, and as "(auto-accepted)" in the snapshot
-  message. Error-level verification findings block the auto-accept and
-  leave the bundle pending, as today; the job result says
+  message. The lore generations are gated hardest (ticket 70): they
+  publish only when the staged run carries zero findings at ANY level and
+  the full verification ladder (structural, vale, adversarial LLM passes)
+  over the pending file also came back clean — anything else stays
+  pending, with `"blocking_findings"` as the reason. The goal review keeps
+  the error-level bar; in both cases the job result says
   `"auto_accept": "approved"|"blocked"|"error"`.
   `POST .../simulation/week` takes `"auto_accept"` as a StrictBool default
   OFF (publish the week without reading it — loud checkbox only).

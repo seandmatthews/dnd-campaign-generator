@@ -307,12 +307,17 @@ Chains that would otherwise dead-end on a decision can opt into
 **auto-accept**: backstory and missing-page generations, and the goal
 review, then approve their own staged bundle through the same Review path
 (same transactions, receipts, snapshots — the publication record says
-`auto: true`, and error-level verification findings still leave the bundle
-pending for a human). The week's auto-accept exists only behind a loud
-checkbox, default off — publish the week without reading it first is a
-deliberate act, and reading the chronicle is the point of the feature.
-Session effects and project changes are never auto-accepted: they encode
-DM rulings, not generation.
+`auto: true`). The lore generations are the one path that skips a human
+read, so their bar is the strictest (ticket 70): they publish only when
+the run produced zero findings at any level AND the full verification
+ladder (structural, vale, and the adversarial LLM passes — run only on
+this path, so human-reviewed entries keep the cheaper passes) came back
+clean; anything else waits in Review with the findings as the reason. The
+goal review and the week keep the error-level bar. The week's
+auto-accept exists only behind a loud checkbox, default off — publish the
+week without reading it first is a deliberate act, and reading the
+chronicle is the point of the feature. Session effects and project
+changes are never auto-accepted: they encode DM rulings, not generation.
 
 ## The engines
 

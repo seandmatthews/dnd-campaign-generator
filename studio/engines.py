@@ -406,17 +406,26 @@ def copy_file_atomic(src: Path, dst: Path) -> Path:
     return dst
 
 
-def run_check(path, timeout: int = 180) -> list:
+def run_check(path, timeout: int = 180, llm: bool = False,
+              state=None) -> list:
     """verification/check.py's ladder over one file (structural always; vale
-    when installed). Returns the findings list — [] when clean. The ONE
-    invocation of the checker (list-form args, cwd=verification, tmp out
-    dir); review.py and loregen.py both used to hand-roll it.
+    when installed; llm=True adds the adversarial prompt passes, and state=
+    a world-state path their canon-audit pass reads — the FULL ladder the
+    auto-accept gate runs, ticket 70). Returns the findings list — [] when
+    clean. The ONE invocation of the checker (list-form args,
+    cwd=verification, tmp out dir); review.py and loregen.py both used to
+    hand-roll it.
 
     Raises RuntimeError when check.py produces no findings.json — callers
     decide whether that is advisory (a note) or fatal."""
     out_dir = Path(tempfile.mkdtemp(prefix="studio-check-"))
     try:
-        rc, _lines = run_py(VERIFICATION, "check.py", str(path),
+        args = [str(path)]
+        if state is not None:
+            args += ["--state", str(state)]
+        if llm:
+            args.append("--llm")
+        rc, _lines = run_py(VERIFICATION, "check.py", *args,
                             "--out", str(out_dir), timeout=timeout)
         findings_file = out_dir / "findings.json"
         if findings_file.is_file():

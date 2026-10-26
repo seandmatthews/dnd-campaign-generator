@@ -3,19 +3,25 @@ itself through the SAME approval path a human would use.
 
 - lore-entries / lore-missing-pages: the job approves its own pending file
   (same publication transactions, receipts, snapshots; recorded in the
-  transaction as auto: true) — unless an error-level verification finding
-  blocks it and the bundle stays pending, as today.
+  transaction as auto: true) — but the gate is the strictest reading
+  (ticket 70): the staged run must carry ZERO findings at any level and
+  the FULL verification ladder over the pending file must come back clean;
+  anything else degrades to the review queue with the findings as the
+  reason.
 - goal-review: the staged goal_updates proposal is accepted by the job
-  itself, same gate.
+  itself, same gate as before (error-level findings block).
 - sim-week: ONLY behind an explicit strict-bool checkbox, default off.
 - session_effects / project_changes: no flag at all — DM rulings are
   never auto-accepted (they are synchronous routes; nothing to opt into).
 
 The flows run with fake engines/LLMs (a real pass costs API credit and
-belongs to the human user), exactly like the neighboring flow tests.
+belongs to the human user), exactly like the neighboring flow tests — the
+full ladder included: a REAL ladder runs only in the budget-measurement
+test, pinned offline (no network, no key).
 """
 
 import json
+import time
 
 import yaml
 
@@ -41,6 +47,16 @@ def _receipts(camp: str):
             except (OSError, ValueError):
                 pass
     return out
+
+
+def _clean_ladder(monkeypatch):
+    """The full-ladder stand-in for approve-path tests: the real ladder
+    subprocess with --llm would spend API credit (check.py resolves the
+    same llm.env the studio does), so the flows fake it clean like every
+    other engine/LLM boundary."""
+    monkeypatch.setattr(loregen, "full_ladder_findings",
+                        lambda *a, **k: [])
+
 
 PENDING_DOC = {
     "entries": [{
@@ -84,6 +100,7 @@ def test_lore_entries_auto_accept_publishes_and_records_auto(
         "nations: []\n", encoding="utf-8")
     monkeypatch.setattr(loregen, "generate_entries",
                         _fake_generate_entries(PENDING_DOC, []))
+    _clean_ladder(monkeypatch)
     r = client.post("/api/campaign/testvale/lore/entries",
                     json={"auto_accept": True})
     assert r.status_code == 202, r.text
@@ -114,8 +131,9 @@ def test_lore_entries_auto_accept_publishes_and_records_auto(
 
 def test_lore_entries_error_finding_blocks_auto_accept(
         client, tmp_spine_root, monkeypatch):
-    """Advisory findings ride along as always; ONE at error level leaves
-    the bundle pending — auto-accept refuses to publish it."""
+    """An error-level finding leaves the bundle pending — and since
+    ticket 70 the advisory one does too: the gate is zero findings at ANY
+    level, so the reason a human sees lists both."""
     (tmp_spine_root / "testvale" / "world" / "geography.yaml").write_text(
         "nations: []\n", encoding="utf-8")
     blocked = {"file": "lore/pending-2.yaml", "line": 3, "rule": "dup",
@@ -132,7 +150,7 @@ def test_lore_entries_error_finding_blocks_auto_accept(
     assert job["status"] == "done", job["error"]
     result = job["result"]
     assert result["auto_accept"] == "blocked"
-    assert result["blocking_findings"] == [blocked]
+    assert result["blocking_findings"] == [advisory, blocked]
 
     # the bundle is pending, exactly as an un-auto-accepted run leaves it
     assert (tmp_spine_root / "testvale" / "lore" / "pending-2.yaml").exists()
@@ -149,12 +167,120 @@ def test_lore_entries_error_finding_blocks_auto_accept(
     assert r.json().get("auto") is None, "a manual approval is not auto"
 
 
+def test_lore_entries_auto_accept_blocked_by_advisory_finding(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 70: a warning-only run that the old error-level gate would
+    have published now stays pending — any finding at any level is a
+    reason for a human to look."""
+    (tmp_spine_root / "testvale" / "world" / "geography.yaml").write_text(
+        "nations: []\n", encoding="utf-8")
+    advisory = {"file": "lore/pending-2.yaml", "line": 3, "rule": "length",
+                "level": "warning", "quote": "x", "note": "35+ words"}
+    monkeypatch.setattr(loregen, "generate_entries",
+                        _fake_generate_entries(PENDING_DOC, [advisory]))
+    r = client.post("/api/campaign/testvale/lore/entries",
+                    json={"auto_accept": True})
+    assert r.status_code == 202, r.text
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    result = job["result"]
+    assert result["auto_accept"] == "blocked"
+    assert result["blocking_findings"] == [advisory]
+    # pending with a reason, nothing published
+    assert (tmp_spine_root / "testvale" / "lore" / "pending-2.yaml").exists()
+    assert not any("rerouted the Vane" in t
+                   for t in _timeline_texts(tmp_spine_root))
+    assert not any(r.get("auto") for r in _receipts("testvale"))
+
+
+def test_lore_entries_auto_accept_blocked_by_non_clean_full_ladder(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 70: a clean staged result is not enough — the FULL ladder
+    (structural, vale, adversarial LLM passes) runs over the staged
+    bundle, and any finding at any level from it degrades the bundle to
+    the review queue with the findings as the reason."""
+    (tmp_spine_root / "testvale" / "world" / "geography.yaml").write_text(
+        "nations: []\n", encoding="utf-8")
+    monkeypatch.setattr(loregen, "generate_entries",
+                        _fake_generate_entries(PENDING_DOC, []))
+    ladder_hit = {"file": "lore/pending-2.yaml", "line": 1,
+                  "rule": "prompts/compression", "level": "warning",
+                  "quote": "", "note": "compresses without losing detail"}
+    captured = {}
+
+    def fake_ladder(campaign_dir, pending_name, log=None):
+        captured["pending"] = pending_name
+        return [ladder_hit]
+
+    monkeypatch.setattr(loregen, "full_ladder_findings", fake_ladder)
+    r = client.post("/api/campaign/testvale/lore/entries",
+                    json={"auto_accept": True})
+    assert r.status_code == 202, r.text
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    result = job["result"]
+    assert result["auto_accept"] == "blocked"
+    assert result["blocking_findings"] == [ladder_hit]
+    # the ladder ran on the staged pending file, and its findings merged
+    # into the result so the review queue shows the reason
+    assert captured["pending"] == "lore/pending-2.yaml"
+    assert ladder_hit in result["findings"]
+    # pending with nothing published; the human path still works on it
+    assert (tmp_spine_root / "testvale" / "lore" / "pending-2.yaml").exists()
+    assert not any(r.get("auto") for r in _receipts("testvale"))
+    r = client.post("/api/campaign/testvale/review/approve",
+                    json={"file": "lore/pending-2.yaml", "all": True})
+    assert r.status_code == 200, r.text
+    assert r.json().get("auto") is None
+
+
+def test_auto_accept_full_ladder_within_the_job_budget(
+        client, tmp_spine_root, monkeypatch):
+    """Ticket 70, measured: the auto-accept path runs the REAL full ladder
+    (subprocess check.py --llm --state) and the whole job stays inside the
+    budget the ladder has always run under (loregen.LADDER_TIMEOUT_S — the
+    run_check timeout). The ladder's LLM passes are pinned OFFLINE: a
+    bogus LLM_BASE_URL with no LLM_MODEL makes every pass fail at config
+    speed — no network, no key — which also proves a ladder that cannot
+    fully run BLOCKS the auto-accept instead of waving it through."""
+    (tmp_spine_root / "testvale" / "world" / "geography.yaml").write_text(
+        "nations: []\n", encoding="utf-8")
+    monkeypatch.setattr(loregen, "generate_entries",
+                        _fake_generate_entries(PENDING_DOC, []))
+    monkeypatch.setenv("LLM_BASE_URL", "http://127.0.0.1:9/v1")
+    monkeypatch.delenv("LLM_MODEL", raising=False)
+    started = time.monotonic()
+    r = client.post("/api/campaign/testvale/lore/entries",
+                    json={"auto_accept": True})
+    assert r.status_code == 202, r.text
+    job = wait_for_job(client, r.json()["job_id"], timeout=60.0)
+    elapsed = time.monotonic() - started
+    assert job["status"] == "done", job["error"]
+    result = job["result"]
+    # every LLM pass failed offline — findings, never a free pass
+    assert result["auto_accept"] == "blocked"
+    blocking = result["blocking_findings"]
+    assert any(str(f.get("rule") or "").startswith("prompts/")
+               for f in blocking), blocking
+    assert not any(f.get("rule") == "loregen/full-ladder"
+                   for f in blocking), \
+        "the ladder itself ran to completion — only its LLM passes failed"
+    assert elapsed < loregen.LADDER_TIMEOUT_S, (
+        f"the full-ladder path measured {elapsed:.1f}s — over the "
+        f"{loregen.LADDER_TIMEOUT_S}s ladder budget")
+    # the non-clean ladder left the bundle staged for review
+    assert (tmp_spine_root / "testvale" / "lore" / "pending-2.yaml").exists()
+    assert not any("rerouted the Vane" in t
+                   for t in _timeline_texts(tmp_spine_root))
+
+
 def test_lore_missing_pages_auto_accept(tmp_spine_root, client, monkeypatch):
     page_doc = {"entries": [dict(PENDING_DOC["entries"][0], page={
         "kind": "place", "aliases": []}), ],
         "created": PENDING_DOC["created"], "mode": "missing-pages"}
     monkeypatch.setattr(loregen, "generate_missing_pages",
                         _fake_generate_entries(page_doc, []))
+    _clean_ladder(monkeypatch)
     r = client.post("/api/campaign/testvale/lore/pages/missing",
                     json={"auto_accept": True})
     assert r.status_code == 202, r.text
