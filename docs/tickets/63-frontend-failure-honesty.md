@@ -1,6 +1,7 @@
 # 63 — Frontend failure honesty: expensive runs fail invisibly, refused cancels look successful
 
-**Status:** proposed
+**Status:** in-progress — implemented on ticket/63-frontend-failure-honesty
+2026-10-25 (fast tier green; review pending)
 **Priority:** P2 — the costliest failures in the app are the least
 visible ones
 **Area:** `studio/static/js/{core,sim,sessions,knowledge,maps}.js`
@@ -49,12 +50,12 @@ job).
 
 ## Acceptance criteria
 
-- [ ] A failed week leaves a persistent section error on the Sim tab
+- [x] A failed week leaves a persistent section error on the Sim tab
       after navigation — cjs harness + studio test on the jobs payload
       shape
-- [ ] A refused cancel (409) toasts and re-enables the button — cjs
+- [x] A refused cancel (409) toasts and re-enables the button — cjs
       harness on `cancelJob`'s catch branch
-- [ ] Double-click cannot fire a second extract/record/save — cjs
+- [x] Double-click cannot fire a second extract/record/save — cjs
       harnesses asserting the disabled guard
-- [ ] Suggest-options confirms before spending — cjs harness
-- [ ] The remaining copy fixes — cjs copy-claims style assertions
+- [x] Suggest-options confirms before spending — cjs harness
+- [x] The remaining copy fixes — cjs copy-claims style assertions

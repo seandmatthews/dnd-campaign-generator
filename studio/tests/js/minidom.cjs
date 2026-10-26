@@ -185,7 +185,12 @@ class El {
      whatever the app assigns). */
   get options() { return this.children.filter((n) => n.tagName === 'option'); }
   get value() {
-    if (this.tagName !== 'select') return this._value;
+    if (this.tagName !== 'select') {
+      // a real DOM input/textarea.value is always a STRING ('' when
+      // unset) — the knowledge tab's briefing load reads .value.trim()
+      // during render and an undefined here crashed it
+      return this._value == null ? '' : this._value;
+    }
     const opts = this.options;
     const picked = opts.find((o) => o.selected) || opts[0];
     if (!picked) return '';

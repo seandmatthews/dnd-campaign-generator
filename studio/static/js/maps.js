@@ -448,16 +448,27 @@
 
     const suggestBtn = wrap.querySelector('.world-suggest-btn');
     suggestBtn.addEventListener('click', async () => {
+      if (suggestBtn.disabled) return;
       const premise = wrap.querySelector('.world-premise').value.trim();
       if (!premise) {
         S.toast('Describe the world you want first', 'error');
         return;
       }
+      // metered like every other LLM pass: it confirms first (the other
+      // runners all do; ticket 63). The timeout is a ceiling on the WAIT,
+      // not a cancel — api()'s give-up copy says the work itself goes on.
+      const ok = await S.confirmRun(
+        'Suggest world options with the LLM? One metered pass reads your ' +
+        'premise to draft the fields below — it spends a little API ' +
+        'credit, and you can edit anything it fills before generating.'
+      );
+      if (!ok) return;
       suggestBtn.disabled = true;
       try {
         const resp = await S.api(S.campUrl('/world-options'), {
           method: 'POST',
-          body: { premise: premise }
+          body: { premise: premise },
+          timeoutMs: 120000 // one completion; 2 minutes is already a hung provider
         });
         fillSteerOptions(wrap, resp && resp.options);
         S.toast('Options suggested — review them, then generate', 'ok');

@@ -158,9 +158,18 @@
     return ids; // the server refuses an empty list — say what you mean
   }
 
-  function visibilityFields(scope, factions, current) {
+  function visibilityFields(scope, factions, current, readError) {
     const mode = (current === 'public') ? 'public'
       : Array.isArray(current) ? 'factions' : 'dm_only';
+    // the empty answer differs by WHY it is empty (ticket 63): a failed
+    // /simulation read knows nothing about factions, and "create the
+    // simulation first" stated that wrong diagnosis as fact
+    const empty = readError
+      ? '<p class="muted" role="alert">The simulation could not be read (' +
+        S.esc(String((readError && readError.error) || 'unknown error')) +
+        ') — whether factions exist is unknown, not "none". The visibility ' +
+        'stays DM-only until it loads.</p>'
+      : '<p class="muted">No factions — create the simulation first.</p>';
     scope.innerHTML =
       '<label class="field"><span class="field-label">Visibility</span>' +
         '<select class="input vis-mode">' +
@@ -175,7 +184,7 @@
               S.esc(f.id) + '"' +
               (Array.isArray(current) && current.indexOf(f.id) >= 0 ? ' checked' : '') +
               '> ' + S.esc(f.name || f.id) + '</label>').join('')
-          : '<p class="muted">No factions — create the simulation first.</p>') +
+          : empty) +
       '</div>';
     scope.querySelector('.vis-mode').addEventListener('change', (ev) => {
       scope.querySelector('.vis-factions').classList.toggle(
@@ -269,7 +278,7 @@
     form.insertAdjacentElement('beforebegin', note);
   }
 
-  async function factsPanel(factions) {
+  async function factsPanel(factions, simReadError) {
     const panel = S.el(
       '<section class="panel panel-card">' +
         '<h3 class="panel-title">Approved facts</h3>' +
@@ -299,8 +308,8 @@
 
     const list = panel.querySelector('.fact-list');
     const visScope = panel.querySelector('.fact-vis');
-    visibilityFields(visScope, factions, 'dm_only');
-    if (!factions.length) {
+    visibilityFields(visScope, factions, 'dm_only', simReadError);
+    if (!factions.length && !simReadError) {
       visScope.insertAdjacentElement('afterend', S.el(
         '<p class="panel-note muted">Facts compile into the simulation state — ' +
           'create a sandbox on the Agent Simulation tab to record new ones.</p>'));
@@ -317,11 +326,13 @@
       const form = ev.currentTarget;
       const btn = form.querySelector('.fact-record');
       const errBox = form.querySelector('.form-error');
+      if (btn.disabled) return; // one POST per click (ticket 63)
       errBox.innerHTML = '';
       const subjects = form.querySelector('.fact-subjects').value
         .split(',').map((s) => s.trim()).filter(Boolean);
       const weekRaw = form.querySelector('.fact-week').value.trim();
       const weekNum = Number(weekRaw);
+      btn.disabled = true;
       try {
         await S.api(S.campUrl('/knowledge'), {
           method: 'POST',
@@ -337,6 +348,7 @@
         S.showTab('knowledge');
       } catch (err) {
         errBox.appendChild(S.errorPanel(err));
+        btn.disabled = false; // a failed record can be retried
       }
     });
 
@@ -616,14 +628,19 @@
     container.appendChild(root);
 
     // faction ids for visibility checkboxes; a missing sandbox just means
-    // the faction option is empty — facts still list and reconcile
+    // the faction option is empty — facts still list and reconcile. A
+    // FAILED read is a different thing again (ticket 63): it must render
+    // as a failed read, not as the confident "no factions" diagnosis.
     let factions = [];
+    let simReadError = null;
     try {
       const sim = await S.api(S.campUrl('/simulation'));
       factions = (sim && Array.isArray(sim.factions)) ? sim.factions : [];
-    } catch (_) { /* no sandbox yet — the record form says so below */ }
+    } catch (err) {
+      simReadError = err;
+    }
 
-    root.appendChild(await factsPanel(factions));
+    root.appendChild(await factsPanel(factions, simReadError));
     root.appendChild(await briefingPanel());
     root.appendChild(await disclosurePanel());
   };
