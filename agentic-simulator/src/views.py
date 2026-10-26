@@ -23,7 +23,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import projects
 import rumors
 from store import faction_map, faction_place, places_of, \
-    load_state, split_argv
+    load_state, read_shape_errors, split_argv
 from store import STATE_FILE  # noqa: F401 — re-export, pinned by test_views.py
 
 # What an outsider can roughly estimate by watching, not by reading ledgers.
@@ -191,6 +191,15 @@ def main(argv):
     if not isinstance(state, dict):
         print(f"error: {state_path or 'the engine-home state.yaml'} is empty or not "
               "a mapping", file=sys.stderr)
+        return 1
+    # the view dates every section from the clock and walks the factions
+    # list: a hand-edited state without meta.clock.week (or with a null
+    # faction entry) KeyError'd/TypeError'd mid-build — refuse naming the
+    # shape instead (ticket 65)
+    shape = read_shape_errors(state)
+    if shape:
+        for e in shape:
+            print(f"error: {e}", file=sys.stderr)
         return 1
     ids = {f["id"] for f in state.get("factions") or []
            if isinstance(f, dict) and f.get("id")}

@@ -364,6 +364,21 @@ def test_validate_accepts_district_targets():
     print("  validate: district targets canonicalize  OK")
 
 
+def test_validate_drops_a_model_supplied_action_id():
+    """AC (ticket 65): the action id is the engine's provenance mint
+    (tick.py setdefaults act-<week>-<actor> once per proposal and
+    projects.apply_week stamps project attribution onto any same-week
+    event carrying the id) — a model-supplied one rode _validate
+    unchecked, so a reply could pre-plant an id that mis-joins the
+    project ledger. Validation drops it; the engine mints its own
+    downstream."""
+    p = _validate({"action": "work the ferries", "target": "self",
+                   "action_id": "act-0004-mint"}, "me")
+    assert "action_id" not in p, \
+        f"a model-supplied action_id must not survive validation: {p}"
+    print("  validate: a model-supplied action_id never survives  OK")
+
+
 def test_propose_retries_then_succeeds():
     calls = []
     def flaky(prompt):
@@ -621,6 +636,7 @@ if __name__ == "__main__":
         test_extract_yaml_from_fences,
         test_validate_clamps_and_canonicalizes_target,
         test_validate_accepts_district_targets,
+        test_validate_drops_a_model_supplied_action_id,
         test_propose_retries_then_succeeds,
         test_propose_fails_loudly_twice,
         test_propose_budget_exceeded_is_neither_retried_nor_laundered,

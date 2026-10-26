@@ -1,11 +1,14 @@
-"""Regression tests for the 2026-10-02 hand-edit tolerance wave (ticket 18).
+"""Regression tests for the 2026-10-02 hand-edit tolerance wave (ticket 18)
+and the read-path shape gate (ticket 65).
 
 state.yaml is hand-edited by design and validate_state is the gate; each
 test pins a plausible hand edit that used to crash the week (one of them
 after the full provider spend, re-burned on every retry) or silently
 misbehave: numeric/duplicate faction ids, a scalar alias value, a scalar
 generic_words, a non-numeric meta.rules.default_dc, a null disposition,
-a faction without a name.
+a faction without a name — and, for the read paths validate_state never
+gates, a null factions entry, a scalar meta.applied_effects, and a
+missing meta.clock (all refused by name since ticket 65).
 
 Zero dependencies — run directly:  python tests/test_hand_edit_tolerance.py
 """
@@ -20,14 +23,16 @@ import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 import consistency
+import effects
 import ingest
 import llm
 import resolve
 import scheduler
+import store
 import tick
 import views
 import why
-from store import validate_state
+from store import read_shape_errors, validate_state
 
 
 def faction(fid, **over):
@@ -282,6 +287,127 @@ def test_nameless_faction_shows_its_id_in_why():
     print("  why: a nameless faction shows its id, never a KeyError  OK")
 
 
+def test_session_paths_refuse_null_faction_and_scalar_applied_effects():
+    """AC (ticket 65): the session/apply paths validate_state never gated
+    served hand-edited states with split personalities — `factions: [null]`
+    TypeError'd apply_session_record's id-set build (raw traceback), while
+    a scalar meta.applied_effects became its CHARACTERS in the dedup set
+    and silently skipped the effect whose id is one of those characters
+    ("applied 0 effect(s)", exit 0). Both now refuse loudly, naming the
+    shape, on the library path and through the CLI."""
+    record = {"source": "session:t", "week": 4, "events": [],
+              "effects": [{"id": "a", "type": "set_resource",
+                           "faction_id": "a", "resource": "coin",
+                           "after": "high", "reason": "r",
+                           "source": "session:t"}]}
+    null_factions = state(4, [None])
+    errs = effects.apply_session_record(dict(record), null_factions)[2]
+    assert errs and any("factions entry 1" in e for e in errs), errs
+    scalar_applied = state(4, [faction("a")])
+    scalar_applied["meta"]["applied_effects"] = "a"  # the scalar hand edit
+    errs = effects.apply_session_record(dict(record), scalar_applied)[2]
+    assert errs and any("applied_effects" in e for e in errs), errs
+    # and the refusal is LOUD through the CLI too — exit 1, "refusing:",
+    # the shape named — where the scalar shape used to answer exit 0
+    with tempfile.TemporaryDirectory() as d:
+        path = pathlib.Path(d) / "state.yaml"
+        path.write_text(yaml.safe_dump(scalar_applied, sort_keys=False,
+                                       allow_unicode=True), encoding="utf-8")
+        record_path = pathlib.Path(d) / "session.yaml"
+        record_path.write_text(yaml.safe_dump(record, sort_keys=False),
+                               encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = effects.main(["--apply", str(record_path),
+                               "--state", str(path)])
+    assert rc == 1, f"scalar applied_effects must refuse, got {rc}"
+    assert "refusing:" in err.getvalue(), err.getvalue()
+    assert "applied_effects" in err.getvalue(), err.getvalue()
+    assert "valid:" not in out.getvalue(), out.getvalue()
+    # the gate is not over-eager: the same record applies cleanly when the
+    # state carries the documented shapes
+    good = state(4, [faction("a")])
+    events, applied, errs = effects.apply_session_record(dict(record), good)
+    assert (events, applied, errs) == (0, 1, []), (events, applied, errs)
+    assert good["factions"][0]["resources"]["coin"] == "high"
+    print("  effects: null faction and scalar applied_effects refuse by "
+          "name, never no-op  OK")
+
+
+def test_missing_clock_refuses_the_read_paths_naming_it():
+    """AC (ticket 65): tick's inspect print tolerated a missing meta for
+    one line ("week ?") and then KeyError'd inside faction_view; ingest's
+    extract and apply hard-indexed meta.clock.week outright. All the read
+    paths now refuse through the shared gate, exit nonzero, naming
+    meta.clock.week — and a null faction entry refuses views the same
+    way (its view walk used to TypeError)."""
+    clockless = state(4, [faction("mint")])
+    del clockless["meta"]
+    with tempfile.TemporaryDirectory() as d:
+        path = pathlib.Path(d) / "state.yaml"
+        path.write_text(yaml.safe_dump(clockless, sort_keys=False,
+                                       allow_unicode=True), encoding="utf-8")
+        assert read_shape_errors(clockless), "the gate itself must flag it"
+
+        # tick's inspect path (reads the DEFAULT state file — relocate)
+        saved_state_file = store.STATE_FILE
+        store.STATE_FILE = path
+        try:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                rc = tick.main([])
+        finally:
+            store.STATE_FILE = saved_state_file
+        assert rc == 2, f"tick inspect must refuse a clockless state, got {rc}"
+        assert "meta.clock.week" in err.getvalue(), err.getvalue()
+
+        # the views CLI (explicit --state)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = views.main(["mint", "--state", str(path)])
+        assert rc == 1, f"views must refuse a clockless state, got {rc}"
+        assert "meta.clock.week" in err.getvalue(), err.getvalue()
+
+        # ingest's notes path (extract dates the clock's week + 1)
+        notes = pathlib.Path(d) / "notes.md"
+        notes.write_text("- Ferrand calls the customs debt in.\n",
+                         encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = ingest.main([str(notes), "--state", str(path)])
+        assert rc == 1, f"ingest extract must refuse, got {rc}"
+        assert "refusing:" in err.getvalue() and \
+            "meta.clock.week" in err.getvalue(), err.getvalue()
+
+        # ingest's apply path — refused BEFORE the clock hard-index, and
+        # the state file leaves unchanged
+        before = path.read_text(encoding="utf-8")
+        pending = pathlib.Path(d) / "pending.yml"
+        pending.write_text("week: 5\nproposals:\n  - {week: 5, actor: world,"
+                           " text: a quiet night}\n", encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = ingest.main(["--apply", str(pending), "--state", str(path)])
+        assert rc == 1, f"ingest apply must refuse, got {rc}"
+        assert "refusing:" in err.getvalue() and \
+            "meta.clock.week" in err.getvalue(), err.getvalue()
+        assert path.read_text(encoding="utf-8") == before, \
+            "a refusal writes nothing"
+
+        # a null faction entry refuses the views path by name too
+        null_factions = state(4, [None])
+        path.write_text(yaml.safe_dump(null_factions, sort_keys=False),
+                        encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = views.main(["mint", "--state", str(path)])
+        assert rc == 1, f"views must refuse a null faction, got {rc}"
+        assert "factions entry 1" in err.getvalue(), err.getvalue()
+    print("  read paths: a missing meta.clock refuses by name, no "
+          "KeyError  OK")
+
+
 if __name__ == "__main__":
     for fn in [
         test_validate_state_refuses_each_hand_edit_shape_naming_the_key,
@@ -292,6 +418,8 @@ if __name__ == "__main__":
         test_scalar_generic_words_filter_words_not_letters,
         test_null_disposition_degrades_in_the_view_not_a_traceback,
         test_nameless_faction_shows_its_id_in_why,
+        test_session_paths_refuse_null_faction_and_scalar_applied_effects,
+        test_missing_clock_refuses_the_read_paths_naming_it,
     ]:
         fn()
     print("all hand-edit-tolerance tests passed")

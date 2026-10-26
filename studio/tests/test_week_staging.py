@@ -477,6 +477,40 @@ def test_quiet_scheduler_held_week_is_a_valid_proposal(
     assert job["result"]["timeline_entries"] == 0  # quiet, but approvable
 
 
+def test_held_reporting_parses_digit_bearing_faction_ids(
+        client, tmp_spine_root, monkeypatch):
+    """AC (ticket 65): the studio mints faction ids with slugify, which
+    keeps digits ("Sect 9" -> sect_9), but _HOLDS_RE only accepted
+    [a-z_]+ — a digit-bearing faction's HOLDS line matched nothing and it
+    dropped out of the held reporting entirely. The parse now takes the
+    id charset the studio itself mints."""
+    def sect9_tick(engine_root, script, *args, timeout=600, on_line=None,
+                   env=None):
+        world = engines.ENGINE_HOME
+        world.mkdir(parents=True, exist_ok=True)
+        world.joinpath("state.yaml").write_text(yaml.safe_dump({
+            "meta": {"clock": {"week": 4}}, "events": [],
+        }), encoding="utf-8")
+        chron = engines.engine_chronicle_dir()
+        chron.mkdir(exist_ok=True)
+        (chron / "0004-quiet.md").write_text(
+            "# Week 4 — Quiet\n\nHeld (scheduler): sect_9, mint\n",
+            encoding="utf-8")
+        return 0, ["sect_9         HOLDS (quiet week)",
+                    "mint           HOLDS (resting)"]
+
+    monkeypatch.setattr(engines, "run_py", sect9_tick)
+    monkeypatch.setattr(engines, "ENGINE_HOME",
+                        tmp_spine_root / "engine-home")
+    monkeypatch.setattr(engines, "CHRONICLE_HOME",
+                        tmp_spine_root / "chronicle")
+    r = client.post("/api/campaign/testvale/simulation/week",
+                    json={"confirm": True})
+    job = wait_for_job(client, r.json()["job_id"])
+    assert job["status"] == "done", job["error"]
+    assert job["result"]["held"] == ["mint", "sect_9"], job["result"]["held"]
+
+
 def test_week_run_refuses_when_publication_conflict_parked(
         client, tmp_spine_root, monkeypatch):
     # a conflict-parked campaign refuses new publications; the week route
