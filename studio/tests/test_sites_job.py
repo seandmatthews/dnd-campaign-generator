@@ -66,7 +66,9 @@ def fake_png_ok(engine_root, *args, timeout=600, on_line=None, env=None):
 def install(tmp_spine_root, monkeypatch, png=fake_png_ok):
     monkeypatch.setattr(engines, "run_py", fake_battlemap)
     monkeypatch.setattr(engines, "run_node", png)
-    monkeypatch.setattr(engines, "DND_MAPPING", tmp_spine_root / "dnd-mapping")
+    fake_mapping = tmp_spine_root / "dnd-mapping"
+    fake_mapping.mkdir()
+    monkeypatch.setattr(engines, "DND_MAPPING", fake_mapping)
     # the battlemap home lives under the data root — keep it tmp-owned
     monkeypatch.setattr(spine, "DATA_ROOT", tmp_spine_root / "campaign-data")
 

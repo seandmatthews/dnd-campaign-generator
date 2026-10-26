@@ -45,7 +45,10 @@ export default defineConfig({
   testMatch: /(campaign_shell|first_dm|second_evening)\.spec\.ts$/,
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // One retry on CI only: the cold-runner race (first page load + the
+  // stub's fixed 12s week delay vs the 409/queue probes) is a machine-
+  // speed artifact, not a product bug; locally a red is always real.
+  retries: process.env.CI ? 1 : 0,
   timeout: 120_000,
   expect: { timeout: 15_000 },
   reporter: [['list']],

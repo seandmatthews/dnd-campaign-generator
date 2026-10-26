@@ -19,8 +19,13 @@ def _write_pending(root, n, doc):
     rel = f"lore/pending-statblocks-{n}.yaml"
     path = root / "testvale" / rel
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(doc, sort_keys=False, allow_unicode=True),
-                    encoding="utf-8")
+    # CRLF on disk deliberately (the fence-landing test pins the ticket-10
+    # dominant-newline rule) — explicit bytes, because plain write_text
+    # only translates \n to \r\n on Windows, leaving linux running a
+    # different fixture than windows
+    path.write_bytes(
+        yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
+        .replace("\n", "\r\n").encode("utf-8"))
     return rel, path
 
 
@@ -48,6 +53,15 @@ def _core(r):
 def test_approve_inserts_fence_at_end_of_body(client, tmp_spine_root):
     rel, path = _write_pending(tmp_spine_root, 1,
                                _pending_doc("The Vane.md", FENCE_1))
+    # the page exists BEFORE the approval, CRLF on disk, explicit bytes —
+    # the stub-page fallback inherits the platform's newline default
+    # (CRLF only on Windows), which made this fixture platform-dependent
+    page = _page(tmp_spine_root)
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_bytes(
+        ("---\nkind: places\nname: The Vane\n---\n\n"
+         "the river that makes the vale worth having\n\n")
+        .replace("\n", "\r\n").encode("utf-8"))
     r = client.post("/api/campaign/testvale/review/approve",
                     json={"file": rel, "all": True,
                           "expected_revision":
@@ -55,7 +69,7 @@ def test_approve_inserts_fence_at_end_of_body(client, tmp_spine_root):
     assert r.status_code == 200, r.text
     assert _core(r) == {"approved": 1, "fences": 1, "fences_skipped": 0}
     text = _page(tmp_spine_root).read_bytes().decode("utf-8")
-    # the fixture page is CRLF on disk: the fence lands in the page's
+    # the page is CRLF on disk: the fence lands in the page's
     # dominant newline (by count — the ticket-10 rule)
     assert text.rstrip("\r\n").endswith(FENCE_1.replace("\n", "\r\n")), \
         "fence lands at the end"

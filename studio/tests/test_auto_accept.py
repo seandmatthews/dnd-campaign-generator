@@ -377,7 +377,22 @@ def test_week_auto_accept_must_be_a_real_bool(client, tmp_spine_root):
 def test_finished_jobs_feed_the_history(tmp_spine_root, client, monkeypatch):
     """The duration recording rides on submit_campaign_job: a finished
     lore job lands in the campaign's rolling history (the store the busy
-    409s quote)."""
+    409s quote). The job's wall time is not assumed: a trivially fast
+    machine rounds the duration to 0.0s, which estimate() honestly
+    treats as no history — so the finalize wrapper's clock is faked to
+    a deterministic 1.5s."""
+    import time as _real_time
+
+    class _FakeClock:
+        def __init__(self):
+            self._marks = [10.0, 11.5]
+
+        def monotonic(self):
+            return (self._marks.pop(0) if self._marks
+                    else _real_time.monotonic())
+
+    import routers.common as _common
+    monkeypatch.setattr(_common, "time", _FakeClock())
     (tmp_spine_root / "testvale" / "world" / "geography.yaml").write_text(
         "nations: []\n", encoding="utf-8")
     monkeypatch.setattr(loregen, "generate_entries",
