@@ -820,7 +820,15 @@ def post_site(name: str, body: SiteBody):
         # documented argv shape — render-scene-png.mjs joins its arg onto
         # the dnd-mapping root)
         engine_dir = engines.map_sites_dir() / site_name
-        rel = os.path.relpath(engine_dir, root)
+        try:
+            rel = os.path.relpath(engine_dir, root)
+        except ValueError:
+            # repo and campaign-data root on different Windows drives (CI's
+            # checkout on D: with tmp on C: caught this; a real install can
+            # do it too): no relative form exists, and the chain resolves
+            # --dir by joining onto the mapping root — an absolute path
+            # replaces the base on both platforms, so pass it through
+            rel = str(engine_dir)
         with MAPPING_LOCK:
 
             def stage(label, call, what):

@@ -214,7 +214,11 @@ def _safe_target(campaign_root: Path, rel: str) -> Path:
     if inside.split("/", 1)[0] == TX_DIR_NAME:
         raise PublicationError(
             f"publication target is inside the transaction area: {rel!r}")
-    return campaign_root / Path(*PurePosixPath(inside).parts)
+    # rebuilt on the RESOLVED root: the raw campaign root can carry a form
+    # that resolve() rewrites (a subst drive, an 8.3 shortname — CI's
+    # RUNNER~1 tmp caught this), and a later target.relative_to(root-
+    # resolved) must not see two spellings of the same directory
+    return root / Path(*PurePosixPath(inside).parts)
 
 
 # --------------------------------------------------------------- tx storage

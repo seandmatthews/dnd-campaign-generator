@@ -6,11 +6,16 @@
 // Reads <scene-dir>/scene.json + scene.svg, writes <scene-dir>/scene.png.
 
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const sceneDir = join(ROOT, process.argv[2] || "worlds/ruravaqan/scenes/harbour-quay");
+// the studio passes the scene dir mapping-relative, EXCEPT when the repo
+// and the campaign-data root sit on different Windows drives (no relative
+// form exists — there it passes an absolute path, which join() below must
+// not prepend ROOT onto; path.join concatenates, it does not replace)
+const arg = process.argv[2] || "worlds/ruravaqan/scenes/harbour-quay";
+const sceneDir = isAbsolute(arg) ? arg : join(ROOT, arg);
 
 // Tracked pin: tracked scene.png/.uvtt bytes depend on the rasterizer's
 // exact version, and the tool tree (where sharp lives) is git-ignored —
