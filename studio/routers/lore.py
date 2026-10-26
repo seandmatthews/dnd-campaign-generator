@@ -23,7 +23,7 @@ import llm_client
 import loregen
 import obsidian_vault
 import spine
-from routers.common import (blocking_findings, campaign_lock_nowait,
+from routers.common import (campaign_lock_nowait,
                             ensure_entities_migrated, require_campaign,
                             store_errors, submit_campaign_job)
 from routers.review import ReviewBody, approve_items
@@ -32,8 +32,10 @@ from spine import CampaignError, CampaignExists, CampaignNotFound
 router = APIRouter()
 
 AUTO_ACCEPT_HELP = ("auto-accept: approve the staged bundle through the "
-                    "Review path the moment it lands (error-level "
-                    "verification findings leave it pending instead)")
+                    "Review path the moment it lands — only when the run "
+                    "and the FULL verification ladder come back completely "
+                    "clean (zero findings at any level, ticket 70); "
+                    "anything else stays pending for review with the reason")
 
 
 def _auto_accept_staged(name: str, result: dict, log) -> dict:
@@ -41,20 +43,36 @@ def _auto_accept_staged(name: str, result: dict, log) -> dict:
     itself approves the pending file it just staged, through the SAME
     approve path the Review tab uses (same publication transactions,
     receipts, snapshots), recorded in the transaction as auto: true.
-    Findings at error level block it — the bundle stays pending, as today.
-    The job already holds the campaign lock; the staged result is returned
-    with an `auto_accept` note either way, and an approve failure never
-    reads as a failed run (the staged bundle is the deliverable)."""
-    findings = result.get("findings") or []
-    blockers = blocking_findings(findings)
-    if blockers:
-        log(f"auto-accept blocked: {len(blockers)} error-level finding(s) — "
-            "the staged entries stay pending for review")
+    Ticket 70: this is the one path that skips the human, so its gate is
+    the strictest reading — the staged result must carry ZERO findings at
+    any level (an advisory note is a reason for a human to look, and the
+    error-only bar let claims ride as long as their proper nouns were
+    grounded), and the FULL verification ladder (structural, vale, and the
+    adversarial LLM passes — the ladder already in verification/, run only
+    here so human-reviewed entries keep today's cost) must come back clean.
+    Anything else degrades to the normal review queue with the findings as
+    the reason. The job already holds the campaign lock; the staged result
+    is returned with an `auto_accept` note either way, and an approve
+    failure never reads as a failed run (the staged bundle is the
+    deliverable)."""
+    findings = list(result.get("findings") or [])
+    if findings:
+        log(f"auto-accept blocked: {len(findings)} finding(s) in the run — "
+            "auto-accept publishes only a fully clean run; the staged "
+            "entries stay pending for review")
         return {**result, "auto_accept": "blocked",
-                "blocking_findings": blockers}
+                "blocking_findings": findings}
     pending = str(result.get("pending") or "")
     if not pending:
         return {**result, "auto_accept": "nothing-staged"}
+    ladder = loregen.full_ladder_findings(spine.campaign_dir(name), pending,
+                                          log)
+    if ladder:
+        log(f"auto-accept blocked: the full verification ladder was not "
+            f"clean ({len(ladder)} finding(s)) — the staged entries stay "
+            "pending for review")
+        return {**result, "findings": findings + ladder,
+                "auto_accept": "blocked", "blocking_findings": ladder}
     log(f"auto-accepting {pending} (the job is the approver; recorded as "
         "auto in the publication)")
     try:
@@ -86,8 +104,9 @@ class MissingPagesBody(BaseModel):
     targets: list[str] | None = None
     limit: int | None = None
     # opt-in auto-accept (ticket 02): approve the staged drafts through the
-    # Review path as soon as they land — unless an error-level finding
-    # leaves them pending
+    # Review path as soon as they land — only a fully clean run over a
+    # clean FULL ladder publishes; any finding leaves them pending
+    # (ticket 70)
     auto_accept: bool = False
 
 

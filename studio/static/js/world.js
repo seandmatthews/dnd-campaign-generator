@@ -350,7 +350,7 @@
           '</form>' +
           '<label class="field auto-accept-field">' +
             '<input type="checkbox" class="input entries-auto-accept">' +
-            '<span><strong>Auto-accept</strong> — approve the staged entries into the timeline the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
+            '<span><strong>Auto-accept</strong> — approve the staged entries into the timeline the moment they land, through the same Review path (only when the run and the full verification ladder are completely clean — any finding leaves it pending for review). Default is off.</span>' +
           '</label>' +
           '<div class="section-error-slot"></div>' +
           '<pre class="log-tail hidden"></pre>' +
@@ -418,7 +418,7 @@
           resultBox.appendChild(S.el(
             '<div class="success-panel"><strong>' + S.esc(String(count)) + '</strong> entr' +
             (String(count) === '1' ? 'y' : 'ies') + ' staged to Review — auto-accept ' +
-            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by error-level findings' : 'failed')) +
+            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by verification findings' : 'failed')) +
             ', so they wait for your decision.</div>'
           ));
           S.toast('Auto-accept skipped — the entries wait in Review', 'info');
@@ -577,7 +577,7 @@
           '</div>' +
           '<label class="field auto-accept-field">' +
             '<input type="checkbox" class="input pages-auto-accept">' +
-            '<span><strong>Auto-accept</strong> — approve the staged page drafts the moment they land, through the same Review path (skipped, and left pending, if verification reports an error-level finding). Default is off.</span>' +
+            '<span><strong>Auto-accept</strong> — approve the staged page drafts the moment they land, through the same Review path (only when the run and the full verification ladder are completely clean — any finding leaves it pending for review). Default is off.</span>' +
           '</label>' +
           '<div class="section-error-slot"></div>' +
           '<pre class="log-tail hidden"></pre>' +
@@ -663,7 +663,7 @@
             '<div class="success-panel"><strong>' + S.esc(String(count)) +
             '</strong> page draft' + (String(count) === '1' ? '' : 's') +
             ' staged to Review — auto-accept ' +
-            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by error-level findings' : 'failed')) +
+            S.esc(String(r.auto_accept === 'blocked' ? 'was blocked by verification findings' : 'failed')) +
             ', so they wait for your decision.</div>'
           ));
           S.toast('Auto-accept skipped — the drafts wait in Review', 'info');
