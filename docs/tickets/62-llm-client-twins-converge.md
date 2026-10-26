@@ -47,11 +47,11 @@ retry and a choices-shape guard.
 
 ## Acceptance criteria
 
-- [ ] 200-with-array body → readable provider error, not
+- [x] 200-with-array body → readable provider error, not
       AttributeError — engine test mirroring the studio twin's
-- [ ] Length-exhausted completion is marked/handled and a complete
+- [x] Length-exhausted completion is marked/handled and a complete
       shorter reply beats a longer truncated one — engine + studio
       tests
-- [ ] check.py resolves endpoint/key/model from llm.env precedence and
+- [x] check.py resolves endpoint/key/model from llm.env precedence and
       meters its calls — verification direct-run test
-- [ ] No-choices 200 → readable error — same test
+- [x] No-choices 200 → readable error — same test

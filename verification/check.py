@@ -7,7 +7,8 @@ Layers, cheapest first — each sees only what survives the last:
                 vale binary is not installed)
   prompts     — the four adversarial passes (canon-audit, discriminator,
                 compression, specificity); manual by default, --llm to run
-                them through the coding endpoint
+                them through the llm.env provider (any OpenAI-compatible
+                endpoint), metered like the studio and the engine
 
 Usage:
   python check.py <file-or-dir>... [--state <world state yaml>] [--llm] [--out findings]
@@ -18,20 +19,35 @@ verdict. Nothing here blocks anything; the DM decides.
 
 import argparse
 import json
+import os
 import pathlib
 import re
 import shutil
 import statistics
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent
 CANON_FILE = ROOT / "lexicons" / "canon-terms.txt"
 PROMPTS_DIR = ROOT / "prompts"
 SCHEMA_FILE = ROOT / "schemas" / "findings.schema.json"
-API_URL = "https://api.z.ai/api/coding/paas/v4/chat/completions"
+# Provider config: the SAME llm.env precedence chain as the two LLM twins
+# (agentic-simulator/src/llm.py, studio/llm_client.py — an import-free copy,
+# D1: no imports across projects; one llm.env governs all three clients).
+# Environment beats llm.env (repo root, see llm.env.example) beats the Z.ai
+# coding-plan defaults below; the legacy key discovery still applies when
+# LLM_API_KEY is unset.
+ENV_FILE = ROOT.parent / "llm.env"
+API_BASE_DEFAULT = "https://api.z.ai/api/coding/paas/v4"
+API_URL = API_BASE_DEFAULT + "/chat/completions"
 MODEL = "glm-5.3-flash"
+_CONFIG = pathlib.Path.home() / ".zcode" / "v2" / "provider_config.json"
+
+# Transient statuses worth a retry: rate limit and gateway churn.
+_RETRYABLE = (429, 500, 502, 503, 504)
 
 # -ly words that are not adverbs (or are load-bearing)
 _ADVERB_STOPLIST = {
@@ -251,42 +267,218 @@ def vale_findings(paths):
     return findings, True
 
 
+def read_env_file(path=None):
+    """Same .env reader as studio/llm_client.read_env_file (kept identical
+    on purpose): '#' comments, KEY=VALUE, quotes stripped, BOM tolerated,
+    {} when absent."""
+    path = pathlib.Path(path or ENV_FILE)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return {}
+    out = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
 def _find_key():
-    import os
+    """$ZAI_API_KEY, then the key in ~/.zcode/v2/provider_config.json.
+    Rule 1 is the coding-plan key: scan rules 1..n, rule 0 LAST — the same
+    order as the twins, so all three clients pick the same key from one
+    provider_config.json. '' when nothing fits (resolve_config/_complete
+    turn that into the readable error at call time)."""
     if os.environ.get("ZAI_API_KEY"):
         return os.environ["ZAI_API_KEY"]
-    cfg = pathlib.Path.home() / ".zcode" / "v2" / "provider_config.json"
-    if cfg.exists():
-        data = json.loads(cfg.read_text(encoding="utf-8"))
-        for rule in data.get("config", {}).get("providerConfigRules", {}).get("providerRules", []):
-            key = rule.get("config", {}).get("access", {}).get("apiKey")
+    if _CONFIG.exists():
+        try:
+            rules = json.loads(_CONFIG.read_text(encoding="utf-8"))[
+                "config"]["providerConfigRules"]["providerRules"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return ""
+        order = list(range(1, len(rules))) + [0]
+        for i in order:
+            key = ((rules[i].get("config") or {}).get("access")
+                   or {}).get("apiKey")
             if key and not key.startswith("enc:"):
                 return key
-    raise RuntimeError(
-        "no Z.ai API key found; set $ZAI_API_KEY or install one in "
-        "~/.zcode/v2/provider_config.json"
-    )
+    return ""
+
+
+def resolve_config(env_file=None):
+    """The effective LLM config {key, url, model} — llm.env (see
+    llm.env.example), environment first, Z.ai coding-plan defaults last.
+    Raises only when a custom base URL has no model: guessing a model name
+    for a provider we were never told about is a config error before any
+    spend."""
+    f = read_env_file(env_file)
+
+    def pick(name):
+        return (os.environ.get(name) or f.get(name) or "").strip()
+
+    base = pick("LLM_BASE_URL").rstrip("/")
+    model = pick("LLM_MODEL")
+    if base and base != API_BASE_DEFAULT and not model:
+        raise RuntimeError(
+            f"LLM_BASE_URL is set to {base}, but LLM_MODEL is not — set "
+            "LLM_MODEL in the environment or llm.env (see llm.env.example); "
+            "the model name is provider-specific")
+    return {
+        "key": pick("LLM_API_KEY") or _find_key(),
+        "url": (base or API_BASE_DEFAULT) + "/chat/completions",
+        "model": model or MODEL,
+    }
+
+
+class BudgetExceeded(RuntimeError):
+    """The per-run call ceiling is used up — the ladder stops between calls
+    with a clear note instead of spending without a bound. main() turns it
+    into a per-pass finding like any other pass failure."""
+
+
+def env_limit():
+    """LLM_MAX_CALLS as a positive int, or None when unset or not a number —
+    the caller decides the fallback (same semantics as the engine's
+    llm.env_limit)."""
+    raw = (os.environ.get("LLM_MAX_CALLS") or "").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return None
+
+
+# Process-global; safe because check.py is a single-threaded CLI. Mirror
+# studio/llm_client.py's thread-local meter before any in-process embedding.
+_BUDGET = {"calls": 0, "tokens": 0, "limit": env_limit() or 24}
+
+
+def begin_run(limit=None):
+    """Reset the meter for one logical run (one check.py invocation)."""
+    _BUDGET["calls"] = 0
+    _BUDGET["tokens"] = 0
+    if limit is not None:
+        _BUDGET["limit"] = max(1, int(limit))
+
+
+def run_usage():
+    return {"calls": _BUDGET["calls"], "tokens": _BUDGET["tokens"],
+            "limit": _BUDGET["limit"]}
+
+
+def _post_json(cfg, body, timeout, attempts=3):
+    """POST and parse one completion, retrying transient failures (429/5xx)
+    with short backoff. Budget is checked and counted BEFORE every attempt,
+    retries included: a failed POST burns provider time too, and an
+    unmetered retry loop could spend past the ceiling. Hard HTTP errors
+    raise RuntimeError carrying a body snippet."""
+    last = None
+    for attempt in range(attempts):
+        if _BUDGET["calls"] >= _BUDGET["limit"]:
+            raise BudgetExceeded(
+                f"per-run LLM ceiling reached ({_BUDGET['limit']} calls, "
+                f"~{_BUDGET['tokens']} tokens metered) — run stopped "
+                "incomplete; raise LLM_MAX_CALLS to check more files with "
+                "--llm")
+        _BUDGET["calls"] += 1
+        if attempt:
+            time.sleep(min(2 ** (attempt - 1), 4))
+        req = urllib.request.Request(
+            cfg["url"], data=json.dumps(body).encode(),
+            headers={"Authorization": f"Bearer {cfg['key']}",
+                     "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300].strip()
+            except Exception:  # noqa: BLE001 — some HTTPErrors carry no body
+                detail = ""
+            if e.code in _RETRYABLE and attempt < attempts - 1:
+                last = RuntimeError(f"HTTP {e.code}, retrying (attempt {attempt + 1}): {detail}")
+                continue
+            hint = ""
+            if "api.z.ai" in cfg["url"] and (e.code == 401 or "1113" in detail):
+                hint = (" — the coding endpoint needs the coding-plan key, "
+                        "and 1113 means the wrong endpoint or an empty "
+                        "plan pool")
+            raise RuntimeError(f"HTTP {e.code}: {detail}{hint}") from e
+        except urllib.error.URLError as e:
+            last = RuntimeError(f"network error (attempt {attempt + 1}): {e.reason}")
+            if attempt == attempts - 1:
+                raise last from e
+    raise last or RuntimeError("unreachable: retry loop exhausted")
 
 
 def _complete(prompt, max_tokens=8192, max_budget=24576):
-    """Same self-extending budget as the simulator's llm.py."""
-    body = {"model": MODEL, "messages": [{"role": "user", "content": prompt}],
+    """The twins' self-extending budget, import-free (D1):
+    finish_reason "length" doubles max_tokens up to max_budget; a whole
+    reply wins over a longer truncated one; a reply still cut at the cap
+    comes back visibly marked. Config resolved once per call; the per-run
+    ceiling is enforced inside _post_json before every POST."""
+    cfg = resolve_config()
+    if not cfg["key"]:
+        raise RuntimeError(
+            "no LLM API key found — set LLM_API_KEY in llm.env (copy "
+            "llm.env.example at the repo root) or in the environment; the "
+            "legacy $ZAI_API_KEY and ~/.zcode/v2/provider_config.json work "
+            "too")
+    body = {"model": cfg["model"], "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2, "max_tokens": max_tokens}
     best = ""
+    best_complete = ""
     while True:
-        req = urllib.request.Request(
-            API_URL, data=json.dumps(body).encode(),
-            headers={"Authorization": f"Bearer {_find_key()}",
-                     "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=300) as resp:
-            data = json.loads(resp.read())
-        choice = data["choices"][0]
+        data = _post_json(cfg, body, timeout=300)
+        if not isinstance(data, dict):
+            # a 200 whose body is not a JSON object (a proxy returning an
+            # array) takes the readable provider-error path — the old
+            # data["choices"][0] raised a bare IndexError there
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response was {type(data).__name__}, not a "
+                "JSON object")
+        usage = data.get("usage") or {}
+        if usage:
+            _BUDGET["tokens"] += int(usage.get("total_tokens") or 0)
+        choices = data.get("choices")
+        if not choices:
+            # a 200 with no choices (content filter, proxy anomaly) must
+            # not surface as a bare IndexError
+            shape = sorted(data)[:6]
+            raise RuntimeError(
+                f"provider returned no choices (content filter or proxy "
+                f"anomaly?); response keys: {shape}")
+        choice = choices[0]
         content = choice["message"].get("content") or ""
         if len(content.strip()) > len(best.strip()):
             best = content
-        if choice.get("finish_reason") != "length" or body["max_tokens"] >= max_budget:
-            return best
+        if choice.get("finish_reason") != "length":
+            if content.strip():
+                best_complete = content
+            break
+        if body["max_tokens"] >= max_budget:
+            break
         body["max_tokens"] = min(max_budget, body["max_tokens"] * 2)
+    if best_complete.strip():
+        # a whole reply wins outright — even a shorter one: plain
+        # longest-wins preferred the truncated attempt over the complete
+        # answer
+        return best_complete
+    if best.strip():
+        # the budget is spent and every attempt hit finish_reason "length":
+        # the text ends mid-thought — return it visibly marked, never as if
+        # it were whole
+        return best + "\n\n[truncated]"
+    return best
 
 
 def llm_findings(prompt_file, state_text, text, source_file=None):
@@ -436,6 +628,8 @@ def main(argv=None):
     if args.state and not args.llm and not args.discriminate:
         print("note: --state only feeds the LLM passes; it is unused without --llm "
               "or --discriminate", file=sys.stderr)
+
+    begin_run()  # one invocation is one metered run (LLM_MAX_CALLS, default 24)
 
     if args.discriminate:
         findings = discriminate(state_text, *args.discriminate)

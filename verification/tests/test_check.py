@@ -188,6 +188,126 @@ ok("valid finding accepted", check.validate(good)[0])
 ok("finding missing keys rejected", not check.validate({"rule": "x", "quote": ""})[0])
 ok("bad level rejected", not check.validate(dict(good, level="catastrophic"))[0])
 
+
+# --- the third client (ticket 62): llm.env precedence, metering, guards ----
+# check.py resolves its provider through the SAME precedence chain as the
+# twins and meters its calls; the LLM layer runs here over a patched
+# urlopen in a pinned world — no network, none of the machine's config.
+import os as _os
+
+with _tmp.TemporaryDirectory() as td:
+    tdir = pathlib.Path(td)
+    saved_env = {k: _os.environ.pop(k, None)
+                 for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL",
+                           "ZAI_API_KEY", "LLM_MAX_CALLS")}
+    saved_env_file, saved_config = check.ENV_FILE, check._CONFIG
+    saved_urlopen = check.urllib.request.urlopen
+    try:
+        check.ENV_FILE = tdir / "absent-llm.env"
+        check._CONFIG = tdir / "absent-provider-config.json"
+
+        cfg = check.resolve_config()
+        ok("defaults are the Z.ai coding endpoint",
+           cfg["url"] == check.API_URL and cfg["model"] == check.MODEL, str(cfg))
+        ok("no key anywhere resolves to ''", cfg["key"] == "", str(cfg))
+
+        envfile = tdir / "llm.env"
+        envfile.write_text("LLM_BASE_URL=https://api.openai.com/v1\n"
+                           "LLM_API_KEY=file-key\nLLM_MODEL=gpt-4o-mini\n",
+                           encoding="utf-8")
+        check.ENV_FILE = envfile
+        cfg = check.resolve_config()
+        ok("llm.env feeds endpoint/key/model",
+           cfg["url"] == "https://api.openai.com/v1/chat/completions"
+           and cfg["key"] == "file-key" and cfg["model"] == "gpt-4o-mini",
+           str(cfg))
+
+        _os.environ["LLM_API_KEY"] = "env-key"
+        cfg = check.resolve_config()
+        ok("environment beats llm.env", cfg["key"] == "env-key", str(cfg))
+        _os.environ.pop("LLM_API_KEY", None)
+
+        envfile.write_text("LLM_BASE_URL=https://api.openai.com/v1\n",
+                           encoding="utf-8")
+        try:
+            check.resolve_config()
+            ok("custom base without a model refuses", False, "no raise")
+        except RuntimeError as e:
+            ok("custom base without a model refuses", "LLM_MODEL" in str(e), str(e))
+
+        # the legacy walk must scan rule 1 (the coding-plan key) FIRST —
+        # the old order took rule 0 and could pick the wrong key
+        cfgdir = tdir / ".zcode" / "v2"
+        cfgdir.mkdir(parents=True)
+        (cfgdir / "provider_config.json").write_text(_json.dumps({
+            "config": {"providerConfigRules": {"providerRules": [
+                {"config": {"access": {"apiKey": "rule-zero-key"}}},
+                {"config": {"access": {"apiKey": "rule-one-key"}}},
+            ]}}}), encoding="utf-8")
+        check._CONFIG = cfgdir / "provider_config.json"
+        check.ENV_FILE = tdir / "absent-llm.env"
+        ok("legacy key scan prefers the coding-plan rule",
+           check._find_key() == "rule-one-key", check._find_key())
+
+        # metering + shape guards over a patched urlopen (no network)
+        envfile.write_text("LLM_API_KEY=k\n", encoding="utf-8")
+        check.ENV_FILE = envfile
+
+        class FakeResp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return _json.dumps(self._payload).encode()
+
+        check.urllib.request.urlopen = lambda req, timeout=None: FakeResp(
+            {"choices": [{"message": {"content": "x"},
+                          "finish_reason": "stop"}],
+             "usage": {}})
+        check.begin_run(limit=1)
+        ok("first metered call returns", check._complete("p") == "x")
+        try:
+            check._complete("second")
+            ok("ceiling stops between calls", False, "no raise")
+        except check.BudgetExceeded as e:
+            ok("ceiling stops between calls", "ceiling" in str(e), str(e))
+        ok("the spent call is metered", check.run_usage()["calls"] == 1,
+           str(check.run_usage()))
+
+        check.urllib.request.urlopen = lambda req, timeout=None: FakeResp(
+            {"choices": []})
+        check.begin_run(limit=5)
+        try:
+            check._complete("p")
+            ok("no-choices 200 is a readable error", False, "no raise")
+        except RuntimeError as e:
+            ok("no-choices 200 is a readable error", "no choices" in str(e), str(e))
+
+        check.urllib.request.urlopen = lambda req, timeout=None: FakeResp(
+            [{"role": "assistant", "content": "hi"}])
+        check.begin_run(limit=5)
+        try:
+            check._complete("p")
+            ok("array-body 200 is a readable error", False, "no raise")
+        except RuntimeError as e:
+            ok("array-body 200 is a readable error",
+               "no choices" in str(e) and "JSON object" in str(e), str(e))
+    finally:
+        check.urllib.request.urlopen = saved_urlopen
+        check.ENV_FILE, check._CONFIG = saved_env_file, saved_config
+        for k, v in saved_env.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
 print()
 if FAILED:
     print(f"{len(FAILED)} test(s) failed: {FAILED}")

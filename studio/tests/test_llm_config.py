@@ -160,6 +160,49 @@ def test_complete_non_dict_200_takes_the_provider_error_path(
         llm_client.complete("prompt")
 
 
+def test_complete_truncated_at_cap_comes_back_marked(monkeypatch, tmp_path):
+    """The budget is spent and the provider still says finish_reason
+    "length": the reply IS cut mid-thought — it must come back visibly
+    marked, never as if it were whole."""
+    _isolate(monkeypatch, tmp_path)
+    scripted = [
+        {"choices": [{"message": {"content": "half a thought, cut"},
+                      "finish_reason": "length"}]},
+        {"choices": [{"message": {"content": "a longer thought, still cut"},
+                      "finish_reason": "length"}]},
+    ]
+
+    def fake_post(cfg, body, timeout):
+        return scripted.pop(0)
+
+    monkeypatch.setenv("ZAI_API_KEY", "legacy-key")
+    monkeypatch.setattr(llm_client, "_post_json", fake_post)
+    out = llm_client.complete("prompt", max_tokens=16, max_budget=32)
+    assert out.endswith("[truncated]"), out
+    assert out.startswith("a longer thought"), \
+        "the longest (still truncated) attempt is kept under the marker"
+
+
+def test_complete_short_reply_beats_longer_truncated(monkeypatch, tmp_path):
+    """A whole reply wins outright — even a shorter one: plain longest-wins
+    preferred the truncated attempt over the complete answer."""
+    _isolate(monkeypatch, tmp_path)
+    scripted = [
+        {"choices": [{"message": {"content": "one two three four five six"},
+                      "finish_reason": "length"}]},
+        {"choices": [{"message": {"content": "whole"},
+                      "finish_reason": "stop"}]},
+    ]
+
+    def fake_post(cfg, body, timeout):
+        return scripted.pop(0)
+
+    monkeypatch.setenv("ZAI_API_KEY", "legacy-key")
+    monkeypatch.setattr(llm_client, "_post_json", fake_post)
+    out = llm_client.complete("prompt", max_tokens=16, max_budget=32)
+    assert out == "whole", out
+
+
 def test_zai_hint_only_for_zai_urls(monkeypatch, tmp_path):
     """The 1113/401 doctor hint is Z.ai-specific — a custom provider must
     not be told about the coding endpoint."""

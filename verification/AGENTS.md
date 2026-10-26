@@ -23,10 +23,14 @@ Non-negotiables:
 
 ## Key-discovery contract
 
-`check.py`'s `_find_key` finds the Z.ai key in this order: `$ZAI_API_KEY`,
-then a walk of `~/.zcode/v2/provider_config.json`'s `providerRules` taking
-the first non-`enc:` key, then a clear RuntimeError. The siblings
-(`agentic-simulator/src/llm.py`, `studio/llm_client.py`) additionally honor
-`LLM_API_KEY` / the repo-root `llm.env` **before** this order — check.py
-does not read llm.env. Never hardcode a provider index, the rules array
-reorders.
+`check.py` resolves its provider exactly like the twins
+(`agentic-simulator/src/llm.py`, `studio/llm_client.py` — an import-free
+copy of the same contract): `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`
+from the environment, then the repo-root `llm.env`, then the built-in Z.ai
+coding-plan defaults; with `LLM_API_KEY` unset, the legacy discovery
+(`$ZAI_API_KEY`, then a walk of `~/.zcode/v2/provider_config.json`'s
+`providerRules` — rule 1 is the coding-plan key and is scanned first)
+still applies. A missing key is a readable RuntimeError at call time,
+never at import. The `--llm` passes are metered like the studio and the
+engine: an `LLM_MAX_CALLS` ceiling per invocation (default 24). Never
+hardcode a provider index, the rules array reorders.
