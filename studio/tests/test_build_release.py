@@ -313,6 +313,23 @@ def _forbid_network(monkeypatch):
     monkeypatch.setattr(build_release.urllib.request, "urlopen", forbidden)
 
 
+def test_version_block_is_line1_plus_parseable_fields():
+    """Ticket 52: VERSION is line 1 (the stamp install.cmd byte-compares,
+    shape frozen) plus the block update.cmd parses. version_text takes
+    the BARE timestamp (it prefixes APP_VERSION itself), and the
+    version prefix is whatever pyproject says — never a literal."""
+    text = build_release.version_text(
+        "20261027000000", "v0.1.1", "abcdef", "fmg-1.153.1-x",
+        "v0.2.0", "0.7.1")
+    lines = text.splitlines()
+    assert lines[0] == \
+        f"{build_release.APP_VERSION}+20261027000000+v0.2.0+atlas-0.7.1"
+    assert lines[1] == "app-release: v0.1.1"
+    assert lines[2] == "app-commit: abcdef"
+    assert lines[3] == "tools-rev: fmg-1.153.1-x"
+    assert lines[4] == "companion: v0.2.0 atlas-0.7.1"
+
+
 def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch,
                                                     capsys):
     """Ticket 68 AC: with the cache fully warm the build must reach the
@@ -379,11 +396,12 @@ def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch,
     build_release.main()
     assert smoked == [build_release.PORT_STAGE], \
         "the warm-cache offline build must reach the stage smoke"
-    # app + runtime always; the tools pack only when the stage carries
-    # dnd-mapping/tools — this fake stage has none, so the build must
-    # skip it LOUDLY (the warning the real build prints on a tools-less
-    # machine), not fail or emit silently
-    assert [n for n in packed if n.startswith("CampaignStudio-app-")], packed
+    # the app payload is packed by the REAL pack_app_zip (zipfile — no
+    # 7z subprocess to fake) straight from the fake stage; runtime goes
+    # through the faked pack_payload; the tools pack is skipped because
+    # this fake stage has no dnd-mapping/tools — loudly
+    app_zips = list(build_release.DIST.glob("CampaignStudio-app-*.zip"))
+    assert app_zips, "the app payload must be emitted offline (a zip)"
     assert any(n.startswith("CampaignStudio-runtime-") for n in packed), packed
     out = capsys.readouterr().out
     assert "no dnd-mapping/tools" in out and "WARNING" in out, out

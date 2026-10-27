@@ -18,10 +18,12 @@ friend double-clicks the exe.
 
 The same stage packs three payload archives beside the exe:
 
-- `CampaignStudio-app-<stamp>.7z` — studio + engine + dnd-mapping
-  source + docs + launch scripts + the pinned companion. No runtimes,
-  no tools, **never a key**: this is what an update delivers, and an
-  update must not touch the installed `llm.env`.
+- `CampaignStudio-app-<stamp>.zip` — studio + engine + dnd-mapping
+  source + docs + launch scripts + the pinned companion, **as a ZIP**:
+  the friend's machine unpacks it with native `Expand-Archive`, so the
+  updater never needs 7-Zip. No runtimes, no tools, **never a key**:
+  this is what an update delivers, and an update must not touch the
+  installed `llm.env`.
 - `CampaignStudio-runtime-py<ver>-node-<ver>.7z` — the bundled Python
   and node. Ships once; updates ~never.
 - `CampaignStudio-tools-<rev>.7z` — `dnd-mapping/tools/` with
@@ -34,6 +36,23 @@ a GitHub Release with its SHA256 in the body, and proves the public
 gate by downloading it anonymously (no token) and hash-checking it.
 The full exe never goes to CI — it stays the local, first-install
 vehicle and offline fallback (design doc §2).
+
+## The friend's updater (ticket 52)
+
+Every install carries `update.cmd` in its root. It queries
+`releases/latest` unauthenticated (the repo is public), compares the
+release tag against the install's `app-release:` stamp block, asks
+before doing anything, downloads the app payload, hash-verifies it
+against the release body with `certutil`, snapshots the current app
+files into `.update-backup\`, then `/MIR`s the app surface over the
+install — never touching `campaign-data/`, `llm.env`, `runtime/`, or
+`dnd-mapping\tools\`. Every refusal keeps the tree and says so. The
+staged `VERSION` is a block: line 1 is the stamp install.cmd
+byte-compares (shape frozen), the lines under it are what update.cmd
+parses. Build a handout exe as `--release v0.1.1` to stamp it with the
+release it belongs to (CI writes the tag itself); without either, the
+block records `local` and the updater still works, offering the latest
+with both tags printed.
 
 ## What the exe does on the friend's machine
 
@@ -72,6 +91,8 @@ Bundled, nothing installed on the target (64-bit Windows 10/11 only):
 
 - `--campaigns` — copy your `campaign-data/campaigns/` into the bundle (default: empty)
 - `--no-key` — ship without `llm.env` (LLM features then need a key)
+- `--release v0.1.1` — stamp the build as that release (the `app-release:`
+  line update.cmd compares); CI injects the tag itself
 - `--app-payload-only` — build just the app payload (the CI release
   job's mode): no runtimes, no tools, no exe, never a key; refuses
   `--campaigns`/`--no-key`/`--sfx-only` because they do not apply

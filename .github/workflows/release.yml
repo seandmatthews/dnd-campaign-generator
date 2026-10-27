@@ -55,7 +55,7 @@ jobs:
       - name: Hash the payload + write the release body
         shell: pwsh
         run: |
-          $asset = Get-ChildItem release/dist/CampaignStudio-app-*.7z | Select-Object -First 1
+          $asset = Get-ChildItem release/dist/CampaignStudio-app-*.zip | Select-Object -First 1
           if (-not $asset) { throw "no app payload landed in release/dist/" }
           $hash = (Get-FileHash $asset.FullName -Algorithm SHA256).Hash.ToLower()
           @"
@@ -92,8 +92,7 @@ jobs:
             gh release edit "$env:GITHUB_REF_NAME" --notes-file release-body.md
             if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
             $stale = gh release view "$env:GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
-              Where-Object { $_ -like 'CampaignStudio-app-*' }
-            foreach ($a in $stale) {
+              Where-Object { $_ -like 'CampaignStudio-app-*' }            foreach ($a in $stale) {
               gh release delete-asset "$env:GITHUB_REF_NAME" "$a" --yes
               if ($LASTEXITCODE -ne 0) { throw "gh release delete-asset $a failed" }
             }
