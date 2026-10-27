@@ -313,7 +313,8 @@ def _forbid_network(monkeypatch):
     monkeypatch.setattr(build_release.urllib.request, "urlopen", forbidden)
 
 
-def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch):
+def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch,
+                                                    capsys):
     """Ticket 68 AC: with the cache fully warm the build must reach the
     smoke stage with the network call stubbed out — the review's finding
     was an unconditional nodejs.org fetch; the ticket-67 pin made every
@@ -355,11 +356,37 @@ def test_warm_cache_reaches_the_smoke_stage_offline(tmp_path, monkeypatch):
     monkeypatch.setattr(build_release, "verify_sfx", lambda exe, port: None)
     monkeypatch.setattr(build_release, "verify_update",
                         lambda exe, sevenzr, port: None)
+    # the payload split (ticket 51) packs with the real 7zr after the
+    # verifies — faked away at the same seam as pack() (both shell out
+    # to 7z), and asserted to have RUN so the offline build provably
+    # reaches the whole payload emission, not just the smoke stage
+    packed = []
+
+    def fake_pack_payload(sevenzr, out_name, *args):
+        out = build_release.DIST / out_name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"payload " + out_name.encode("ascii"))
+        packed.append(out_name)
+        return out
+
+    monkeypatch.setattr(build_release, "pack_payload", fake_pack_payload)
+    monkeypatch.setattr(build_release, "verify_payload_sets",
+                        lambda sevenzr, packs, app_only: None)
+    monkeypatch.setattr(build_release, "verify_app_over_full",
+                        lambda sevenzr, port, app: None)
     monkeypatch.setattr(sys, "argv", ["build_release.py", "--keep-work"])
 
     build_release.main()
     assert smoked == [build_release.PORT_STAGE], \
         "the warm-cache offline build must reach the stage smoke"
+    # app + runtime always; the tools pack only when the stage carries
+    # dnd-mapping/tools — this fake stage has none, so the build must
+    # skip it LOUDLY (the warning the real build prints on a tools-less
+    # machine), not fail or emit silently
+    assert [n for n in packed if n.startswith("CampaignStudio-app-")], packed
+    assert any(n.startswith("CampaignStudio-runtime-") for n in packed), packed
+    out = capsys.readouterr().out
+    assert "no dnd-mapping/tools" in out and "WARNING" in out, out
 
 
 def test_warm_cache_ensure_cache_itself_needs_no_network(tmp_path,

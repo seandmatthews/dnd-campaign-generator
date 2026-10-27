@@ -1,0 +1,121 @@
+# Release job (ticket 51): a v* tag push builds the app payload on
+# Windows and attaches it to a GitHub Release with its SHA256 in the
+# body — the asset ticket 52's update.cmd later downloads, hash in
+# hand. The full exe stays a LOCAL build: the first-install vehicle and
+# the offline fallback (design doc §2); CI ships only the
+# single-digit-MB app payload, which needs no runtimes and no FMG tools.
+#
+# The anonymous-download step is the public-gate proof (ticket 51,
+# acceptance 2): the update path must work with no credentials in the
+# friend's install, so the job itself downloads the asset without a
+# token and hash-checks it against the release body.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  app-payload:
+    runs-on: windows-latest
+    steps:
+      # The actions are pinned by commit SHA (ticket 67) — same pins as
+      # ci.yml; bump the comment and the SHA together.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: The tag names the pyproject version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          VER=$(python - <<'PY'
+          import re
+          print(re.search(r'^version\s*=\s*"([^"]+)"',
+                          open('pyproject.toml', encoding='utf-8').read(),
+                          re.M).group(1))
+          PY
+          )
+          echo "tag ${TAG} vs pyproject ${VER}"
+          if [ "$TAG" != "$VER" ]; then
+            echo "FAILED: tag ${GITHUB_REF_NAME} does not name the pyproject version ${VER} — re-tag or bump pyproject"
+            exit 1
+          fi
+
+      - name: Build the app payload
+        # --app-payload-only: no runtimes, no tools, and never a key
+        # (CI has none; an app payload must not carry one — design §3).
+        run: python release/build_release.py --app-payload-only
+
+      - name: Hash the payload + write the release body
+        shell: pwsh
+        run: |
+          $asset = Get-ChildItem release/dist/CampaignStudio-app-*.7z | Select-Object -First 1
+          if (-not $asset) { throw "no app payload landed in release/dist/" }
+          $hash = (Get-FileHash $asset.FullName -Algorithm SHA256).Hash.ToLower()
+          @"
+          Campaign Studio $env:GITHUB_REF_NAME — app payload
+
+          asset: $($asset.Name)
+          sha256: $hash
+
+          First install: use the full exe shared beside BEFORE-YOU-RUN.txt
+          (Discord or Drive — this release carries the update payload, not
+          the first-install vehicle). Later releases: update.cmd in the
+          install root checks here, hash-verifies, and swaps the app tree.
+          "@ | Out-File -Encoding utf8 release-body.md
+          "ASSET_NAME=$($asset.Name)" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Attach the payload to the release (re-runs REPLACE, not accumulate)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$env:GITHUB_REF_NAME" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create "$env:GITHUB_REF_NAME" `
+              --title "Campaign Studio $env:GITHUB_REF_NAME" `
+              --notes-file release-body.md
+            if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          }
+          else {
+            # the ordinary recovery path (re-tag, or a re-run of a red
+            # job): the asset NAME carries the build stamp, so a plain
+            # --clobber upload would ADD the new file beside the old and
+            # leave a body naming the stale build. Refresh the body and
+            # drop the previous app payload so exactly one remains.
+            gh release edit "$env:GITHUB_REF_NAME" --notes-file release-body.md
+            if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
+            $stale = gh release view "$env:GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
+              Where-Object { $_ -like 'CampaignStudio-app-*' }
+            foreach ($a in $stale) {
+              gh release delete-asset "$env:GITHUB_REF_NAME" "$a" --yes
+              if ($LASTEXITCODE -ne 0) { throw "gh release delete-asset $a failed" }
+            }
+          }
+          gh release upload "$env:GITHUB_REF_NAME" "release/dist/$env:ASSET_NAME" --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+
+      - name: Anonymous download proof (the public gate)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $rel = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
+          # select THE asset this job built by name — never assets[0],
+          # which is whatever order the API lists
+          $asset = $rel.assets | Where-Object { $_.name -eq $env:ASSET_NAME }
+          if (-not $asset) { throw "release does not carry $env:ASSET_NAME" }
+          $url = $asset.browser_download_url
+          Write-Host "probing $url"
+          Invoke-WebRequest -Uri $url -OutFile probe.7z
+          $got = (Get-FileHash probe.7z -Algorithm SHA256).Hash.ToLower()
+          $m = [regex]::Match($rel.body, 'sha256: ([0-9a-f]{64})')
+          if (-not $m.Success) { throw "release body carries no parseable sha256 line" }
+          if ($got -ne $m.Groups[1].Value) { throw "anonymous download hash mismatch: $got vs $($m.Groups[1].Value)" }
+          Write-Host ("anonymous download OK ({0:N1} MB), sha256 matches the release body" -f ((Get-Item probe.7z).Length / 1MB))

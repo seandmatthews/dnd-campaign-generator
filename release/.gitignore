@@ -2,3 +2,5 @@
 cache/
 work/
 dist/
+# Build logs (builder output; may carry key tails and machine paths).
+*.log
