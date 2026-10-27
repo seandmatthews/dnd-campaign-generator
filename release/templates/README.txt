@@ -52,9 +52,14 @@ plus the exe. Map generation also writes scratch files.
 
 Updating
 --------
-When you get a new exe from the same place, just run it: it refreshes
-the program in this folder while leaving your campaigns and settings
-alone. Close the Studio before you do.
+Two ways to get a new version. When you get a new exe from the same
+place, just run it: it refreshes the program in this folder while
+leaving your campaigns and settings alone. Or skip the exe entirely:
+double-click "update.cmd" (next to launch.cmd) and it checks online
+for the latest release, shows you what it found, and asks before it
+updates this folder by itself - a few megabytes instead of the whole
+exe. Either way, close the Studio first; your campaigns and your key
+are never touched.
 
 A note on the API key
 ---------------------

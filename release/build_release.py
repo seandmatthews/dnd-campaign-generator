@@ -166,7 +166,25 @@ IGNORE_BASE = [".git", ".venv", "__pycache__", "*.pyc", ".pytest_cache"]
 # --sfx-only rebuild's cached payload.7z can silently predate (ticket 68):
 # the sfx iteration loop exists to iterate on exactly these, and a stale
 # cache turns the verify green over a payload that lacks the edit.
-TEMPLATE_NAMES = ["install.cmd", "launch.cmd", "export.cmd", "README.txt"]
+TEMPLATE_NAMES = ["install.cmd", "launch.cmd", "export.cmd", "README.txt",
+                  "update.cmd"]
+
+
+def version_text(stamp, release, commit, tools_rev, companion_tag,
+                 atlas_pin):
+    """The staged VERSION content. Line 1 is the stamp install.cmd
+    byte-compares — never change its shape. The block under it is what
+    update.cmd (ticket 52) parses: which release this payload belongs
+    to (CI writes the tag via GITHUB_REF_NAME, a handout exe is built
+    with --release v0.1.1, anything else records 'local'), the commit,
+    the tools-pack rev, and the companion pin."""
+    return ("\n".join([
+        f"{APP_VERSION}+{stamp}+{companion_tag}+atlas-{atlas_pin}",
+        f"app-release: {release}",
+        f"app-commit: {commit}",
+        f"tools-rev: {tools_rev}",
+        f"companion: {companion_tag} atlas-{atlas_pin}",
+    ]) + "\n")
 
 
 def stale_templates(payload):
@@ -485,6 +503,9 @@ def build_stage(node_zip):
     # the friend backup path (ticket 58): export.cmd beside launch.cmd,
     # driving the bundled python — README.txt's "Backing up" names it
     shutil.copy2(TEMPLATES / "export.cmd", STAGE / "export.cmd")
+    # the friend-visible updater (ticket 52): rides the payload so every
+    # install (first and updated) carries the current one
+    shutil.copy2(TEMPLATES / "update.cmd", STAGE / "update.cmd")
     shutil.copy2(TEMPLATES / "README.txt", STAGE / "README.txt")
     # Build stamp included: install.cmd's fast path compares this file
     # byte-for-byte, so every rebuild is an update — no version bump to
@@ -507,8 +528,10 @@ def build_stage(node_zip):
         raise SystemExit(f"FAILED: the staged companion reports "
                          f"{companion_version} but the pin is {COMPANION_TAG}")
     stamp = time.strftime(STAMP_FMT)
+    release = ARGS.release or os.environ.get("GITHUB_REF_NAME") or "local"
     (STAGE / "VERSION").write_text(
-        f"{APP_VERSION}+{stamp}+{COMPANION_TAG}+atlas-{atlas_pin}",
+        version_text(stamp, release, os.environ.get("GITHUB_SHA") or "none",
+                     TOOLS_REV, COMPANION_TAG, atlas_pin),
         encoding="ascii")
 
 
@@ -601,7 +624,7 @@ def smoke_app():
     step("smoke (app payload): structural")
     for rel in ("VERSION", "llm.env.example", "studio/run.py",
                 "studio/server.py", "launch.cmd", "install.cmd",
-                "export.cmd", "README.txt",
+                "export.cmd", "update.cmd", "README.txt",
                 "avtt-integration/LICENSE",
                 "avtt-integration/src/avtt/publish.py",
                 "docs/for-new-gms/TUTORIAL.md",
@@ -690,8 +713,8 @@ def verify_app_over_full(sevenzr, port, app_path):
 
     fresh = tdir / "fresh"
     fresh.mkdir()
-    run([sevenzr, "x", f"-o{fresh}", "-y", app_path],
-        stdout=subprocess.DEVNULL)
+    with zipfile.ZipFile(app_path) as z:
+        z.extractall(fresh)
     installed, carried = app_surface(dest), app_surface(fresh)
     if installed != carried:
         miss = sorted(carried - installed)[:5]
@@ -702,8 +725,11 @@ def verify_app_over_full(sevenzr, port, app_path):
                          f"app surface (missing {miss}, extra {extra}, "
                          f"differing {differ})")
     print(f"  file-tree compare: {len(installed)} app files, byte-identical")
-    # lay the update path over the real install and boot it
-    run([sevenzr, "x", f"-o{dest}", "-y", app_path], stdout=subprocess.DEVNULL)
+    # lay the update path over the real install and boot it — extracted
+    # the way update.cmd does it (zipfile on our side, Expand-Archive
+    # on the friend's)
+    with zipfile.ZipFile(app_path) as z:
+        z.extractall(dest)
     boot_log = (WORK / "payload-boot.log").open("w")
     boot = subprocess.Popen(["cmd", "/c", "launch.cmd"], env=env, cwd=dest,
                             stdout=boot_log, stderr=subprocess.STDOUT)
@@ -741,19 +767,17 @@ def kill_sfx_tree(proc, exe_name, port):
 
 
 def bundle_version():
-    """The payload's full VERSION string (build_stage wrote it into the
-    stage). Names the artifact (ticket 57): pyproject's 0.1.0 has not
-    moved, so naming the exe after APP_VERSION alone shipped every
-    build under the same filename and an old download was silently,
-    invisibly old. With the full stamp (seconds included) each build is
-    a distinct, legible file — the friend reporting a bug can quote the
-    exe name."""
+    """The payload's VERSION STAMP — the first line only: the file is a
+    multi-line block since ticket 52 (update.cmd parses the lines under
+    it), and a filename cannot carry newlines."""
     try:
-        return (STAGE / "VERSION").read_text(encoding="ascii").strip()
-    except OSError:
-        raise SystemExit(f"FAILED: {STAGE / 'VERSION'} is missing — the "
-                         "exe is named from it (build the stage first, or "
-                         "--sfx-only on a kept release/work)")
+        return (STAGE / "VERSION").read_text(encoding="ascii") \
+            .splitlines()[0].strip()
+    except (OSError, IndexError):
+        raise SystemExit(f"FAILED: {STAGE / 'VERSION'} is missing or "
+                         "empty — the exe is named from it (build the "
+                         "stage first, or --sfx-only on a kept "
+                         "release/work)")
 
 
 def pack(sevenzr):
@@ -779,7 +803,37 @@ def pack_payload(sevenzr, out_name, *args):
 
 
 def app_pack_name():
-    return f"CampaignStudio-app-{bundle_version()}.7z"
+    # .zip, not .7z (ticket 52): the friend's machine extracts the app
+    # payload with native tooling (Expand-Archive) — the updater never
+    # needs 7-Zip. runtime/tools stay .7z: nothing on the target opens
+    # those.
+    return f"CampaignStudio-app-{bundle_version()}.zip"
+
+
+def pack_app_zip():
+    """The app payload as a deterministic ZIP of exactly plan['app']:
+    sorted paths, fixed timestamps — the same stage zips to the same
+    bytes, and the post-pack self-check lists it through the same
+    zipfile module that wrote it."""
+    out = DIST / app_pack_name()
+    DIST.mkdir(exist_ok=True)
+    out.unlink(missing_ok=True)
+    files = sorted(payload_plan(stage_files())["app"])
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED,
+                         compresslevel=9) as z:
+        for rel in files:
+            info = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))
+            info.external_attr = 0o644 << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(info, (STAGE / rel).read_bytes())
+    print(f"  {out.name}: {out.stat().st_size // (1024 * 1024)} MB")
+    return out
+
+
+def list_zip_files(archive):
+    with zipfile.ZipFile(archive) as z:
+        return {n.replace("\\", "/") for n in z.namelist()
+                if not n.endswith("/")}
 
 
 def list_payload_files(sevenzr, archive):
@@ -811,8 +865,12 @@ def verify_payload_sets(sevenzr, packs, app_only):
     packs were built from, so a packer bug cannot pass silently."""
     step("verify: packed payloads match the plan (disjoint, total, no strays)")
     plan = payload_plan(stage_files())
-    packed = {kind: list_payload_files(sevenzr, path)
-              for kind, path in packs.items()}
+    packed = {}
+    for kind, path in packs.items():
+        if str(path).endswith(".zip"):
+            packed[kind] = list_zip_files(path)
+        else:
+            packed[kind] = list_payload_files(sevenzr, path)
     for kind, got in packed.items():
         want = plan[kind]
         if got != want:
@@ -992,8 +1050,18 @@ def verify_update(exe, sevenzr, port):
 
     def dest_version():
         try:
-            return (dest / "VERSION").read_text(encoding="ascii").strip()
-        except OSError:
+            return (dest / "VERSION").read_text(encoding="ascii") \
+                .splitlines()[0].strip()
+        except (OSError, IndexError):
+            return ""
+
+    def stamp_line():
+        """The completion stamp's stamp line — the file is a byte-copy
+        of the payload's multi-line VERSION since ticket 52."""
+        try:
+            return (dest / ".install-complete") \
+                .read_text(encoding="ascii").splitlines()[0].strip()
+        except (OSError, IndexError):
             return ""
 
     def install_log():
@@ -1038,8 +1106,7 @@ def verify_update(exe, sevenzr, port):
                              "llm.env (the friend's rotated key is gone)")
         if not (campaign / "campaign.yaml").is_file():
             raise SystemExit("FAILED: the update destroyed campaign data")
-        if dest_version() != new_version or (dest / ".install-complete") \
-                .read_text(encoding="ascii").strip() != new_version:
+        if dest_version() != new_version or stamp_line() != new_version:
             raise SystemExit("FAILED: the update did not complete "
                              "(VERSION/stamp not advanced)")
         print("  update pass: llm.env + campaigns preserved, VERSION advanced")
@@ -1109,8 +1176,7 @@ def verify_update(exe, sevenzr, port):
         raise SystemExit(f"FAILED: the forced lock did not fail the mirror "
                          f"(last robocopy exits {exits[-3:]})")
     stamp = dest / ".install-complete"
-    if stamp.exists() and stamp.read_text(encoding="ascii").strip() \
-            == new_version:
+    if stamp_line() == new_version:
         raise SystemExit("FAILED: a failed mirror wrote the completion stamp")
     # The frankeninstall trap: VERSION may already say the new payload (the
     # real partial mirrors copied it early), but the stamp does not — the
@@ -1125,7 +1191,7 @@ def verify_update(exe, sevenzr, port):
     if sentinel.exists():
         raise SystemExit("FAILED: no completion stamp still took the fast "
                          "path (the sentinel survived)")
-    if stamp.read_text(encoding="ascii").strip() != new_version:
+    if stamp_line() != new_version:
         raise SystemExit("FAILED: the recovery mirror did not write its "
                          "completion stamp")
     if aged.read_text(encoding="utf-8") != \
@@ -1158,6 +1224,11 @@ def main():
                          "step + verification (for iterating on the sfx "
                          "layer); warns when tracked templates are newer "
                          "than the cached payload")
+    ap.add_argument("--release", metavar="TAG", default=None,
+                    help="stamp this build as release TAG (e.g. v0.1.1) — "
+                         "what update.cmd compares against the latest "
+                         "release; defaults to GITHUB_REF_NAME on CI, "
+                         "'local' otherwise")
     ap.add_argument("--app-payload-only", action="store_true",
                     help="build only the app payload (the CI release job, "
                          "ticket 51): no runtimes, no tools, no exe, and "
@@ -1177,8 +1248,7 @@ def main():
         build_stage(None)
         if not ARGS.no_smoke:
             smoke_app()
-        app = pack_payload(sevenzr, app_pack_name(), ".",
-                           "-x!runtime", "-x!dnd-mapping/tools")
+        app = pack_app_zip()
         verify_payload_sets(sevenzr, {"app": app}, app_only=True)
         step("done")
         h = hashlib.sha256(app.read_bytes()).hexdigest()
@@ -1228,8 +1298,7 @@ def main():
     # exe layer over a cached payload, and stale payloads must not be
     # re-shipped as release assets.
     if not ARGS.sfx_only:
-        packs["app"] = pack_payload(sevenzr, app_pack_name(), ".",
-                                    "-x!runtime", "-x!dnd-mapping/tools")
+        packs["app"] = pack_app_zip()
         packs["runtime"] = pack_payload(
             sevenzr,
             f"CampaignStudio-runtime-py{PY_VERSION}-node-{NODE_VERSION}.7z",
