@@ -637,7 +637,8 @@ def verify_app_over_full(sevenzr, port, app_path):
     kill_parked_chains(tdir)
     shutil.rmtree(tdir, onerror=_clear_readonly_and_retry)
     tdir.mkdir(parents=True, exist_ok=True)
-    dest = tdir / "installed"
+    # CS_TEST_HOME for dev reruns, same affordance as the other verifies
+    dest = Path(os.environ.get("CS_TEST_HOME") or str(tdir / "installed"))
     payload_dir = tdir / "payload"
     payload_dir.mkdir()
     run([sevenzr, "x", f"-o{payload_dir}", "-y", WORK / "payload.7z"],
@@ -650,18 +651,18 @@ def verify_app_over_full(sevenzr, port, app_path):
                        cwd=payload_dir, stdout=install_out,
                        stderr=subprocess.STDOUT, check=False, timeout=900)
     finally:
+        # a timeout kill takes only the direct child — the launch.cmd
+        # chain install.cmd `start`ed is detached and must be reaped
+        # HERE, before anything can fail past this point (the
+        # parked-chain lesson that poisoned three builds, 140a60e).
+        kill_parked_chains(tdir)
+        if os.environ.get("CS_TEST_HOME"):
+            kill_parked_chains(dest.parent)
+        kill_port(port)
         install_out.close()
-    # install.cmd always ends by starting the studio — kill the whole
-    # chain, then strip what the boot created (logs) so only shipped
-    # bytes reach the comparison.
-    kill_parked_chains(tdir)
-    kill_port(port)
     if not (dest / "VERSION").is_file():
         raise SystemExit("FAILED: install.cmd did not produce an install "
                          "for the app-payload equivalence check")
-    logs = dest / "studio" / "logs"
-    if logs.exists():
-        shutil.rmtree(logs)
 
     def app_surface(root):
         out = {}
@@ -669,9 +670,20 @@ def verify_app_over_full(sevenzr, port, app_path):
             if not p.is_file():
                 continue
             rel = p.relative_to(root).as_posix()
+            parts = rel.split("/")
+            # excluded: the two once-shipped packs (the app payload
+            # never carries them), the installer's own markers, and the
+            # two write classes a BOOT creates at runtime — the data
+            # root's rotating log (launch.cmd points CAMPAIGN_DATA_ROOT
+            # at campaign-data/) and bytecode caches — so runtime noise
+            # cannot flake the compare. Bytecode is not shipped bytes:
+            # the plan's strip rules exclude it from the payload too.
             if rel.startswith("runtime/") \
                     or rel.startswith("dnd-mapping/tools/") \
-                    or rel in (".install-complete", "install-log.txt"):
+                    or rel in (".install-complete", "install-log.txt") \
+                    or rel.startswith("campaign-data/logs/") \
+                    or any(part == "__pycache__" or part.endswith(".pyc")
+                           for part in parts):
                 continue
             out[rel] = hashlib.sha256(p.read_bytes()).hexdigest()
         return out
@@ -773,11 +785,13 @@ def app_pack_name():
 def list_payload_files(sevenzr, archive):
     """The FILE entries of a packed payload as /-separated relative
     paths (-slt listing; directory entries and the archive's own line
-    are dropped)."""
-    r = run([sevenzr, "l", "-slt", str(archive)], capture_output=True,
-            text=True)
+    are dropped). 7z prints names in the console codepage — capture
+    bytes and decode lossily, so an exotic stage name fails the
+    set-compare LOUDLY as a mismatch instead of crashing the parse
+    with a decode error."""
+    r = run([sevenzr, "l", "-slt", str(archive)], capture_output=True)
     files, cur = set(), None
-    for ln in r.stdout.splitlines():
+    for ln in r.stdout.decode("utf-8", errors="replace").splitlines():
         if ln.startswith("Path = "):
             cur = ln[len("Path = "):].strip()
         elif ln.startswith("Attributes = ") and cur is not None:

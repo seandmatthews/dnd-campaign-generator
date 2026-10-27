@@ -55,8 +55,8 @@ jobs:
       - name: Hash the payload + write the release body
         shell: pwsh
         run: |
-          $asset = Get-ChildItem dist/CampaignStudio-app-*.7z | Select-Object -First 1
-          if (-not $asset) { throw "no app payload landed in dist/" }
+          $asset = Get-ChildItem release/dist/CampaignStudio-app-*.7z | Select-Object -First 1
+          if (-not $asset) { throw "no app payload landed in release/dist/" }
           $hash = (Get-FileHash $asset.FullName -Algorithm SHA256).Hash.ToLower()
           @"
           Campaign Studio $env:GITHUB_REF_NAME — app payload
@@ -71,7 +71,7 @@ jobs:
           "@ | Out-File -Encoding utf8 release-body.md
           "ASSET_NAME=$($asset.Name)" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Attach the payload to the release (idempotent on re-tag)
+      - name: Attach the payload to the release (re-runs REPLACE, not accumulate)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,7 +83,22 @@ jobs:
               --notes-file release-body.md
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
           }
-          gh release upload "$env:GITHUB_REF_NAME" "dist/$env:ASSET_NAME" --clobber
+          else {
+            # the ordinary recovery path (re-tag, or a re-run of a red
+            # job): the asset NAME carries the build stamp, so a plain
+            # --clobber upload would ADD the new file beside the old and
+            # leave a body naming the stale build. Refresh the body and
+            # drop the previous app payload so exactly one remains.
+            gh release edit "$env:GITHUB_REF_NAME" --notes-file release-body.md
+            if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
+            $stale = gh release view "$env:GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
+              Where-Object { $_ -like 'CampaignStudio-app-*' }
+            foreach ($a in $stale) {
+              gh release delete-asset "$env:GITHUB_REF_NAME" "$a" --yes
+              if ($LASTEXITCODE -ne 0) { throw "gh release delete-asset $a failed" }
+            }
+          }
+          gh release upload "$env:GITHUB_REF_NAME" "release/dist/$env:ASSET_NAME" --clobber
           if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
 
       - name: Anonymous download proof (the public gate)
@@ -92,7 +107,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $rel = gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/$env:GITHUB_REF_NAME" | ConvertFrom-Json
-          $url = $rel.assets[0].browser_download_url
+          # select THE asset this job built by name — never assets[0],
+          # which is whatever order the API lists
+          $asset = $rel.assets | Where-Object { $_.name -eq $env:ASSET_NAME }
+          if (-not $asset) { throw "release does not carry $env:ASSET_NAME" }
+          $url = $asset.browser_download_url
           Write-Host "probing $url"
           Invoke-WebRequest -Uri $url -OutFile probe.7z
           $got = (Get-FileHash probe.7z -Algorithm SHA256).Hash.ToLower()
