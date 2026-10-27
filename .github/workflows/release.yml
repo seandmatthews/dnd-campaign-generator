@@ -92,7 +92,8 @@ jobs:
             gh release edit "$env:GITHUB_REF_NAME" --notes-file release-body.md
             if ($LASTEXITCODE -ne 0) { throw "gh release edit failed" }
             $stale = gh release view "$env:GITHUB_REF_NAME" --json assets --jq '.assets[].name' |
-              Where-Object { $_ -like 'CampaignStudio-app-*' }            foreach ($a in $stale) {
+              Where-Object { $_ -like 'CampaignStudio-app-*' }
+            foreach ($a in $stale) {
               gh release delete-asset "$env:GITHUB_REF_NAME" "$a" --yes
               if ($LASTEXITCODE -ne 0) { throw "gh release delete-asset $a failed" }
             }
