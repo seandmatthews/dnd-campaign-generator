@@ -59,7 +59,9 @@ double-click "update.cmd" (next to launch.cmd) and it checks online
 for the latest release, shows you what it found, and asks before it
 updates this folder by itself - a few megabytes instead of the whole
 exe. Either way, close the Studio first; your campaigns and your key
-are never touched.
+are never touched. Keep your own files inside "campaign-data" - files
+left loose in the program folders are treated as old program files and
+removed on update.
 
 A note on the API key
 ---------------------

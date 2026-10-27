@@ -163,6 +163,11 @@ if exist "%DEST%\dnd-mapping" (
 )
 for %%F in (VERSION launch.cmd install.cmd update.cmd export.cmd README.txt llm.env.example) do (
   if exist "%DEST%\%%F" copy /y "%DEST%\%%F" "%BACKUP%\%%F" >nul
+  if errorlevel 1 (
+    echo   Could not snapshot %%F ^(locked?^) - nothing was changed.
+    echo   Close every Studio and cmd window, then run update.cmd again.
+    exit /b 1
+  )
 )
 
 rem -- 7. unpack + mirror the app surface. /XD with FULL paths excludes
