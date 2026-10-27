@@ -1,11 +1,12 @@
 # 51 — Release payloads: split the builder, CI attaches GitHub releases
 
-**Status:** in-progress (implemented 2026-10-26 on
-ticket/51-release-payloads, 38e8003 + review fixes f783c18 — the full
-build ran green through all six verification passes, the second time
-after the review's hermeticity fix; ONE box left: the release
-workflow's first live run, which is the v0.1.0 tag push done right
-after this lands — see the implementation notes)
+**Status:** completed (implemented 2026-10-26 on ticket/51-release-payloads,
+38e8003 + review fixes f783c18, merged fa5299d; the full build ran green
+through all six verification passes, the second time after the review's
+hermeticity fix; the v0.1.0 tag push ran the release workflow green
+end to end — run 40427302597, every step including the anonymous-
+download proof — and an independent token-free download from the dev
+machine hash-matched the release body)
 **Area:** `release/build_release.py`, `.github/workflows/` (new release
 job), repo visibility (gate)
 **Found by:** the distribution design, 2026-10-12
@@ -52,15 +53,23 @@ Per the design doc §2:
 
 ## Acceptance criteria
 
-- [ ] Stage → three payloads deterministically; an app payload laid over
+- [x] Stage → three payloads deterministically; an app payload laid over
       a full-exe install boots and serves (update path result == full
-      install result, file tree compared) — builder smoke extension.
-- [ ] Tag push produces a GitHub Release with the payload asset; an
+      install result, file tree compared) — builder smoke extension:
+      the payload-set pass (each archive exactly its plan; payload.7z
+      == the union, 22,312 files) + `verify_app_over_full` (172 app
+      files byte-identical; boot 200s), green on both build runs —
+      pinned by `studio/tests/test_payload_plan.py` at the seam
+- [x] Tag push produces a GitHub Release with the payload asset; an
       anonymous download of it succeeds (proves the public gate) —
-      checked in the release job.
-- [ ] The full-exe build is behaviorally unchanged — the existing build
+      checked in the release job: run 40427302597 (v0.1.0) green
+      through "Anonymous download proof (the public gate)", and an
+      independent token-free `urllib` download from the dev machine
+      matched the body's `sha256:` line
+- [x] The full-exe build is behaviorally unchanged — the existing build
       smoke gate (staged /tutorial 200, install + fast-path verify)
-      passes on a rebuild.
+      passes on a rebuild — plus all three ticket-57 update legs, on
+      both green runs
 
 ## Implementation notes (2026-10-26)
 
