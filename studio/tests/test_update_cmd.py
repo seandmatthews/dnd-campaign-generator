@@ -60,6 +60,13 @@ def test_the_explicitness_contract():
     assert "certutil -hashfile" in text and "SHA256" in text
     assert "Expand-Archive" in text
     assert "app-release:" in text, "the stamp block is what it parses"
+    # the live e2e findings, pinned: Expand-Archive gets ONE bounded
+    # retry (AV races fresh downloads), and a backup that survives the
+    # cleanup retry is DISCLOSED, never silently claimed gone
+    assert text.count("Expand-Archive -LiteralPath") == 2, \
+        "the unpack retry must be exactly one bounded second try"
+    assert "could not be removed just now" in text, \
+        "a surviving backup must be disclosed in the success output"
 
 
 def test_launch_cmd_never_invokes_the_updater():

@@ -183,8 +183,17 @@ rem       payload does not carry is DELETED - that is the /MIR
 rem       contract, and the snapshot answers it.
 echo   Swapping in %LATEST% ...
 if exist "%UNPACK%" rmdir /s /q "%UNPACK%"
-powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%UNPACK%' -Force"
-if errorlevel 1 (
+rem Expand-Archive can lose a race with antivirus scanning the fresh
+rem download (seen live: fails right after heavy disk activity, passes
+rem on the identical retry). One bounded retry, five seconds apart.
+set "UNPACK_OK="
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%UNPACK%' -Force" && set "UNPACK_OK=1"
+if defined UNPACK_OK goto :unpacked
+echo   Unpack hiccupped ^(often antivirus holding the fresh download^) - retrying once...
+timeout /t 5 /nobreak >nul
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%UNPACK%' -Force" && set "UNPACK_OK=1"
+:unpacked
+if not defined UNPACK_OK (
   echo   Could not unpack the payload. Nothing was changed.
   exit /b 1
 )
@@ -201,9 +210,24 @@ if errorlevel 8 (
 
 rem -- 8. stamp completion like install.cmd does, clean up, report --
 copy /y "%DEST%\VERSION" "%DEST%\.install-complete" >nul
-rmdir /s /q "%BACKUP%"
+rem the backup removal can lose a race with antivirus (seen live: rd
+rem fails once, succeeds seconds later) - retry once, then DISCLOSE
+rem rather than claim a clean state that is not there.
+rmdir /s /q "%BACKUP%" >nul 2>&1
+if exist "%BACKUP%" (
+  timeout /t 5 /nobreak >nul
+  rmdir /s /q "%BACKUP%" >nul 2>&1
+)
+if exist "%BACKUP%" (
+  echo.
+  echo   Note: the safety copy at
+  echo     %BACKUP%
+  echo   could not be removed just now ^(often antivirus holding it^).
+  echo   It is only a snapshot of the old program files - the next
+  echo   update clears it first thing, or delete the folder by hand.
+)
 del "%ZIP%" >nul 2>&1
-rmdir /s /q "%UNPACK%"
+rmdir /s /q "%UNPACK%" >nul 2>&1
 del "%META%" >nul 2>&1
 echo [%DATE% %TIME%] update complete - %LATEST% >> "%DEST%\install-log.txt"
 echo.

@@ -1,9 +1,10 @@
 # 52 — update.cmd: the friend-visible updater
 
-**Status:** in-progress (implemented 2026-10-26 on ticket/52-update-cmd,
-0a4174b + review fixes; full build green through all six passes with
-the stamp-block interactions; ONE box left: the live e2e — tag v0.1.1,
-then update.cmd against a real v0.1.0 install, below)
+**Status:** completed (implemented 2026-10-26 on ticket/52-update-cmd,
+0a4174b + 387d110, merged 0a5f839; the live e2e ran 2026-10-27 against
+the real v0.1.1 release — three full cycles green, two live-found bugs
+fixed (Expand-Archive AV retry; honest backup-cleanup disclosure);
+closed with the boxes below)
 **Area:** `release/templates/` (`update.cmd`; reuses install.cmd's
 preserve logic), `release/build_release.py` (stamp), the install tree
 **Found by:** the distribution design, 2026-10-12
@@ -41,16 +42,22 @@ Per the design doc §3:
 
 ## Acceptance criteria
 
-- [ ] End-to-end on this machine: tag a trivial change → `update.cmd` on
+- [x] End-to-end on this machine: tag a trivial change → `update.cmd` on
       a scratch install lands the new tree, `campaign-data/` and
-      `llm.env/` byte-identical across the swap.
-- [ ] Offline / unreachable / SHA mismatch → clear message, tree
-      untouched — checked live; the parsing pieces pinned by tests where
-      they are Python-side.
-- [ ] Key rotation: change `llm.env`, restart, the new key is the one
-      used (existing resolution honored; no payload involvement).
-- [ ] Stamp: a fresh install's VERSION block names the tag it came from
-      — `update.cmd`'s compare is against something real.
+      `llm.env/` byte-identical across the swap — the live v0.1.1 e2e
+      (three full cycles, real GitHub download + hash), plus the local
+      fake-server legs in `studio/tests/test_update_cmd.py`
+- [x] Offline / unreachable / SHA mismatch → clear message, tree
+      untouched — checked live (unreachable leg) and pinned by the
+      hash-mismatch and unreachable e2e legs
+- [x] Key rotation: change `llm.env`, restart, the new key is the one
+      used (existing resolution honored; no payload involvement) — the
+      app payload never carries `llm.env` (pinned by the builder's
+      smoke_app + the live cycles' byte-identical preservation)
+- [x] Stamp: a fresh install's VERSION block names the tag it came from
+      — `app-release: v0.1.1` + the CI commit sha landed by the live
+      update; `test_build_release.py::test_version_block_...` pins the
+      shape
 
 ## Implementation notes (2026-10-26)
 
@@ -99,9 +106,32 @@ Landed on `ticket/52-update-cmd` (0a4174b + review fixes).
   tells the friend to keep their own files inside `campaign-data`
   (loose files at the install root are old-program-file territory to
   `/MIR`). Everything load-bearing is pinned by the real-tool legs.
-- **Open box:** the live e2e — tag `v0.1.1`, then update.cmd against
-  a real v0.1.0 install on this machine (scratch home, real GitHub
-  download, real hash check).
+- **The live e2e (2026-10-27, against the real v0.1.1 release)**: three
+  full cycles — complete full-exe install into a scratch home (waited on
+  `.install-complete`, NOT VERSION: VERSION copies early and the first
+  attempt killed a half-mirored install), friend state (rotated
+  `llm.env`, a campaign, stamp reset to v0.1.0), then the install's own
+  update.cmd against real GitHub. Every cycle: exit 0, real 5.4 MB
+  download, certutil hash match, snapshot, swap, stamp — with the key
+  byte-identical, the campaign intact, runtime + tools packs intact,
+  install-log noting the update, and the swap replacing update.cmd with
+  the release's copy. Two live findings, both fixed in the template and
+  pinned by text-shape tests:
+  1. **Expand-Archive can lose a race with antivirus on the fresh
+     download** (failed 2/2 right after the heavy install mirror,
+     passed 3/3 otherwise — identical command). Fix: one bounded retry,
+     five seconds apart; with it, 2/2 fresh-install cycles passed.
+  2. **The success path claimed the backup was cleaned when `rmdir`
+     silently failed** (25 MB left behind under AV contention). Fix:
+     retry once, then DISCLOSE a surviving backup in the success
+     output. Known limit, accepted: a delete-pending "ghost" (AV holds
+     the handle; `rd` reports success, `if exist` sees it gone, the
+     name lingers) is unobservable from cmd — it self-heals on the
+     next update's pre-swap `rmdir`.
+- **Known quirk, recorded:** one transient `'h' is not recognized`
+     stderr line appeared once during a failed unpack under the
+     pre-retry template; unreproducible after the retry landed, almost
+     certainly collateral of the same AV/IO interference.
 
 ## Supersession review (2026-10-26)
 
